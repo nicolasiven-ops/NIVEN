@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>MYHOME // N.IVEN</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <canvas id="bg-canvas"></canvas>
+  <div class="vignette"></div>
+
+  <div class="cursor" aria-hidden="true">
+    <span class="cur-bracket br-tl"></span>
+    <span class="cur-bracket br-tr"></span>
+    <span class="cur-bracket br-bl"></span>
+    <span class="cur-bracket br-br"></span>
+  </div>
+  <div class="cursor-dot" aria-hidden="true"></div>
+
+  <header class="hud-header">
+    <div class="hud-left">
+      <span class="status-dot"></span>
+      <span class="hud-label">SYS.STATUS</span>
+      <span class="hud-value">ONLINE</span>
+    </div>
+    <div class="hud-center">
+      <button type="button" class="auth-status" id="auth-trigger" data-state="locked" aria-haspopup="dialog">
+        <span class="auth-icon" aria-hidden="true"></span>
+        <span class="hud-label">AUTH</span>
+        <span class="hud-value auth-text">LOCKED</span>
+      </button>
+    </div>
+    <div class="hud-right">
+      <span class="hud-label">TIME</span>
+      <span class="hud-value" id="clock">--:--:--</span>
+    </div>
+  </header>
+
+  <main>
+    <section class="hero">
+      <div class="hero-meta">
+        <span class="bracket">[</span>
+        <span>ENTRY_POINT &nbsp;//&nbsp; v0.1</span>
+        <span class="bracket">]</span>
+      </div>
+      <h1 class="hero-title" data-text="N.IVEN">N.IVEN</h1>
+      <p class="hero-subtitle">PERSONAL &nbsp;·&nbsp; PROJECT &nbsp;·&nbsp; NEXUS</p>
+      <a href="#projects" class="cta">
+        <span>// ENTER_ARCHIVE</span>
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+        </svg>
+      </a>
+    </section>
+
+    <section class="projects" id="projects">
+      <div class="section-header">
+        <span class="section-tag">// 02</span>
+        <h2>ACTIVE_MODULES</h2>
+        <div class="section-line"></div>
+      </div>
+
+      <div class="grid">
+        <article class="card">
+          <div class="card-corners"></div>
+          <div class="card-status">
+            <span class="pulse"></span>
+            <span>PLANNING</span>
+          </div>
+          <div class="card-id">MOD_001</div>
+          <h3>BREAKTHROUGH<span class="dim">.timeline</span></h3>
+          <p>Interaktiver Zeitstrahl für Durchbrüche in Technologie und Medizin. Ereignisse erfassen, kategorisieren, durchsuchen.</p>
+          <div class="card-tags">
+            <span>timeline</span>
+            <span>data</span>
+            <span>science</span>
+          </div>
+          <div class="card-footer">
+            <span class="locked">◉ COMING SOON</span>
+          </div>
+        </article>
+
+        <article class="card">
+          <div class="card-corners"></div>
+          <div class="card-status">
+            <span class="pulse"></span>
+            <span>PLANNING</span>
+          </div>
+          <div class="card-id">MOD_002</div>
+          <h3>HOBBY<span class="dim">.randomizer</span></h3>
+          <p>Zufallsgenerator für Freizeit-Tätigkeiten am PC. Sammle deine Aktivitäten, lass dich überraschen.</p>
+          <div class="card-tags">
+            <span>tool</span>
+            <span>fun</span>
+            <span>random</span>
+          </div>
+          <div class="card-footer">
+            <span class="locked">◉ COMING SOON</span>
+          </div>
+        </article>
+
+        <article class="card card-empty">
+          <div class="card-corners"></div>
+          <div class="card-id">MOD_003</div>
+          <div class="empty-marker">
+            <span class="plus">+</span>
+            <p>FREIER SLOT</p>
+            <p class="dim">Nächste Idee belegt diesen Platz</p>
+          </div>
+        </article>
+      </div>
+    </section>
+
+    <section class="about">
+      <div class="section-header">
+        <span class="section-tag">// 03</span>
+        <h2>ABOUT_NODE</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="about-grid">
+        <div class="about-text">
+          <p>Diese Seite ist die zentrale Schaltstelle für persönliche Projekte.</p>
+          <p>Ideen entstehen sporadisch, Module werden bei Bedarf angedockt. Das System wächst.</p>
+        </div>
+        <div class="about-stats">
+          <div class="stat">
+            <span class="stat-label">AKTIV</span>
+            <span class="stat-value">0</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">GEPLANT</span>
+            <span class="stat-value">2</span>
+          </div>
+          <div class="stat">
+            <span class="stat-label">SLOTS</span>
+            <span class="stat-value">&infin;</span>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="footer-content">
+      <span>© 2026 &nbsp;//&nbsp; N.IVEN &nbsp;//&nbsp; MYHOME</span>
+      <span class="footer-sig">END_OF_TRANSMISSION</span>
+    </div>
+  </footer>
+
+  <div class="modal-backdrop" id="auth-modal" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="auth-title">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+
+      <div class="modal-header">
+        <span class="modal-id">MOD_AUTH · v0.1</span>
+        <span class="modal-state">
+          <span class="pulse"></span>
+          <span id="modal-state-label">CHANNEL_LOCKED</span>
+        </span>
+      </div>
+
+      <h2 id="auth-title" class="modal-title">SECURE_CHANNEL</h2>
+      <p class="modal-subtitle" id="modal-subtitle">Authorization required.</p>
+
+      <form id="auth-form" class="auth-form" autocomplete="off" novalidate>
+        <label class="auth-prompt" id="auth-prompt">
+          <span class="prompt-mark">&gt;&gt;</span>
+          <input type="password" id="auth-input" class="auth-input" placeholder="KEYPHRASE" autocomplete="off" spellcheck="false" aria-label="Keyphrase">
+          <span class="caret" aria-hidden="true"></span>
+        </label>
+        <p class="auth-feedback" id="auth-feedback" role="status" aria-live="polite"></p>
+        <div class="auth-actions">
+          <button type="button" class="modal-btn abort" id="auth-abort">ABORT</button>
+          <button type="submit" class="modal-btn transmit" id="auth-transmit">TRANSMIT</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="script.js"></script>
+</body>
+</html>
