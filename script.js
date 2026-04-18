@@ -208,7 +208,16 @@ if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
   window.__wireHover = wireHover;
 })();
 
-// === Authentication (local keyphrase) ===
+// === Authentication (Supabase) ===
+// Single-user auth. The keyphrase the user types = Supabase account password.
+// Email is fixed in config.js and never shown in the UI.
+const sb = window.supabase.createClient(
+  window.NIVEN_CONFIG.supabaseUrl,
+  window.NIVEN_CONFIG.supabaseKey,
+  { auth: { persistSession: true, autoRefreshToken: true } }
+);
+window.sb = sb; // expose for future modules (projects CRUD etc.)
+
 (() => {
   const trigger = document.getElementById('auth-trigger');
   const modal = document.getElementById('auth-modal');
@@ -224,44 +233,20 @@ if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
   const abort = document.getElementById('auth-abort');
   if (!trigger || !modal) return;
 
-  const KEY_HASH = 'n.iven.auth.hash';
-  const KEY_SALT = 'n.iven.auth.salt';
-  const KEY_SESSION = 'n.iven.auth.session';
-
   const authText = trigger.querySelector('.auth-text');
+  const email = window.NIVEN_CONFIG.authEmail;
 
-  async function sha256(str) {
-    const data = new TextEncoder().encode(str);
-    const buf = await crypto.subtle.digest('SHA-256', data);
-    return [...new Uint8Array(buf)].map(b => b.toString(16).padStart(2, '0')).join('');
-  }
-
-  function getSalt() {
-    let s = localStorage.getItem(KEY_SALT);
-    if (!s) {
-      const a = new Uint8Array(16);
-      crypto.getRandomValues(a);
-      s = [...a].map(b => b.toString(16).padStart(2, '0')).join('');
-      localStorage.setItem(KEY_SALT, s);
-    }
-    return s;
-  }
-
-  const hasKey = () => !!localStorage.getItem(KEY_HASH);
-  const isAuth = () => sessionStorage.getItem(KEY_SESSION) === '1';
-
+  let session = null;
   let mode = 'auth';
+  let busy = false;
 
   function render() {
-    if (isAuth()) {
+    if (session) {
       trigger.dataset.state = 'authenticated';
       authText.textContent = 'AUTHENTICATED';
-    } else if (hasKey()) {
+    } else {
       trigger.dataset.state = 'locked';
       authText.textContent = 'LOCKED';
-    } else {
-      trigger.dataset.state = 'setup';
-      authText.textContent = 'INITIALIZE';
     }
   }
 
@@ -274,7 +259,7 @@ if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
     input.value = '';
     panel.classList.remove('shake', 'success');
 
-    if (isAuth()) {
+    if (session) {
       mode = 'logout';
       title.textContent = 'TERMINATE_SESSION';
       subtitle.textContent = 'Disconnect from the secure channel?';
@@ -283,26 +268,16 @@ if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
       transmit.textContent = 'DISCONNECT';
       abort.textContent = 'CANCEL';
       setFeedback('', 'info');
-    } else if (hasKey()) {
+    } else {
       mode = 'auth';
       title.textContent = 'SECURE_CHANNEL';
-      subtitle.textContent = 'Authorization required. Keyphrase verified locally.';
+      subtitle.textContent = 'Authorization required. Keyphrase verified via remote node.';
       stateLabel.textContent = 'CHANNEL_LOCKED';
       prompt.hidden = false;
       input.placeholder = 'KEYPHRASE';
       transmit.textContent = 'TRANSMIT';
       abort.textContent = 'ABORT';
       setFeedback('', 'info');
-    } else {
-      mode = 'setup';
-      title.textContent = 'INITIALIZE_CHANNEL';
-      subtitle.textContent = 'First boot detected. Set keyphrase — stored locally as SHA-256 hash.';
-      stateLabel.textContent = 'FIRST_BOOT';
-      prompt.hidden = false;
-      input.placeholder = 'NEW_KEYPHRASE · min 4 chars';
-      transmit.textContent = 'LOCK_IN';
-      abort.textContent = 'CANCEL';
-      setFeedback('// NO PRIOR KEYPHRASE FOUND', 'info');
     }
 
     modal.hidden = false;
@@ -344,44 +319,57 @@ if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
 
   form.addEventListener('submit', async (e) => {
     e.preventDefault();
+    if (busy) return;
     const val = input.value;
 
-    if (mode === 'setup') {
-      if (val.length < 4) {
-        setFeedback('// KEYPHRASE TOO SHORT · min 4', 'error');
-        shake();
-        return;
-      }
-      const hash = await sha256(getSalt() + val);
-      localStorage.setItem(KEY_HASH, hash);
-      sessionStorage.setItem(KEY_SESSION, '1');
-      flashSuccess('// CHANNEL INITIALIZED · ACCESS GRANTED');
-      return;
-    }
-
     if (mode === 'auth') {
-      if (!val) {
-        shake();
-        return;
-      }
-      const hash = await sha256(getSalt() + val);
-      if (hash === localStorage.getItem(KEY_HASH)) {
-        sessionStorage.setItem(KEY_SESSION, '1');
-        flashSuccess('// ACCESS GRANTED');
-      } else {
+      if (!val) { shake(); return; }
+      busy = true;
+      transmit.disabled = true;
+      setFeedback('// HANDSHAKE …', 'info');
+
+      const { data, error } = await sb.auth.signInWithPassword({
+        email,
+        password: val,
+      });
+
+      busy = false;
+      transmit.disabled = false;
+
+      if (error || !data?.session) {
         setFeedback('// ACCESS DENIED', 'error');
         shake();
         input.value = '';
         input.focus();
+        return;
       }
+      session = data.session;
+      flashSuccess('// ACCESS GRANTED');
       return;
     }
 
     if (mode === 'logout') {
-      sessionStorage.removeItem(KEY_SESSION);
+      busy = true;
+      transmit.disabled = true;
+      await sb.auth.signOut();
+      busy = false;
+      transmit.disabled = false;
+      session = null;
       flashSuccess('// CHANNEL CLOSED');
       return;
     }
+  });
+
+  // Keep UI in sync with session state (tab-switches, token refresh, etc.)
+  sb.auth.onAuthStateChange((_event, s) => {
+    session = s;
+    render();
+  });
+
+  // Initial boot — restore session from storage if present
+  sb.auth.getSession().then(({ data }) => {
+    session = data.session;
+    render();
   });
 
   render();
