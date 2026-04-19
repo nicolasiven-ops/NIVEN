@@ -898,6 +898,141 @@ footer {
   height: 24px;
 }
 
+/* === Module card — dynamic extras === */
+.card-link {
+  color: var(--red);
+  text-decoration: none;
+  letter-spacing: 0.18em;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.8rem;
+  transition: text-shadow 0.2s, letter-spacing 0.2s;
+}
+.card-link:hover {
+  text-shadow: 0 0 12px rgba(255, 0, 60, 0.7);
+  letter-spacing: 0.22em;
+}
+
+.card-delete {
+  position: absolute;
+  top: 0.9rem;
+  right: 0.9rem;
+  width: 26px;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(7, 7, 12, 0.6);
+  border: 1px solid var(--border);
+  color: var(--text-faint);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.15rem;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity 0.2s, color 0.2s, border-color 0.2s, background 0.2s, box-shadow 0.2s;
+  z-index: 3;
+  padding: 0;
+}
+.card:hover .card-delete { opacity: 1; }
+.card:hover .card-id { opacity: 0; }
+.card-id { transition: opacity 0.2s; }
+.card-delete:hover {
+  color: var(--red);
+  border-color: var(--red);
+  background: rgba(255, 0, 60, 0.15);
+  box-shadow: 0 0 12px rgba(255, 0, 60, 0.45);
+}
+
+/* Empty card is now a <button>, reset native button styling */
+button.card-empty {
+  font: inherit;
+  text-align: center;
+  color: inherit;
+  width: 100%;
+}
+
+/* Status tint for the pulse badge */
+.card[data-status="active"] .pulse { background: #35ff7a; box-shadow: 0 0 10px #35ff7a; }
+.card[data-status="active"] .card-status span:last-child { color: #35ff7a; }
+.card[data-status="archived"] .pulse { background: var(--text-faint); box-shadow: none; animation: none; }
+.card[data-status="archived"] .card-status span:last-child { color: var(--text-faint); }
+
+/* === Module modal form fields === */
+.module-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.95rem;
+}
+.field-row {
+  display: flex;
+  gap: 0.9rem;
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+  font-family: 'Share Tech Mono', monospace;
+  min-width: 0;
+}
+.field-grow { flex: 2; }
+.field > span {
+  font-size: 0.68rem;
+  letter-spacing: 0.24em;
+  color: var(--text-dim);
+}
+.field input,
+.field select,
+.field textarea {
+  background: rgba(7, 7, 12, 0.55);
+  border: 1px solid var(--border);
+  color: var(--text);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.9rem;
+  letter-spacing: 0.06em;
+  padding: 0.55rem 0.75rem;
+  outline: none;
+  transition: border-color 0.2s, box-shadow 0.2s;
+  width: 100%;
+}
+.field textarea {
+  resize: vertical;
+  min-height: 72px;
+  font-family: 'Rajdhani', sans-serif;
+  font-size: 0.95rem;
+  letter-spacing: 0.02em;
+  line-height: 1.45;
+}
+.field input:focus,
+.field select:focus,
+.field textarea:focus {
+  border-color: var(--red);
+  box-shadow: 0 0 14px rgba(255, 0, 60, 0.28), inset 0 0 10px rgba(255, 0, 60, 0.05);
+}
+.field input::placeholder,
+.field textarea::placeholder {
+  color: var(--text-faint);
+}
+.field select {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--red) 50%),
+    linear-gradient(-45deg, transparent 50%, var(--red) 50%);
+  background-position: calc(100% - 14px) center, calc(100% - 9px) center;
+  background-size: 6px 6px, 6px 6px;
+  background-repeat: no-repeat;
+  padding-right: 2rem;
+  cursor: inherit;
+}
+.field select option {
+  background: var(--surface);
+  color: var(--text);
+}
+
+@media (max-width: 520px) {
+  .field-row { flex-direction: column; gap: 0.95rem; }
+}
+
 /* === Gated sections (auth-protected content) === */
 
 /* Default = locked. JS flips body to .is-authed once session is live. */

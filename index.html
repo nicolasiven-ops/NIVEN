@@ -67,54 +67,16 @@
       </div>
 
       <div class="gated-body">
-        <div class="grid">
-          <article class="card">
+        <div class="grid" id="module-grid">
+          <button type="button" class="card card-empty" id="create-project-trigger">
             <div class="card-corners"></div>
-            <div class="card-status">
-              <span class="pulse"></span>
-              <span>PLANNING</span>
-            </div>
-            <div class="card-id">MOD_001</div>
-            <h3>BREAKTHROUGH<span class="dim">.timeline</span></h3>
-            <p>Interaktiver Zeitstrahl für Durchbrüche in Technologie und Medizin. Ereignisse erfassen, kategorisieren, durchsuchen.</p>
-            <div class="card-tags">
-              <span>timeline</span>
-              <span>data</span>
-              <span>science</span>
-            </div>
-            <div class="card-footer">
-              <span class="locked">◉ COMING SOON</span>
-            </div>
-          </article>
-
-          <article class="card">
-            <div class="card-corners"></div>
-            <div class="card-status">
-              <span class="pulse"></span>
-              <span>PLANNING</span>
-            </div>
-            <div class="card-id">MOD_002</div>
-            <h3>HOBBY<span class="dim">.randomizer</span></h3>
-            <p>Zufallsgenerator für Freizeit-Tätigkeiten am PC. Sammle deine Aktivitäten, lass dich überraschen.</p>
-            <div class="card-tags">
-              <span>tool</span>
-              <span>fun</span>
-              <span>random</span>
-            </div>
-            <div class="card-footer">
-              <span class="locked">◉ COMING SOON</span>
-            </div>
-          </article>
-
-          <article class="card card-empty">
-            <div class="card-corners"></div>
-            <div class="card-id">MOD_003</div>
+            <div class="card-id" id="next-module-code">MOD_001</div>
             <div class="empty-marker">
               <span class="plus">+</span>
               <p>FREIER SLOT</p>
               <p class="dim">Nächste Idee belegt diesen Platz</p>
             </div>
-          </article>
+          </button>
         </div>
       </div>
 
@@ -155,11 +117,11 @@
           <div class="about-stats">
             <div class="stat">
               <span class="stat-label">AKTIV</span>
-              <span class="stat-value">0</span>
+              <span class="stat-value" data-stat="active">0</span>
             </div>
             <div class="stat">
               <span class="stat-label">GEPLANT</span>
-              <span class="stat-value">2</span>
+              <span class="stat-value" data-stat="planning">0</span>
             </div>
             <div class="stat">
               <span class="stat-label">SLOTS</span>
@@ -232,8 +194,75 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="module-modal" hidden>
+    <div class="modal-panel" role="dialog" aria-modal="true" aria-labelledby="module-title">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+
+      <div class="modal-header">
+        <span class="modal-id" id="module-modal-id">MOD_NEW · v0.1</span>
+        <span class="modal-state">
+          <span class="pulse"></span>
+          <span>DOCKING_BAY</span>
+        </span>
+      </div>
+
+      <h2 id="module-title" class="modal-title">NEW_MODULE</h2>
+      <p class="modal-subtitle">Register a new project module in the archive.</p>
+
+      <form id="module-form" class="module-form" autocomplete="off" novalidate>
+        <div class="field-row">
+          <label class="field">
+            <span>CODE</span>
+            <input name="code" type="text" maxlength="16" placeholder="MOD_001" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>STATUS</span>
+            <select name="status">
+              <option value="planning" selected>PLANNING</option>
+              <option value="active">ACTIVE</option>
+              <option value="archived">ARCHIVED</option>
+            </select>
+          </label>
+        </div>
+        <div class="field-row">
+          <label class="field field-grow">
+            <span>TITLE *</span>
+            <input name="title" type="text" required placeholder="BREAKTHROUGH" spellcheck="false">
+          </label>
+          <label class="field">
+            <span>DOMAIN</span>
+            <input name="domain" type="text" placeholder=".timeline" spellcheck="false">
+          </label>
+        </div>
+        <label class="field">
+          <span>DESCRIPTION</span>
+          <textarea name="description" rows="3" placeholder="What does this module do?"></textarea>
+        </label>
+        <label class="field">
+          <span>TAGS</span>
+          <input name="tags" type="text" placeholder="comma, separated, values" spellcheck="false">
+        </label>
+        <label class="field">
+          <span>URL</span>
+          <input name="url" type="url" placeholder="https://…" spellcheck="false">
+        </label>
+
+        <p class="auth-feedback" id="module-feedback" role="status" aria-live="polite"></p>
+
+        <div class="auth-actions">
+          <button type="button" class="modal-btn abort" id="module-abort">ABORT</button>
+          <button type="submit" class="modal-btn transmit">TRANSMIT</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
   <script src="script.js"></script>
+  <script src="modules.js"></script>
 </body>
 </html>
