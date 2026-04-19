@@ -102,6 +102,115 @@
       </div>
     </section>
 
+    <section class="module-detail" id="module-detail" hidden>
+      <div class="detail-topbar">
+        <a href="#/" class="detail-back" data-nav>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M19 12H5M11 18l-6-6 6-6" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+          <span>ARCHIVE</span>
+        </a>
+        <div class="detail-breadcrumb">
+          <span class="dim">// ARCHIVE</span>
+          <span class="bracket">&gt;</span>
+          <span id="detail-breadcrumb-code">—</span>
+        </div>
+      </div>
+
+      <div class="gated-body">
+        <div class="detail-panel" id="detail-panel">
+          <span class="corner tl"></span>
+          <span class="corner tr"></span>
+          <span class="corner bl"></span>
+          <span class="corner br"></span>
+
+          <div class="detail-empty" id="detail-empty" hidden>
+            <div class="lock-icon" aria-hidden="true">
+              <span class="lock-shackle"></span>
+              <span class="lock-body"></span>
+            </div>
+            <h2 class="lock-title">SIGNAL_LOST</h2>
+            <p class="lock-desc">Module <span id="detail-missing-code"></span> not found in archive.</p>
+            <a href="#/" class="lock-cta" data-nav>
+              <span>// RETURN</span>
+              <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+              </svg>
+            </a>
+          </div>
+
+          <div class="detail-body" id="detail-body" hidden>
+            <div class="detail-header">
+              <div class="detail-meta-inline">
+                <div class="card-status">
+                  <span class="pulse"></span>
+                  <span id="detail-status">PLANNING</span>
+                </div>
+                <span class="detail-id" id="detail-code">—</span>
+              </div>
+              <h1 class="detail-title">
+                <span id="detail-title-text">—</span><span class="dim" id="detail-domain"></span>
+              </h1>
+            </div>
+
+            <div class="detail-grid">
+              <div class="detail-field">
+                <span class="field-label">DESCRIPTION</span>
+                <p id="detail-description" class="detail-desc">—</p>
+              </div>
+
+              <div class="detail-field" id="detail-tags-wrap" hidden>
+                <span class="field-label">TAGS</span>
+                <div class="card-tags" id="detail-tags"></div>
+              </div>
+
+              <div class="detail-field" id="detail-url-wrap" hidden>
+                <span class="field-label">EXTERNAL LINK</span>
+                <a id="detail-url" href="#" target="_blank" rel="noopener" class="detail-url">—</a>
+              </div>
+
+              <div class="detail-timestamps">
+                <div>
+                  <span class="field-label">CREATED</span>
+                  <span id="detail-created">—</span>
+                </div>
+                <div>
+                  <span class="field-label">UPDATED</span>
+                  <span id="detail-updated">—</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="detail-actions">
+              <button type="button" class="modal-btn" id="detail-edit">EDIT</button>
+              <button type="button" class="modal-btn abort" id="detail-delete">DELETE</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="gated-lock">
+        <div class="card-corners"></div>
+        <div class="lock-scan"></div>
+        <div class="lock-meta">
+          <span class="pulse"></span>
+          <span>CLASSIFIED · LVL 01</span>
+        </div>
+        <div class="lock-icon" aria-hidden="true">
+          <span class="lock-shackle"></span>
+          <span class="lock-body"></span>
+        </div>
+        <h3 class="lock-title">MODULE_ENCRYPTED</h3>
+        <p class="lock-desc">Authentication required to access this module.</p>
+        <button type="button" class="lock-cta" data-unlock>
+          <span>// REQUEST_ACCESS</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </button>
+      </div>
+    </section>
+
     <section class="about">
       <div class="section-header">
         <span class="section-tag">// 03</span>
