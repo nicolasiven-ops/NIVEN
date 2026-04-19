@@ -66,54 +66,77 @@
         <div class="section-line"></div>
       </div>
 
-      <div class="grid">
-        <article class="card">
-          <div class="card-corners"></div>
-          <div class="card-status">
-            <span class="pulse"></span>
-            <span>PLANNING</span>
-          </div>
-          <div class="card-id">MOD_001</div>
-          <h3>BREAKTHROUGH<span class="dim">.timeline</span></h3>
-          <p>Interaktiver Zeitstrahl für Durchbrüche in Technologie und Medizin. Ereignisse erfassen, kategorisieren, durchsuchen.</p>
-          <div class="card-tags">
-            <span>timeline</span>
-            <span>data</span>
-            <span>science</span>
-          </div>
-          <div class="card-footer">
-            <span class="locked">◉ COMING SOON</span>
-          </div>
-        </article>
+      <div class="gated-body">
+        <div class="grid">
+          <article class="card">
+            <div class="card-corners"></div>
+            <div class="card-status">
+              <span class="pulse"></span>
+              <span>PLANNING</span>
+            </div>
+            <div class="card-id">MOD_001</div>
+            <h3>BREAKTHROUGH<span class="dim">.timeline</span></h3>
+            <p>Interaktiver Zeitstrahl für Durchbrüche in Technologie und Medizin. Ereignisse erfassen, kategorisieren, durchsuchen.</p>
+            <div class="card-tags">
+              <span>timeline</span>
+              <span>data</span>
+              <span>science</span>
+            </div>
+            <div class="card-footer">
+              <span class="locked">◉ COMING SOON</span>
+            </div>
+          </article>
 
-        <article class="card">
-          <div class="card-corners"></div>
-          <div class="card-status">
-            <span class="pulse"></span>
-            <span>PLANNING</span>
-          </div>
-          <div class="card-id">MOD_002</div>
-          <h3>HOBBY<span class="dim">.randomizer</span></h3>
-          <p>Zufallsgenerator für Freizeit-Tätigkeiten am PC. Sammle deine Aktivitäten, lass dich überraschen.</p>
-          <div class="card-tags">
-            <span>tool</span>
-            <span>fun</span>
-            <span>random</span>
-          </div>
-          <div class="card-footer">
-            <span class="locked">◉ COMING SOON</span>
-          </div>
-        </article>
+          <article class="card">
+            <div class="card-corners"></div>
+            <div class="card-status">
+              <span class="pulse"></span>
+              <span>PLANNING</span>
+            </div>
+            <div class="card-id">MOD_002</div>
+            <h3>HOBBY<span class="dim">.randomizer</span></h3>
+            <p>Zufallsgenerator für Freizeit-Tätigkeiten am PC. Sammle deine Aktivitäten, lass dich überraschen.</p>
+            <div class="card-tags">
+              <span>tool</span>
+              <span>fun</span>
+              <span>random</span>
+            </div>
+            <div class="card-footer">
+              <span class="locked">◉ COMING SOON</span>
+            </div>
+          </article>
 
-        <article class="card card-empty">
-          <div class="card-corners"></div>
-          <div class="card-id">MOD_003</div>
-          <div class="empty-marker">
-            <span class="plus">+</span>
-            <p>FREIER SLOT</p>
-            <p class="dim">Nächste Idee belegt diesen Platz</p>
-          </div>
-        </article>
+          <article class="card card-empty">
+            <div class="card-corners"></div>
+            <div class="card-id">MOD_003</div>
+            <div class="empty-marker">
+              <span class="plus">+</span>
+              <p>FREIER SLOT</p>
+              <p class="dim">Nächste Idee belegt diesen Platz</p>
+            </div>
+          </article>
+        </div>
+      </div>
+
+      <div class="gated-lock" data-label="MODULES">
+        <div class="card-corners"></div>
+        <div class="lock-scan"></div>
+        <div class="lock-meta">
+          <span class="pulse"></span>
+          <span>CLASSIFIED · LVL 01</span>
+        </div>
+        <div class="lock-icon" aria-hidden="true">
+          <span class="lock-shackle"></span>
+          <span class="lock-body"></span>
+        </div>
+        <h3 class="lock-title">ACCESS_RESTRICTED</h3>
+        <p class="lock-desc">Authentication required to decrypt active modules.</p>
+        <button type="button" class="lock-cta" data-unlock>
+          <span>// REQUEST_ACCESS</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </button>
       </div>
     </section>
 
@@ -123,25 +146,48 @@
         <h2>ABOUT_NODE</h2>
         <div class="section-line"></div>
       </div>
-      <div class="about-grid">
-        <div class="about-text">
-          <p>Diese Seite ist die zentrale Schaltstelle für persönliche Projekte.</p>
-          <p>Ideen entstehen sporadisch, Module werden bei Bedarf angedockt. Das System wächst.</p>
+      <div class="gated-body">
+        <div class="about-grid">
+          <div class="about-text">
+            <p>Diese Seite ist die zentrale Schaltstelle für persönliche Projekte.</p>
+            <p>Ideen entstehen sporadisch, Module werden bei Bedarf angedockt. Das System wächst.</p>
+          </div>
+          <div class="about-stats">
+            <div class="stat">
+              <span class="stat-label">AKTIV</span>
+              <span class="stat-value">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">GEPLANT</span>
+              <span class="stat-value">2</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">SLOTS</span>
+              <span class="stat-value">&infin;</span>
+            </div>
+          </div>
         </div>
-        <div class="about-stats">
-          <div class="stat">
-            <span class="stat-label">AKTIV</span>
-            <span class="stat-value">0</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">GEPLANT</span>
-            <span class="stat-value">2</span>
-          </div>
-          <div class="stat">
-            <span class="stat-label">SLOTS</span>
-            <span class="stat-value">&infin;</span>
-          </div>
+      </div>
+
+      <div class="gated-lock" data-label="NODE_PROFILE">
+        <div class="card-corners"></div>
+        <div class="lock-scan"></div>
+        <div class="lock-meta">
+          <span class="pulse"></span>
+          <span>CLASSIFIED · LVL 01</span>
         </div>
+        <div class="lock-icon" aria-hidden="true">
+          <span class="lock-shackle"></span>
+          <span class="lock-body"></span>
+        </div>
+        <h3 class="lock-title">NODE_PROFILE_SEALED</h3>
+        <p class="lock-desc">Operator identity required to access system metadata.</p>
+        <button type="button" class="lock-cta" data-unlock>
+          <span>// REQUEST_ACCESS</span>
+          <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </button>
       </div>
     </section>
   </main>

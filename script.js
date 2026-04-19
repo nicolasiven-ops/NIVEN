@@ -244,11 +244,20 @@ window.sb = sb; // expose for future modules (projects CRUD etc.)
     if (session) {
       trigger.dataset.state = 'authenticated';
       authText.textContent = 'AUTHENTICATED';
+      document.body.classList.add('is-authed');
+      document.body.classList.remove('is-locked');
     } else {
       trigger.dataset.state = 'locked';
       authText.textContent = 'LOCKED';
+      document.body.classList.add('is-locked');
+      document.body.classList.remove('is-authed');
     }
   }
+
+  // Any unlock CTA inside a gated section opens the auth modal
+  document.querySelectorAll('[data-unlock]').forEach((btn) => {
+    btn.addEventListener('click', () => trigger.click());
+  });
 
   function setFeedback(text, type = 'info') {
     feedback.textContent = text;
