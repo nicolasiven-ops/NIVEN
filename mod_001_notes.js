@@ -1230,7 +1230,7 @@ const MOD001_CSS = `
   flex-direction: column;
   font-family: 'Share Tech Mono', monospace;
   color: #e8e8e8;
-  transition: box-shadow 0.25s, border-color 0.25s, transform 0.15s;
+  transition: box-shadow 0.25s, border-color 0.25s, opacity 0.2s;
   opacity: 0.92;
 }
 .m001-note.is-selected {

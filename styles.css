@@ -1520,6 +1520,7 @@ body.view-runtime main { padding: 0; max-width: none; }
   overflow: hidden;
   background: var(--bg);
 }
+.runtime-empty[hidden] { display: none !important; }
 .runtime-empty {
   position: absolute;
   inset: 0;
