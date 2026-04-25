@@ -369,6 +369,39 @@
     </div>
   </div>
 
+  <div class="modal-backdrop" id="confirm-modal" hidden>
+    <div class="modal-panel danger" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+      <span class="corner tl"></span>
+      <span class="corner tr"></span>
+      <span class="corner bl"></span>
+      <span class="corner br"></span>
+
+      <div class="modal-header">
+        <span class="modal-id" id="confirm-id">MOD_??? · PURGE</span>
+        <span class="modal-state danger">
+          <span class="pulse"></span>
+          <span>WARNING</span>
+        </span>
+      </div>
+
+      <h2 id="confirm-title" class="modal-title danger">PURGE_MODULE</h2>
+      <p class="modal-subtitle" id="confirm-message">This action cannot be undone.</p>
+
+      <div class="confirm-warn">
+        <span class="confirm-warn-icon" aria-hidden="true">!</span>
+        <div class="confirm-warn-body">
+          <strong id="confirm-target">—</strong>
+          <span>All data linked to this module will be erased from the archive.</span>
+        </div>
+      </div>
+
+      <div class="auth-actions">
+        <button type="button" class="modal-btn abort" id="confirm-cancel">CANCEL</button>
+        <button type="button" class="modal-btn transmit danger" id="confirm-ok">PURGE</button>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
   <script src="script.js"></script>

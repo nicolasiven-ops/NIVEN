@@ -120,10 +120,41 @@
     await deleteProject(id);
   });
 
+  // --- Themed confirm dialog ---
+  const confirmModal = document.getElementById('confirm-modal');
+  const confirmIdEl = document.getElementById('confirm-id');
+  const confirmTargetEl = document.getElementById('confirm-target');
+  const confirmMsgEl = document.getElementById('confirm-message');
+  const confirmOkBtn = document.getElementById('confirm-ok');
+  const confirmCancelBtn = document.getElementById('confirm-cancel');
+  let confirmResolve = null;
+
+  function askPurge(proj) {
+    return new Promise((resolve) => {
+      confirmResolve = resolve;
+      if (confirmIdEl) confirmIdEl.textContent = `${proj.code || 'MOD_???'} · PURGE`;
+      if (confirmTargetEl) confirmTargetEl.textContent = proj.title || proj.code || '—';
+      if (confirmMsgEl) confirmMsgEl.textContent = 'This action cannot be undone.';
+      confirmModal.hidden = false;
+      setTimeout(() => confirmCancelBtn?.focus(), 50);
+    });
+  }
+  function closeConfirm(result) {
+    confirmModal.hidden = true;
+    if (confirmResolve) { confirmResolve(result); confirmResolve = null; }
+  }
+  confirmOkBtn?.addEventListener('click', () => closeConfirm(true));
+  confirmCancelBtn?.addEventListener('click', () => closeConfirm(false));
+  confirmModal?.addEventListener('click', (e) => { if (e.target === confirmModal) closeConfirm(false); });
+  window.addEventListener('keydown', (e) => {
+    if (confirmModal && !confirmModal.hidden && e.key === 'Escape') closeConfirm(false);
+  });
+
   async function deleteProject(id) {
     const proj = findById(id);
     if (!proj) return;
-    if (!confirm(`Delete module "${proj.title}"?`)) return;
+    const ok = await askPurge(proj);
+    if (!ok) return;
 
     const { error } = await sb.from('projects').delete().eq('id', id);
     if (error) { alert('Delete failed: ' + error.message); return; }
