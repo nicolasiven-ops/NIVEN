@@ -1197,9 +1197,17 @@ body.view-runtime main { padding: 0; max-width: none; }
 .module-detail {
   position: relative;
   z-index: 5;
+  cursor: pointer;
   padding: 3rem clamp(1.5rem, 5vw, 5rem) 5rem;
   min-height: calc(100vh - 3.5rem);
 }
+/* Re-set cursor for the actual content so only the empty backdrop hints "click to dismiss" */
+.module-detail .detail-panel,
+.module-detail .detail-topbar,
+.module-detail .gated-lock { cursor: auto; }
+.module-detail .detail-back,
+.module-detail .deploy-btn,
+.module-detail .modal-btn { cursor: pointer; }
 
 .detail-topbar {
   display: flex;

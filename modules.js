@@ -418,6 +418,16 @@
     }
   });
 
+  // Click outside the detail panel → back to archive (modal-style dismiss).
+  // Ignores clicks on the panel itself, the lock screen, and any interactive
+  // controls in the topbar (back link, breadcrumb).
+  detailSection?.addEventListener('click', (e) => {
+    if (e.target.closest('.detail-panel')) return;
+    if (e.target.closest('.gated-lock')) return;
+    if (e.target.closest('a, button, input, textarea, select')) return;
+    location.hash = '#/';
+  });
+
   // If a module script registers itself after the briefing is rendered, refresh.
   window.addEventListener('niven:module-registered', (e) => {
     if (currentDetailCode === e.detail?.code) populateDetail(currentDetailCode);
