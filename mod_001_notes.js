@@ -1,22 +1,23 @@
 // === MOD_001 · OBSIDIAN_DECK ===
-// 3D notes drift in a dark void. Pan the camera with drag, zoom with scroll,
-// double-click empty space to spawn a note, drag a note's header to move it,
-// type to edit (debounced save), × to delete.
+// Cylindrical note chamber. The camera stands at the central axis of a closed
+// cylinder; notes cling to the inner wall. Drag horizontally to rotate around
+// the axis, vertically to ride the elevator up/down, scroll to zoom (FOV).
+// As more notes are added, the wall stretches outward to make room.
 //
 // Power features:
 //   · Ctrl/Cmd+K  — search overlay (fuzzy match, fly camera to result)
-//   · M           — toggle MAP overview (zoom out, see everything)
-//   · N           — new note at camera focus
-//   · R           — recenter camera
+//   · M           — toggle MAP overview (FOV blowout, see almost everything)
+//   · N           — new note in front of the camera
+//   · R           — recenter (θ=0, y=0)
 //   · /           — focus search input
 //   · Esc         — close overlay / deselect / blur
-//   · Delete      — purge selected note (with themed confirm)
+//   · Delete      — purge selected note (themed confirm)
 //   · Color tags  — 5 swatches in note footer
-//   · Persisted   — camera state lives in localStorage
+//   · Camera state persists in localStorage
 //
 // Tech:
-//   - THREE.js WebGLRenderer for the void (grid, particles, glow)
-//   - CSS3DRenderer for notes — they're real HTML, native inputs, crisp text
+//   - THREE.js cylinder geometry with backside-rendered wall texture
+//   - CSS3DRenderer for notes — real HTML on the wall, native inputs
 //   - Supabase `notes` table with RLS
 
 import * as THREE from 'three';
@@ -24,7 +25,7 @@ import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer
 
 const MODULE_CODE = 'MOD_001';
 const SAVE_DEBOUNCE_MS = 600;
-const CAM_KEY = 'niven:m001:camera';
+const CAM_KEY = 'niven:m001:cam';
 
 const COLORS = [
   { id: 'red',    hex: '#ff003c', glow: 'rgba(255,0,60,0.55)' },
@@ -34,7 +35,15 @@ const COLORS = [
   { id: 'violet', hex: '#b87aff', glow: 'rgba(184,122,255,0.55)' },
 ];
 const colorBy = (id) => COLORS.find((c) => c.id === id) || COLORS[0];
-const colorByHex = (hex) => COLORS.find((c) => c.hex === hex) || COLORS[0];
+
+// Cylinder constants
+const R_BASE = 900;          // minimum wall radius
+const R_PER_NOTE = 60;       // each note adds this much circumferential capacity
+const WALL_HEIGHT = 2400;    // total interior height
+const FOV_DEFAULT = 55;
+const FOV_MIN = 30;
+const FOV_MAX = 95;
+const FOV_MAP = 130;
 
 // =============================================================================
 // Lifecycle
@@ -61,6 +70,7 @@ function unmount() {
   state.cssRenderer.domElement.remove();
   state.glRenderer.domElement.remove();
   state.glRenderer.dispose();
+  if (state.wall) { state.wall.geometry.dispose(); state.wall.material.map?.dispose?.(); state.wall.material.dispose(); }
   state.host.remove();
   state = null;
 }
@@ -70,14 +80,9 @@ function unmount() {
 // =============================================================================
 function createState(stage, ctx) {
   return {
-    stage,
-    sb: ctx.sb,
-    project: ctx.project,
-    code: ctx.code,
-    exit: ctx.exit,
+    stage, sb: ctx.sb, project: ctx.project, code: ctx.code, exit: ctx.exit,
 
-    host: null,
-    glLayer: null, cssLayer: null,
+    host: null, glLayer: null, cssLayer: null,
     actionBar: null, toastEl: null,
     searchEl: null, searchInput: null, searchResults: null, searchCount: null,
     confirmEl: null, confirmTitle: null, confirmOk: null, confirmCancel: null,
@@ -85,19 +90,20 @@ function createState(stage, ctx) {
 
     scene: null, cssScene: null, camera: null,
     glRenderer: null, cssRenderer: null,
-    grid: null, particles: null, originRing: null,
+    wall: null, wallWire: null, particles: null,
 
-    notes: new Map(),       // id -> { row, css3d, els, dirty, saveTimer, color }
+    notes: new Map(),     // id -> { row, css3d, els, dirty, saveTimer }
     selectedId: null,
 
-    drag: null,             // active drag state (camera or note)
+    drag: null,
 
-    cameraTarget: new THREE.Vector3(0, 0, 0),
-    targetTarget: new THREE.Vector3(0, 0, 0), // smooth destination
-    cameraDistance: 800,
-    targetDistance: 800,
-    preMapState: null,      // stores camera state when entering map mode
-    mode: 'free',           // 'free' | 'map'
+    // --- Cylindrical camera state ---
+    cameraTheta: 0,   targetTheta: 0,
+    cameraY:     0,   targetY:     0,
+    cameraFov:   FOV_DEFAULT, targetFov: FOV_DEFAULT,
+    currentR:    R_BASE,      targetR:   R_BASE,
+    preMapFov:   null,
+    mode: 'free',
 
     cameraSaveTimer: null,
     confirmResolve: null,
@@ -123,6 +129,10 @@ function buildDOM(s) {
     <div class="m001-css"></div>
     <div class="m001-vignette"></div>
     <div class="m001-scanlines"></div>
+    <div class="m001-altitude" aria-hidden="true">
+      <div class="m001-altitude-track"><div class="m001-altitude-pip"></div></div>
+      <span class="m001-altitude-label">Y±0</span>
+    </div>
 
     <div class="m001-actionbar">
       <button type="button" class="m001-action" data-act="new"      title="New note (N)"><span>+ NEW</span></button>
@@ -133,14 +143,15 @@ function buildDOM(s) {
     </div>
 
     <div class="m001-legend" hidden>
-      <div class="m001-legend-title">// SHORTCUTS</div>
+      <div class="m001-legend-title">// CHAMBER · controls</div>
       <div class="m001-legend-grid">
-        <span class="key">N</span><span>New note at focus</span>
-        <span class="key">DBL-CLICK</span><span>Spawn note at cursor</span>
-        <span class="key">DRAG</span><span>Pan camera</span>
-        <span class="key">SCROLL</span><span>Zoom</span>
+        <span class="key">DRAG H</span><span>Rotate around axis</span>
+        <span class="key">DRAG V</span><span>Ride up / down</span>
+        <span class="key">SCROLL</span><span>Zoom (FOV)</span>
+        <span class="key">DBL-CLICK</span><span>Spawn note on wall</span>
+        <span class="key">N</span><span>New note in front</span>
+        <span class="key">R</span><span>Recenter (θ=0, y=0)</span>
         <span class="key">M</span><span>Map overview</span>
-        <span class="key">R</span><span>Recenter</span>
         <span class="key">CTRL+K</span><span>Search</span>
         <span class="key">/</span><span>Quick search</span>
         <span class="key">DEL</span><span>Delete selected</span>
@@ -187,6 +198,8 @@ function buildDOM(s) {
   s.actionBar = host.querySelector('.m001-actionbar');
   s.toastEl = host.querySelector('.m001-toast');
   s.legendEl = host.querySelector('.m001-legend');
+  s.altitudePip = host.querySelector('.m001-altitude-pip');
+  s.altitudeLabel = host.querySelector('.m001-altitude-label');
 
   s.searchEl = host.querySelector('.m001-search');
   s.searchInput = host.querySelector('.m001-search-input');
@@ -198,12 +211,11 @@ function buildDOM(s) {
   s.confirmOk = host.querySelector('[data-confirm="ok"]');
   s.confirmCancel = host.querySelector('[data-confirm="cancel"]');
 
-  // Action bar
   s.actionBar.addEventListener('click', (e) => {
     const btn = e.target.closest('[data-act]');
     if (!btn) return;
     switch (btn.dataset.act) {
-      case 'new':      spawnNoteAtCenter(s); break;
+      case 'new':      spawnNoteInFront(s); break;
       case 'search':   openSearch(s); break;
       case 'map':      toggleMap(s); break;
       case 'recenter': recenter(s); break;
@@ -211,14 +223,12 @@ function buildDOM(s) {
     }
   });
 
-  // Confirm modal wiring
   s.confirmOk.addEventListener('click', () => closeConfirm(s, true));
   s.confirmCancel.addEventListener('click', () => closeConfirm(s, false));
   s.confirmEl.addEventListener('click', (e) => {
     if (e.target === s.confirmEl) closeConfirm(s, false);
   });
 
-  // Search wiring
   s.searchInput.addEventListener('input', () => runSearch(s));
   s.searchInput.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') { e.preventDefault(); closeSearch(s); }
@@ -240,19 +250,64 @@ function ensureStyles() {
 }
 
 // =============================================================================
-// Three.js scene
+// Three.js scene — cylinder chamber
 // =============================================================================
+function makeWallTexture() {
+  const cv = document.createElement('canvas');
+  cv.width = 2048; cv.height = 1024;
+  const ctx = cv.getContext('2d');
+
+  // Vertical gradient (deep red top/bottom, near-black middle)
+  const grad = ctx.createLinearGradient(0, 0, 0, 1024);
+  grad.addColorStop(0,    '#180008');
+  grad.addColorStop(0.45, '#080003');
+  grad.addColorStop(0.55, '#080003');
+  grad.addColorStop(1,    '#180008');
+  ctx.fillStyle = grad;
+  ctx.fillRect(0, 0, 2048, 1024);
+
+  // Vertical "ribs" — thin red lines around the cylinder
+  ctx.strokeStyle = 'rgba(255,0,60,0.18)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 64; i++) {
+    const x = (i / 64) * 2048;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1024); ctx.stroke();
+  }
+  // Brighter accent ribs every 8
+  ctx.strokeStyle = 'rgba(255,0,60,0.4)';
+  ctx.lineWidth = 1.5;
+  for (let i = 0; i < 8; i++) {
+    const x = (i / 8) * 2048;
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1024); ctx.stroke();
+  }
+  // Scanlines
+  ctx.strokeStyle = 'rgba(255,0,60,0.05)';
+  for (let y = 0; y < 1024; y += 4) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(2048, y); ctx.stroke();
+  }
+  // Horizontal "deck" lines at top + bottom
+  ctx.strokeStyle = 'rgba(255,0,60,0.5)';
+  ctx.lineWidth = 2;
+  ctx.beginPath(); ctx.moveTo(0, 6); ctx.lineTo(2048, 6); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(0, 1018); ctx.lineTo(2048, 1018); ctx.stroke();
+
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 4;
+  return tex;
+}
+
 function buildScene(s) {
   const w = s.stage.clientWidth;
   const h = s.stage.clientHeight;
 
   s.scene = new THREE.Scene();
-  s.scene.fog = new THREE.Fog(0x040406, 800, 3200);
+  s.scene.fog = new THREE.Fog(0x040406, R_BASE * 0.6, R_BASE * 2.4);
   s.cssScene = new THREE.Scene();
 
-  s.camera = new THREE.PerspectiveCamera(55, w / h, 1, 8000);
-  s.camera.position.set(0, 0, s.cameraDistance);
-  s.camera.lookAt(s.cameraTarget);
+  s.camera = new THREE.PerspectiveCamera(FOV_DEFAULT, w / h, 1, 8000);
+  s.camera.position.set(0, 0, 0);
 
   s.glRenderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
   s.glRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -264,50 +319,55 @@ function buildScene(s) {
   s.cssRenderer.setSize(w, h);
   s.cssLayer.appendChild(s.cssRenderer.domElement);
 
-  // Grid floor
-  s.grid = new THREE.GridHelper(6000, 60, 0xff003c, 0x33000a);
-  s.grid.material.transparent = true;
-  s.grid.material.opacity = 0.32;
-  s.grid.position.y = -400;
-  s.scene.add(s.grid);
+  // Wall — base radius 1, scaled at runtime
+  const wallGeo = new THREE.CylinderGeometry(1, 1, WALL_HEIGHT, 96, 1, true);
+  const wallMat = new THREE.MeshBasicMaterial({
+    map: makeWallTexture(),
+    side: THREE.BackSide,
+    transparent: true,
+    opacity: 0.92,
+  });
+  s.wall = new THREE.Mesh(wallGeo, wallMat);
+  s.wall.scale.set(R_BASE, 1, R_BASE);
+  s.scene.add(s.wall);
 
-  // Ceiling grid
-  const ceiling = new THREE.GridHelper(6000, 60, 0x550014, 0x110005);
-  ceiling.material.transparent = true;
-  ceiling.material.opacity = 0.16;
-  ceiling.position.y = 600;
-  s.scene.add(ceiling);
+  // Subtle wireframe halo just inside the wall
+  const wireGeo = new THREE.CylinderGeometry(0.99, 0.99, WALL_HEIGHT, 24, 8, true);
+  const wireMat = new THREE.MeshBasicMaterial({
+    color: 0xff003c,
+    wireframe: true,
+    transparent: true,
+    opacity: 0.06,
+    side: THREE.BackSide,
+  });
+  s.wallWire = new THREE.Mesh(wireGeo, wireMat);
+  s.wallWire.scale.set(R_BASE, 1, R_BASE);
+  s.scene.add(s.wallWire);
 
-  // Particles
-  const particleCount = 420;
+  // Floating dust particles inside the chamber
+  const particleCount = 380;
   const positions = new Float32Array(particleCount * 3);
   for (let i = 0; i < particleCount; i++) {
-    positions[i * 3 + 0] = (Math.random() - 0.5) * 3200;
-    positions[i * 3 + 1] = (Math.random() - 0.5) * 1600;
-    positions[i * 3 + 2] = (Math.random() - 0.5) * 3200;
+    // Distribute roughly inside a smaller cylinder than the wall
+    const r = Math.sqrt(Math.random()) * (R_BASE * 0.65);
+    const a = Math.random() * Math.PI * 2;
+    positions[i * 3 + 0] = r * Math.cos(a);
+    positions[i * 3 + 1] = (Math.random() - 0.5) * WALL_HEIGHT * 0.7;
+    positions[i * 3 + 2] = r * Math.sin(a);
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
-  const mat = new THREE.PointsMaterial({
+  const pmat = new THREE.PointsMaterial({
     color: 0xff003c,
-    size: 2.2,
+    size: 2.4,
     sizeAttenuation: true,
     transparent: true,
-    opacity: 0.55,
+    opacity: 0.5,
     depthWrite: false,
     blending: THREE.AdditiveBlending,
   });
-  s.particles = new THREE.Points(geo, mat);
+  s.particles = new THREE.Points(geo, pmat);
   s.scene.add(s.particles);
-
-  // Origin focus ring
-  const ringGeo = new THREE.RingGeometry(40, 42, 64);
-  const ringMat = new THREE.MeshBasicMaterial({ color: 0xff003c, transparent: true, opacity: 0.4, side: THREE.DoubleSide });
-  const ring = new THREE.Mesh(ringGeo, ringMat);
-  ring.rotation.x = -Math.PI / 2;
-  ring.position.y = -399;
-  s.scene.add(ring);
-  s.originRing = ring;
 
   s.resizeObserver = new ResizeObserver(() => onResize(s));
   s.resizeObserver.observe(s.stage);
@@ -328,25 +388,43 @@ function onResize(s) {
 // =============================================================================
 function startLoop(s) {
   let t0 = performance.now();
+  const tmpV = new THREE.Vector3();
+
   const tick = (now) => {
     const dt = (now - t0) / 1000; t0 = now;
-    if (s.particles) s.particles.rotation.y += dt * 0.018;
-    if (s.originRing) s.originRing.material.opacity = 0.28 + Math.sin(now * 0.002) * 0.16;
 
-    // Smooth target + distance
-    s.cameraTarget.lerp(s.targetTarget, 0.18);
-    s.cameraDistance += (s.targetDistance - s.cameraDistance) * 0.14;
+    if (s.particles) s.particles.rotation.y += dt * 0.012;
 
-    // For map mode we tilt the camera so we look down at the plane of notes
-    let camY = s.cameraTarget.y;
-    let camZ = s.cameraTarget.z + s.cameraDistance;
-    if (s.mode === 'map') {
-      camY = s.cameraTarget.y + s.cameraDistance * 0.6;
-      camZ = s.cameraTarget.z + s.cameraDistance * 0.55;
+    // Lerp camera state
+    s.cameraTheta += angleDelta(s.cameraTheta, s.targetTheta) * 0.16;
+    s.cameraY     += (s.targetY - s.cameraY) * 0.16;
+    s.cameraFov   += (s.targetFov - s.cameraFov) * 0.14;
+    s.currentR    += (s.targetR - s.currentR) * 0.06;
+
+    // Update wall scale + camera projection
+    s.wall.scale.set(s.currentR, 1, s.currentR);
+    s.wallWire.scale.set(s.currentR, 1, s.currentR);
+    if (s.scene.fog) {
+      s.scene.fog.near = s.currentR * 0.6;
+      s.scene.fog.far  = s.currentR * 2.4;
     }
-    const desired = new THREE.Vector3(s.cameraTarget.x, camY, camZ);
-    s.camera.position.lerp(desired, 0.16);
-    s.camera.lookAt(s.cameraTarget);
+    s.camera.fov = s.cameraFov;
+    s.camera.updateProjectionMatrix();
+
+    // Position camera at axis, look along theta direction
+    s.camera.position.set(0, s.cameraY, 0);
+    tmpV.set(
+      Math.cos(s.cameraTheta) * s.currentR,
+      s.cameraY,
+      Math.sin(s.cameraTheta) * s.currentR
+    );
+    s.camera.lookAt(tmpV);
+
+    // Re-place every note on the (possibly lerping) wall
+    s.notes.forEach((n) => layoutNote(s, n));
+
+    // Background tint based on altitude
+    updateBgTint(s);
 
     s.glRenderer.render(s.scene, s.camera);
     s.cssRenderer.render(s.cssScene, s.camera);
@@ -355,18 +433,55 @@ function startLoop(s) {
   s.rafId = requestAnimationFrame(tick);
 }
 
+// Shortest signed delta from a → b on a circle
+function angleDelta(a, b) {
+  let d = (b - a) % (Math.PI * 2);
+  if (d >  Math.PI) d -= Math.PI * 2;
+  if (d < -Math.PI) d += Math.PI * 2;
+  return d;
+}
+function wrapTheta(t) {
+  return ((t + Math.PI) % (Math.PI * 2) + Math.PI * 2) % (Math.PI * 2) - Math.PI;
+}
+
+function layoutNote(s, n) {
+  const theta = n.row.pos_x || 0;
+  const y = n.row.pos_y || 0;
+  n.css3d.position.set(s.currentR * Math.cos(theta), y, s.currentR * Math.sin(theta));
+  n.css3d.rotation.set(0, -theta - Math.PI / 2, 0);
+}
+
+function updateBgTint(s) {
+  const norm = Math.max(-1, Math.min(1, s.cameraY / 800));
+  // Negative y → cool blue tint, positive y → warm amber tint, zero → neutral red-black
+  const r = 10 + (norm > 0 ? Math.round(norm * 22) : 0);
+  const g = 0  + (norm > 0 ? Math.round(norm * 6)  : 0);
+  const b = 5  + (norm < 0 ? Math.round(-norm * 28) : 0);
+  s.host.style.setProperty('--m001-bg-r', r);
+  s.host.style.setProperty('--m001-bg-g', g);
+  s.host.style.setProperty('--m001-bg-b', b);
+  // Altitude readout
+  if (s.altitudePip) {
+    const pct = 50 + Math.max(-1, Math.min(1, s.cameraY / 1000)) * 50;
+    s.altitudePip.style.bottom = pct + '%';
+  }
+  if (s.altitudeLabel) {
+    const v = Math.round(s.cameraY);
+    s.altitudeLabel.textContent = `Y${v >= 0 ? '+' : ''}${v}`;
+  }
+}
+
 // =============================================================================
-// Camera persistence
+// Camera persistence (cylindrical)
 // =============================================================================
 function loadCamera(s) {
   try {
     const raw = localStorage.getItem(CAM_KEY);
     if (!raw) return;
     const p = JSON.parse(raw);
-    if (typeof p.x === 'number') s.targetTarget.x = s.cameraTarget.x = p.x;
-    if (typeof p.y === 'number') s.targetTarget.y = s.cameraTarget.y = p.y;
-    if (typeof p.z === 'number') s.targetTarget.z = s.cameraTarget.z = p.z;
-    if (typeof p.dist === 'number') s.cameraDistance = s.targetDistance = p.dist;
+    if (typeof p.theta === 'number') s.cameraTheta = s.targetTheta = p.theta;
+    if (typeof p.y     === 'number') s.cameraY     = s.targetY     = p.y;
+    if (typeof p.fov   === 'number') s.cameraFov   = s.targetFov   = clamp(p.fov, FOV_MIN, FOV_MAX);
   } catch (_) {}
 }
 function saveCamera(s) {
@@ -374,17 +489,17 @@ function saveCamera(s) {
   s.cameraSaveTimer = setTimeout(() => {
     try {
       localStorage.setItem(CAM_KEY, JSON.stringify({
-        x: s.targetTarget.x,
-        y: s.targetTarget.y,
-        z: s.targetTarget.z,
-        dist: s.targetDistance,
+        theta: s.targetTheta,
+        y:     s.targetY,
+        fov:   s.targetFov,
       }));
     } catch (_) {}
   }, 400);
 }
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
 // =============================================================================
-// Input — pointer pan/zoom/spawn
+// Input — drag rotates / rides, scroll zooms
 // =============================================================================
 function bindInput(s) {
   const stage = s.host;
@@ -396,40 +511,39 @@ function bindInput(s) {
       kind: 'camera',
       startX: e.clientX,
       startY: e.clientY,
-      origTarget: s.targetTarget.clone(),
-      moved: false,
+      origTheta: s.targetTheta,
+      origY: s.targetY,
     };
     stage.setPointerCapture?.(e.pointerId);
   };
   const onPointerMove = (e) => {
     if (!s.drag) return;
+    const fovScale = s.cameraFov / FOV_DEFAULT;
+
     if (s.drag.kind === 'camera') {
-      const factor = s.cameraDistance / 700;
-      const dx = (e.clientX - s.drag.startX) * factor;
-      const dy = (e.clientY - s.drag.startY) * factor;
-      if (Math.abs(dx) + Math.abs(dy) > 4) s.drag.moved = true;
-      s.targetTarget.x = s.drag.origTarget.x - dx;
-      s.targetTarget.y = s.drag.origTarget.y + dy;
+      const dx = e.clientX - s.drag.startX;
+      const dy = e.clientY - s.drag.startY;
+      // Drag right (dx>0) → world slides right → camera looks left → theta decreases
+      s.targetTheta = s.drag.origTheta - dx * 0.0022 * fovScale;
+      // Drag down (dy>0) → world slides down → camera moves up
+      s.targetY = clamp(s.drag.origY + dy * 1.1 * fovScale, -1500, 1500);
     } else if (s.drag.kind === 'note') {
-      const factor = s.cameraDistance / 700;
-      const dx = (e.clientX - s.drag.startX) * factor;
-      const dy = (e.clientY - s.drag.startY) * factor;
+      const dx = e.clientX - s.drag.startX;
+      const dy = e.clientY - s.drag.startY;
       const note = s.notes.get(s.drag.id);
-      if (note) {
-        note.css3d.position.x = s.drag.origPos.x + dx;
-        note.css3d.position.y = s.drag.origPos.y - dy;
-      }
+      if (!note) return;
+      // Note moves with mouse: drag right → note moves right → note theta decreases
+      const newTheta = wrapTheta(s.drag.origTheta - dx * 0.0022 * fovScale);
+      const newY     = clamp(s.drag.origY - dy * 1.1 * fovScale, -1100, 1100);
+      note.row.pos_x = newTheta;
+      note.row.pos_y = newY;
     }
   };
   const onPointerUp = (e) => {
     if (!s.drag) return;
     if (s.drag.kind === 'note') {
       const note = s.notes.get(s.drag.id);
-      if (note) {
-        note.row.pos_x = note.css3d.position.x;
-        note.row.pos_y = note.css3d.position.y;
-        scheduleSave(s, note, ['pos_x', 'pos_y']);
-      }
+      if (note) scheduleSave(s, note, ['pos_x', 'pos_y']);
     } else if (s.drag.kind === 'camera') {
       saveCamera(s);
     }
@@ -445,84 +559,69 @@ function bindInput(s) {
 
   const onWheel = (e) => {
     if (e.target.closest('.m001-note .m001-note-body, .m001-note .m001-note-title, .m001-search')) return;
-    if (s.mode === 'map') return; // disable zoom while in map mode
+    if (s.mode === 'map') return;
     e.preventDefault();
-    const delta = e.deltaY * 0.7;
-    s.targetDistance = Math.max(180, Math.min(2400, s.targetDistance + delta));
+    const delta = e.deltaY * 0.045;
+    s.targetFov = clamp(s.targetFov + delta, FOV_MIN, FOV_MAX);
     saveCamera(s);
   };
   stage.addEventListener('wheel', onWheel, { passive: false });
   s.cleanups.push(() => stage.removeEventListener('wheel', onWheel));
 
+  // Double-click empty wall → spawn note at intersection
+  const raycaster = new THREE.Raycaster();
   const onDblClick = (e) => {
     if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend')) return;
     if (s.mode === 'map') return;
     const rect = s.host.getBoundingClientRect();
     const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-    const v = new THREE.Vector3(ndcX, ndcY, 0.5).unproject(s.camera);
-    const dir = v.sub(s.camera.position).normalize();
-    const t = (s.cameraTarget.z - s.camera.position.z) / dir.z;
-    const point = s.camera.position.clone().add(dir.multiplyScalar(t));
-    spawnNote(s, { pos_x: point.x, pos_y: point.y, pos_z: point.z });
+    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), s.camera);
+    const hits = raycaster.intersectObject(s.wall);
+    if (!hits.length) return;
+    const p = hits[0].point;
+    const theta = wrapTheta(Math.atan2(p.z, p.x));
+    const y = clamp(p.y, -1100, 1100);
+    spawnNote(s, { pos_x: theta, pos_y: y, pos_z: 0 });
   };
   stage.addEventListener('dblclick', onDblClick);
   s.cleanups.push(() => stage.removeEventListener('dblclick', onDblClick));
 }
 
 function recenter(s) {
-  s.targetTarget.set(0, 0, 0);
-  s.targetDistance = 800;
+  s.targetTheta = 0;
+  s.targetY = 0;
+  s.targetFov = FOV_DEFAULT;
   saveCamera(s);
 }
 
-function flyTo(s, x, y, z, dist = 420) {
-  s.targetTarget.set(x, y, z);
-  s.targetDistance = dist;
+function flyTo(s, theta, y) {
+  // Take the shortest angular path
+  s.targetTheta = s.cameraTheta + angleDelta(s.cameraTheta, theta);
+  s.targetY = clamp(y, -1500, 1500);
+  s.targetFov = FOV_DEFAULT;
   saveCamera(s);
 }
 
 // =============================================================================
-// Map mode — zoom way out, look down
+// Map mode — wide FOV blowout
 // =============================================================================
-function toggleMap(s) {
-  if (s.mode === 'map') exitMap(s);
-  else enterMap(s);
-}
+function toggleMap(s) { s.mode === 'map' ? exitMap(s) : enterMap(s); }
 function enterMap(s) {
   if (s.notes.size === 0) { toast(s, 'NO NOTES TO MAP'); return; }
-  s.preMapState = {
-    target: s.targetTarget.clone(),
-    distance: s.targetDistance,
-  };
-  // Compute bounding center + extent
-  let cx = 0, cy = 0, max = 0;
-  s.notes.forEach((n) => {
-    cx += n.css3d.position.x;
-    cy += n.css3d.position.y;
-  });
-  cx /= s.notes.size; cy /= s.notes.size;
-  s.notes.forEach((n) => {
-    max = Math.max(max, Math.abs(n.css3d.position.x - cx), Math.abs(n.css3d.position.y - cy));
-  });
-  s.targetTarget.set(cx, cy, 0);
-  s.targetDistance = Math.max(900, max * 2.4 + 600);
+  s.preMapFov = s.targetFov;
+  s.targetFov = FOV_MAP;
   s.mode = 'map';
   s.host.classList.add('is-map');
-  const btn = s.actionBar.querySelector('[data-act="map"]');
-  if (btn) btn.classList.add('active');
+  s.actionBar.querySelector('[data-act="map"]')?.classList.add('active');
   toast(s, '// MAP MODE');
 }
 function exitMap(s) {
-  if (s.preMapState) {
-    s.targetTarget.copy(s.preMapState.target);
-    s.targetDistance = s.preMapState.distance;
-    s.preMapState = null;
-  }
+  s.targetFov = s.preMapFov ?? FOV_DEFAULT;
+  s.preMapFov = null;
   s.mode = 'free';
   s.host.classList.remove('is-map');
-  const btn = s.actionBar.querySelector('[data-act="map"]');
-  if (btn) btn.classList.remove('active');
+  s.actionBar.querySelector('[data-act="map"]')?.classList.remove('active');
 }
 
 // =============================================================================
@@ -559,7 +658,7 @@ function runSearch(s) {
         const ti = t.indexOf(q);
         const bi = b.indexOf(q);
         if (ti < 0 && bi < 0) return null;
-        return { n, score: ti >= 0 ? 100 - ti : 50 - bi, ti, bi };
+        return { n, score: ti >= 0 ? 100 - ti : 50 - bi };
       })
       .filter(Boolean)
       .sort((a, b) => b.score - a.score)
@@ -603,7 +702,6 @@ function moveSearch(s, dir) {
   if (s.searchHits.length === 0) return;
   s.searchActiveIdx = (s.searchActiveIdx + dir + s.searchHits.length) % s.searchHits.length;
   renderSearchResults(s, s.searchInput.value.trim().toLowerCase());
-  // scroll active into view
   const li = s.searchResults.children[s.searchActiveIdx];
   if (li) li.scrollIntoView({ block: 'nearest' });
 }
@@ -612,10 +710,9 @@ function commitSearch(s) {
   if (!note) return;
   closeSearch(s);
   if (s.mode === 'map') exitMap(s);
-  flyTo(s, note.css3d.position.x, note.css3d.position.y, note.css3d.position.z, 420);
+  flyTo(s, note.row.pos_x || 0, note.row.pos_y || 0);
   selectNote(s, note.row.id);
 }
-
 function colorIdFromHex(hex) {
   if (!hex) return 'red';
   const c = COLORS.find((c) => c.hex.toLowerCase() === String(hex).toLowerCase());
@@ -659,6 +756,13 @@ function applyNoteColor(note) {
 }
 
 function attachNote(s, row) {
+  // Wrap legacy pos_x values into [-π, π] so old pixel coords don't wrap the cylinder
+  if (typeof row.pos_x === 'number' && Math.abs(row.pos_x) > Math.PI * 2) {
+    row.pos_x = wrapTheta(row.pos_x);
+  } else {
+    row.pos_x = wrapTheta(row.pos_x || 0);
+  }
+
   const el = makeNoteEl();
   const titleEl = el.querySelector('.m001-note-title');
   const bodyEl = el.querySelector('.m001-note-body');
@@ -670,12 +774,12 @@ function attachNote(s, row) {
   bodyEl.value = row.body || '';
 
   const css3d = new CSS3DObject(el);
-  css3d.position.set(row.pos_x || 0, row.pos_y || 0, row.pos_z || 0);
   s.cssScene.add(css3d);
 
   const note = { row, el, css3d, els: { titleEl, bodyEl, savedEl, headEl, delBtn }, dirty: new Set(), saveTimer: null };
   s.notes.set(row.id, note);
   applyNoteColor(note);
+  layoutNote(s, note);
 
   el.addEventListener('pointerdown', () => selectNote(s, row.id));
 
@@ -687,7 +791,8 @@ function attachNote(s, row) {
       id: row.id,
       startX: e.clientX,
       startY: e.clientY,
-      origPos: css3d.position.clone(),
+      origTheta: row.pos_x || 0,
+      origY: row.pos_y || 0,
     };
     s.host.setPointerCapture?.(e.pointerId);
   });
@@ -697,7 +802,6 @@ function attachNote(s, row) {
   titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); bodyEl.focus(); } });
   delBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDelete(s, row.id); });
 
-  // Color swatches
   el.querySelectorAll('.m001-swatch').forEach((sw) => {
     sw.addEventListener('click', (e) => {
       e.stopPropagation();
@@ -716,7 +820,6 @@ function selectNote(s, id) {
   s.selectedId = id;
   s.notes.forEach((n) => n.el.classList.toggle('is-selected', n.row.id === id));
 }
-
 function deselect(s) {
   s.selectedId = null;
   s.notes.forEach((n) => n.el.classList.remove('is-selected'));
@@ -728,13 +831,11 @@ function markDirty(s, note, field) {
   note.els.savedEl.classList.add('dirty');
   scheduleSave(s, note);
 }
-
 function scheduleSave(s, note, fields) {
   if (fields) fields.forEach((f) => note.dirty.add(f));
   if (note.saveTimer) clearTimeout(note.saveTimer);
   note.saveTimer = setTimeout(() => doSave(s, note), SAVE_DEBOUNCE_MS);
 }
-
 async function doSave(s, note) {
   if (!note.dirty.size) return;
   const patch = { updated_at: new Date().toISOString() };
@@ -757,26 +858,34 @@ async function spawnNote(s, opts = {}) {
     module_code: MODULE_CODE,
     title: '',
     body: '',
-    pos_x: opts.pos_x ?? s.targetTarget.x + (Math.random() - 0.5) * 80,
-    pos_y: opts.pos_y ?? s.targetTarget.y + (Math.random() - 0.5) * 60,
-    pos_z: opts.pos_z ?? s.targetTarget.z + (Math.random() - 0.5) * 40,
+    pos_x: typeof opts.pos_x === 'number' ? wrapTheta(opts.pos_x) : wrapTheta(s.targetTheta),
+    pos_y: typeof opts.pos_y === 'number' ? opts.pos_y : s.targetY,
+    pos_z: opts.pos_z ?? 0,
     color: '#ff003c',
   };
   const { data, error } = await s.sb.from('notes').insert(payload).select().single();
   if (error) { toast(s, 'INSERT_FAIL · ' + error.message); return; }
   const note = attachNote(s, data);
   selectNote(s, data.id);
+  bumpR(s);
   setTimeout(() => note.els.titleEl.focus(), 50);
 }
-function spawnNoteAtCenter(s) {
+
+function spawnNoteInFront(s) {
+  // Slightly offset from the exact center so multiple "N" presses don't stack identically
+  const jitter = (Math.random() - 0.5) * 0.08;
   spawnNote(s, {
-    pos_x: s.targetTarget.x,
-    pos_y: s.targetTarget.y,
-    pos_z: s.targetTarget.z,
+    pos_x: s.targetTheta + jitter,
+    pos_y: s.targetY + (Math.random() - 0.5) * 30,
+    pos_z: 0,
   });
 }
 
-// Themed delete confirm
+function bumpR(s) {
+  // Wall stretches based on note count
+  s.targetR = Math.max(R_BASE, Math.sqrt(s.notes.size) * R_PER_NOTE * 6);
+}
+
 function requestDelete(s, id) {
   const note = s.notes.get(id);
   if (!note) return;
@@ -798,6 +907,7 @@ async function doDelete(s, id) {
   note.el.remove();
   s.notes.delete(id);
   if (s.selectedId === id) s.selectedId = null;
+  bumpR(s);
 }
 
 async function loadNotes(s) {
@@ -811,14 +921,16 @@ async function loadNotes(s) {
     const welcome = await s.sb.from('notes').insert({
       module_code: MODULE_CODE,
       title: 'WELCOME',
-      body: '// OBSIDIAN_DECK · v0.2\n\nDouble-click empty space to spawn a note.\nDrag a note\'s header to move, drag the void to pan.\nScroll = zoom. Press M for map view, Ctrl+K for search.\n\nNotes auto-save and live in your private archive.',
+      body: '// OBSIDIAN_DECK · v0.3 · CHAMBER\n\nYou are at the center of a closed cylinder.\nDrag horizontally to rotate, vertically to ride up/down.\nScroll to zoom (FOV). Double-click the wall to spawn a note there.\n\nN = new note in front · M = map · Ctrl+K = search.\nThe wall stretches as you add more notes.',
       pos_x: 0, pos_y: 0, pos_z: 0,
       color: '#ff003c',
     }).select().single();
     if (welcome.data) attachNote(s, welcome.data);
+    bumpR(s);
     return;
   }
   data.forEach((row) => attachNote(s, row));
+  bumpR(s);
 }
 
 function toast(s, msg) {
@@ -830,7 +942,7 @@ function toast(s, msg) {
 }
 
 // =============================================================================
-// Keyboard shortcuts (only active while module is mounted)
+// Keyboard shortcuts
 // =============================================================================
 function bindKeyboard(s) {
   const inEditable = (el) => {
@@ -840,30 +952,22 @@ function bindKeyboard(s) {
   };
 
   const onKey = (e) => {
-    // Global shortcuts that work even when typing in a note:
     if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
-      if (s.searchOpen) closeSearch(s);
-      else openSearch(s);
+      if (s.searchOpen) closeSearch(s); else openSearch(s);
       return;
     }
     if (e.key === 'Escape') {
       if (s.searchOpen) { e.preventDefault(); closeSearch(s); return; }
       if (!s.confirmEl.hidden) { e.preventDefault(); closeConfirm(s, false); return; }
-      if (inEditable(document.activeElement)) {
-        e.preventDefault();
-        document.activeElement.blur();
-        return;
-      }
+      if (inEditable(document.activeElement)) { e.preventDefault(); document.activeElement.blur(); return; }
       if (s.mode === 'map') { e.preventDefault(); exitMap(s); return; }
       if (s.selectedId) { e.preventDefault(); deselect(s); return; }
       return;
     }
-
-    // Below: only when not typing
     if (inEditable(document.activeElement)) return;
 
-    if (e.key === 'n' || e.key === 'N') { e.preventDefault(); spawnNoteAtCenter(s); return; }
+    if (e.key === 'n' || e.key === 'N') { e.preventDefault(); spawnNoteInFront(s); return; }
     if (e.key === 'm' || e.key === 'M') { e.preventDefault(); toggleMap(s); return; }
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); recenter(s); return; }
     if (e.key === '/')                  { e.preventDefault(); openSearch(s); return; }
@@ -871,10 +975,12 @@ function bindKeyboard(s) {
       if (s.selectedId) { e.preventDefault(); requestDelete(s, s.selectedId); }
       return;
     }
-    if (e.key === 'ArrowLeft')  { s.targetTarget.x -= 80; saveCamera(s); }
-    if (e.key === 'ArrowRight') { s.targetTarget.x += 80; saveCamera(s); }
-    if (e.key === 'ArrowUp')    { s.targetTarget.y += 80; saveCamera(s); }
-    if (e.key === 'ArrowDown')  { s.targetTarget.y -= 80; saveCamera(s); }
+    const STEP_THETA = 0.18;
+    const STEP_Y = 100;
+    if (e.key === 'ArrowLeft')  { s.targetTheta -= STEP_THETA; saveCamera(s); }
+    if (e.key === 'ArrowRight') { s.targetTheta += STEP_THETA; saveCamera(s); }
+    if (e.key === 'ArrowUp')    { s.targetY = clamp(s.targetY + STEP_Y, -1500, 1500); saveCamera(s); }
+    if (e.key === 'ArrowDown')  { s.targetY = clamp(s.targetY - STEP_Y, -1500, 1500); saveCamera(s); }
   };
 
   window.addEventListener('keydown', onKey);
@@ -886,14 +992,18 @@ function bindKeyboard(s) {
 // =============================================================================
 const MOD001_CSS = `
 .m001-host {
+  --m001-bg-r: 10; --m001-bg-g: 0; --m001-bg-b: 5;
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center, #0a0005 0%, #000000 70%);
+  background: radial-gradient(ellipse at center,
+    rgb(var(--m001-bg-r), var(--m001-bg-g), var(--m001-bg-b)) 0%,
+    #000 75%);
   overflow: hidden;
   font-family: 'Share Tech Mono', monospace;
   color: #e8e8e8;
   user-select: none;
   cursor: grab;
+  transition: background 0.4s linear;
 }
 .m001-host:active { cursor: grabbing; }
 .m001-host.is-map { cursor: zoom-out; }
@@ -905,7 +1015,7 @@ const MOD001_CSS = `
   position: absolute; inset: 0; z-index: 2; pointer-events: none;
   background:
     radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%),
-    linear-gradient(180deg, rgba(255,0,60,0.04), transparent 30%, transparent 70%, rgba(255,0,60,0.04));
+    linear-gradient(180deg, rgba(255,0,60,0.05), transparent 30%, transparent 70%, rgba(255,0,60,0.05));
 }
 .m001-scanlines {
   position: absolute; inset: 0; z-index: 3; pointer-events: none;
@@ -913,6 +1023,48 @@ const MOD001_CSS = `
     0deg, transparent 0, transparent 2px, rgba(255,0,60,0.025) 2px, rgba(255,0,60,0.025) 3px
   );
   mix-blend-mode: screen;
+}
+
+/* Altitude indicator on the right */
+.m001-altitude {
+  position: absolute;
+  right: 1.2rem;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+.m001-altitude-track {
+  position: relative;
+  width: 2px;
+  height: 180px;
+  background: linear-gradient(
+    180deg,
+    rgba(255,174,0,0.45) 0%,
+    rgba(255,0,60,0.35) 50%,
+    rgba(0,212,255,0.45) 100%
+  );
+  box-shadow: 0 0 8px rgba(255,0,60,0.25);
+}
+.m001-altitude-pip {
+  position: absolute;
+  left: -3px;
+  width: 8px; height: 2px;
+  background: #fff;
+  box-shadow: 0 0 6px rgba(255,255,255,0.7);
+  bottom: 50%;
+  transition: bottom 0.16s linear;
+}
+.m001-altitude-label {
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.65rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.5);
+  text-transform: uppercase;
 }
 
 /* Action bar */
@@ -978,7 +1130,7 @@ const MOD001_CSS = `
   font-size: 0.75rem;
   color: rgba(255,255,255,0.7);
   letter-spacing: 0.08em;
-  min-width: 360px;
+  min-width: 380px;
 }
 .m001-legend-title {
   font-family: 'Orbitron', sans-serif;
@@ -1092,9 +1244,7 @@ const MOD001_CSS = `
   border-bottom: 1px solid rgba(255,255,255,0.04);
   transition: background 0.15s;
 }
-.m001-hit:hover, .m001-hit.active {
-  background: rgba(255,0,60,0.1);
-}
+.m001-hit:hover, .m001-hit.active { background: rgba(255,0,60,0.1); }
 .m001-hit.active {
   border-left: 2px solid #ff003c;
   padding-left: calc(1rem - 2px);
@@ -1125,11 +1275,7 @@ const MOD001_CSS = `
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.m001-hit mark {
-  background: rgba(255,0,60,0.3);
-  color: #fff;
-  padding: 0 1px;
-}
+.m001-hit mark { background: rgba(255,0,60,0.3); color: #fff; padding: 0 1px; }
 .m001-hit-preview .dim { color: rgba(255,255,255,0.3); font-style: italic; }
 .m001-search-hint {
   padding: 0.55rem 1rem;
@@ -1159,19 +1305,12 @@ const MOD001_CSS = `
   border: 1px solid #ff003c;
   box-shadow: 0 30px 80px rgba(0,0,0,0.85), 0 0 50px rgba(255,0,60,0.45);
 }
-.m001-confirm-panel .corner {
-  position: absolute; width: 14px; height: 14px; border: 0;
-}
+.m001-confirm-panel .corner { position: absolute; width: 14px; height: 14px; border: 0; }
 .m001-confirm-panel .corner.tl { top: -1px; left: -1px; border-top: 1px solid #ff003c; border-left: 1px solid #ff003c; }
 .m001-confirm-panel .corner.tr { top: -1px; right: -1px; border-top: 1px solid #ff003c; border-right: 1px solid #ff003c; }
 .m001-confirm-panel .corner.bl { bottom: -1px; left: -1px; border-bottom: 1px solid #ff003c; border-left: 1px solid #ff003c; }
 .m001-confirm-panel .corner.br { bottom: -1px; right: -1px; border-bottom: 1px solid #ff003c; border-right: 1px solid #ff003c; }
-.m001-confirm-head {
-  display: flex;
-  align-items: center;
-  gap: 0.7rem;
-  margin-bottom: 0.7rem;
-}
+.m001-confirm-head { display: flex; align-items: center; gap: 0.7rem; margin-bottom: 0.7rem; }
 .m001-confirm-glyph {
   width: 30px; height: 30px;
   display: grid; place-items: center;
@@ -1195,12 +1334,7 @@ const MOD001_CSS = `
   color: #ff003c;
   text-shadow: 0 0 12px rgba(255,0,60,0.6);
 }
-.m001-confirm-msg {
-  margin: 0 0 1.2rem;
-  font-size: 0.85rem;
-  color: rgba(255,255,255,0.7);
-  line-height: 1.5;
-}
+.m001-confirm-msg { margin: 0 0 1.2rem; font-size: 0.85rem; color: rgba(255,255,255,0.7); line-height: 1.5; }
 .m001-confirm-msg strong {
   color: #fff;
   font-family: 'Orbitron', sans-serif;
@@ -1210,11 +1344,7 @@ const MOD001_CSS = `
   margin-top: 0.4rem;
   font-size: 0.8rem;
 }
-.m001-confirm-actions {
-  display: flex;
-  gap: 0.6rem;
-  justify-content: flex-end;
-}
+.m001-confirm-actions { display: flex; gap: 0.6rem; justify-content: flex-end; }
 
 /* Notes */
 .m001-note {
@@ -1238,10 +1368,7 @@ const MOD001_CSS = `
   box-shadow: 0 0 36px var(--accent-glow), 0 0 80px var(--accent-glow), inset 0 0 50px rgba(255,255,255,0.04);
   opacity: 1;
 }
-.m001-note-corners .c {
-  position: absolute; width: 10px; height: 10px;
-  border: 1px solid var(--accent);
-}
+.m001-note-corners .c { position: absolute; width: 10px; height: 10px; border: 1px solid var(--accent); }
 .m001-note-corners .tl { top: -1px; left: -1px; border-right: 0; border-bottom: 0; }
 .m001-note-corners .tr { top: -1px; right: -1px; border-left: 0; border-bottom: 0; }
 .m001-note-corners .bl { bottom: -1px; left: -1px; border-right: 0; border-top: 0; }
@@ -1311,10 +1438,7 @@ const MOD001_CSS = `
   text-transform: uppercase;
   gap: 0.5rem;
 }
-.m001-note-colors {
-  display: flex;
-  gap: 0.35rem;
-}
+.m001-note-colors { display: flex; gap: 0.35rem; }
 .m001-swatch {
   width: 11px; height: 11px;
   border-radius: 50%;
@@ -1334,7 +1458,7 @@ const MOD001_CSS = `
 // Register
 // =============================================================================
 window.NIVEN.registerModule(MODULE_CODE, {
-  label: 'OBSIDIAN_DECK · 3D NOTES',
+  label: 'OBSIDIAN_DECK · CYLINDER',
   mount,
   unmount,
 });
