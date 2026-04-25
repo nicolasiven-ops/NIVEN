@@ -1018,6 +1018,8 @@ const MOD001_CSS = `
 }
 
 /* Search overlay */
+.m001-search[hidden],
+.m001-confirm[hidden] { display: none !important; }
 .m001-search {
   position: absolute;
   inset: 0;
