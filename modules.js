@@ -30,6 +30,17 @@
   const detailMissingCode = document.getElementById('detail-missing-code');
   const detailEditBtn = document.getElementById('detail-edit');
   const detailDeleteBtn = document.getElementById('detail-delete');
+  const detailDeployWrap = document.getElementById('detail-deploy');
+  const detailDeployBtn = document.getElementById('detail-deploy-btn');
+  const deployLabelEl = document.getElementById('deploy-label');
+
+  // --- Runtime view elements ---
+  const runtimeSection = document.getElementById('module-runtime');
+  const runtimeStage = document.getElementById('module-stage');
+  const runtimeEmpty = document.getElementById('runtime-empty');
+  const runtimeCodeEl = document.getElementById('runtime-code');
+  const runtimeLabelEl = document.getElementById('runtime-label');
+  const runtimeBriefingLink = document.getElementById('runtime-briefing');
 
   if (!grid || !emptyCard || !modal || !form || !detailSection) return;
 
@@ -37,6 +48,8 @@
   let projectsLoaded = false;
   let editingId = null;
   let currentDetailCode = null;
+  let currentRuntimeCode = null;
+  let mountedRuntime = null; // { code, def }
   let sessionReady = false;
   let isAuthed = false;
 
@@ -379,6 +392,15 @@
     document.getElementById('detail-updated').textContent = fmtDate(p.updated_at);
     detailPanel.dataset.status = p.status || 'planning';
 
+    // Show DEPLOY block if a runtime is registered for this code
+    const runtime = window.NIVEN?.getModule?.(p.code);
+    if (runtime && detailDeployWrap) {
+      detailDeployWrap.hidden = false;
+      if (deployLabelEl) deployLabelEl.textContent = runtime.label || `${p.code}_INTERFACE`;
+    } else if (detailDeployWrap) {
+      detailDeployWrap.hidden = true;
+    }
+
     if (window.__wireHover) window.__wireHover();
   }
 
@@ -390,32 +412,116 @@
     const p = findByCode(currentDetailCode);
     if (p) await deleteProject(p.id);
   });
+  detailDeployBtn?.addEventListener('click', () => {
+    if (currentDetailCode) {
+      location.hash = `#/m/${encodeURIComponent(currentDetailCode)}/run`;
+    }
+  });
+
+  // If a module script registers itself after the briefing is rendered, refresh.
+  window.addEventListener('niven:module-registered', (e) => {
+    if (currentDetailCode === e.detail?.code) populateDetail(currentDetailCode);
+  });
 
   // ================================================================
   // Hash router — #/ for archive, #/m/<code> for detail
   // ================================================================
   function route() {
     const hash = location.hash || '#/';
-    const m = hash.match(/^#\/m\/([^\/]+)\/?$/);
-    if (m) {
-      const code = decodeURIComponent(m[1]);
-      showDetailView(code);
+    const runMatch = hash.match(/^#\/m\/([^\/]+)\/run\/?$/);
+    const detailMatch = hash.match(/^#\/m\/([^\/]+)\/?$/);
+    if (runMatch) {
+      showRuntimeView(decodeURIComponent(runMatch[1]));
+    } else if (detailMatch) {
+      showDetailView(decodeURIComponent(detailMatch[1]));
     } else {
       showArchiveView();
     }
   }
 
   function showDetailView(code) {
+    unmountRuntime();
+    document.body.classList.remove('view-runtime');
     document.body.classList.add('view-detail');
     detailSection.hidden = false;
+    if (runtimeSection) runtimeSection.hidden = true;
     window.scrollTo(0, 0);
     populateDetail(code);
   }
 
   function showArchiveView() {
-    document.body.classList.remove('view-detail');
+    unmountRuntime();
+    document.body.classList.remove('view-detail', 'view-runtime');
     detailSection.hidden = true;
+    if (runtimeSection) runtimeSection.hidden = true;
     currentDetailCode = null;
+  }
+
+  function showRuntimeView(code) {
+    currentDetailCode = code; // briefing-link in HUD points back here
+    currentRuntimeCode = code;
+    document.body.classList.remove('view-detail');
+    document.body.classList.add('view-runtime');
+    detailSection.hidden = true;
+    if (runtimeSection) runtimeSection.hidden = false;
+
+    if (runtimeBriefingLink) {
+      runtimeBriefingLink.setAttribute('href', `#/m/${encodeURIComponent(code)}`);
+    }
+    if (runtimeCodeEl) runtimeCodeEl.textContent = code;
+
+    // If still booting / not authed, mount nothing yet — the runtime route is
+    // gated like the briefing. Once authed/loaded, route() re-fires.
+    if (!sessionReady || !isAuthed || !projectsLoaded) return;
+
+    const proj = findByCode(code);
+    const def = window.NIVEN?.getModule?.(code);
+
+    if (runtimeLabelEl) runtimeLabelEl.textContent = def?.label || (proj ? 'NO_RUNTIME' : 'SIGNAL_LOST');
+
+    if (proj && def) {
+      mountRuntime(code, def, proj);
+    } else {
+      // Empty/no-runtime placeholder
+      if (runtimeEmpty) runtimeEmpty.hidden = false;
+    }
+  }
+
+  function mountRuntime(code, def, proj) {
+    // Tear down any previous mount before swapping
+    unmountRuntime();
+    if (runtimeEmpty) runtimeEmpty.hidden = true;
+    // Give the module a clean stage — but keep the empty placeholder element
+    // off-screen so we can restore it on unmount.
+    Array.from(runtimeStage.children).forEach((c) => {
+      if (c !== runtimeEmpty) c.remove();
+    });
+    try {
+      def.mount(runtimeStage, {
+        sb,
+        project: proj,
+        code,
+        exit: () => { location.hash = `#/m/${encodeURIComponent(code)}`; },
+      });
+      mountedRuntime = { code, def };
+    } catch (err) {
+      console.error('[runtime] mount failed for', code, err);
+      if (runtimeEmpty) runtimeEmpty.hidden = false;
+    }
+  }
+
+  function unmountRuntime() {
+    if (mountedRuntime?.def?.unmount) {
+      try { mountedRuntime.def.unmount(); }
+      catch (err) { console.error('[runtime] unmount failed:', err); }
+    }
+    mountedRuntime = null;
+    currentRuntimeCode = null;
+    if (runtimeStage) {
+      Array.from(runtimeStage.children).forEach((c) => {
+        if (c !== runtimeEmpty) c.remove();
+      });
+    }
   }
 
   // Intercept in-app nav anchors so hashchange fires even when href matches current location

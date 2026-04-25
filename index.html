@@ -181,6 +181,25 @@
               </div>
             </div>
 
+            <div class="detail-deploy" id="detail-deploy" hidden>
+              <div class="deploy-meta">
+                <span class="field-label">RUNTIME</span>
+                <span class="deploy-label" id="deploy-label">MODULE_INTERFACE</span>
+                <span class="deploy-status">
+                  <span class="pulse"></span>
+                  <span>READY_TO_DEPLOY</span>
+                </span>
+              </div>
+              <button type="button" class="deploy-btn" id="detail-deploy-btn">
+                <span class="deploy-btn-bracket">[</span>
+                <span class="deploy-btn-label">DEPLOY MODULE</span>
+                <span class="deploy-btn-bracket">]</span>
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+                </svg>
+              </button>
+            </div>
+
             <div class="detail-actions">
               <button type="button" class="modal-btn" id="detail-edit">EDIT</button>
               <button type="button" class="modal-btn abort" id="detail-delete">DELETE</button>
@@ -208,6 +227,42 @@
             <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
           </svg>
         </button>
+      </div>
+    </section>
+
+    <section class="module-runtime" id="module-runtime" hidden aria-label="Module runtime">
+      <div class="runtime-hud">
+        <a href="#/" class="runtime-exit" data-nav>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path d="M19 12H5M11 18l-6-6 6-6" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+          <span>DISENGAGE</span>
+        </a>
+        <div class="runtime-id">
+          <span class="pulse"></span>
+          <span id="runtime-code">MOD_???</span>
+          <span class="dim">·</span>
+          <span id="runtime-label">RUNTIME</span>
+        </div>
+        <a href="#/m/" class="runtime-briefing" id="runtime-briefing" data-nav>
+          <span>BRIEFING</span>
+          <svg viewBox="0 0 24 24" width="14" height="14" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </a>
+      </div>
+      <div class="runtime-stage" id="module-stage">
+        <div class="runtime-empty" id="runtime-empty">
+          <span class="field-label">// SIGNAL</span>
+          <h2>NO RUNTIME</h2>
+          <p>This module has no interface registered. It exists in the archive only.</p>
+          <a href="#/" class="lock-cta" data-nav>
+            <span>// RETURN</span>
+            <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+              <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+            </svg>
+          </a>
+        </div>
       </div>
     </section>
 
@@ -405,6 +460,7 @@
   <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
   <script src="config.js"></script>
   <script src="script.js"></script>
+  <script src="module-runtime.js"></script>
   <script src="modules.js"></script>
 </body>
 </html>
