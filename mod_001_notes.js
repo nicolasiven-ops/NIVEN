@@ -156,6 +156,8 @@ function buildDOM(s) {
         <span class="key">/</span><span>Quick search</span>
         <span class="key">DEL</span><span>Delete selected</span>
         <span class="key">ESC</span><span>Deselect / close</span>
+        <span class="key">DROP</span><span>Drop note on another to stack</span>
+        <span class="key">↻ BADGE</span><span>Cycle stack (next on top)</span>
       </div>
     </div>
 
@@ -445,10 +447,170 @@ function wrapTheta(t) {
 }
 
 function layoutNote(s, n) {
-  const theta = n.row.pos_x || 0;
-  const y = n.row.pos_y || 0;
-  n.css3d.position.set(s.currentR * Math.cos(theta), y, s.currentR * Math.sin(theta));
-  n.css3d.rotation.set(0, -theta - Math.PI / 2, 0);
+  const baseTheta = n.row.pos_x || 0;
+  const baseY = n.row.pos_y || 0;
+  // While being dragged, the note tracks the cursor 1:1 — ignore stack offset
+  const draggingSelf = s.drag && s.drag.kind === 'note' && s.drag.id === n.row.id;
+  const order = draggingSelf ? 0 : (n.stackOrder || 0);
+  // Stacked notes peek behind the anchor: slight tangent fan + drop + recede into wall
+  const theta = baseTheta + order * 0.0055;
+  const y = baseY - order * 7;
+  const r = s.currentR + order * 3;
+  n.css3d.position.set(r * Math.cos(theta), y, r * Math.sin(theta));
+  // All stack members face same direction as the anchor
+  n.css3d.rotation.set(0, -baseTheta - Math.PI / 2, 0);
+}
+
+// =============================================================================
+// Stacks
+// =============================================================================
+function recomputeStacks(s) {
+  const groups = new Map();
+  s.notes.forEach((n) => {
+    n.stackOrder = 0; n.stackSize = 1;
+    const sid = n.row.stack_id;
+    if (!sid) return;
+    if (!groups.has(sid)) groups.set(sid, []);
+    groups.get(sid).push(n);
+  });
+  groups.forEach((arr) => {
+    if (arr.length < 2) {
+      // Stack of 1 — dissolve
+      arr.forEach((n) => {
+        if (n.row.stack_id) {
+          n.row.stack_id = null;
+          n.row.stack_order = 0;
+          scheduleSave(s, n, ['stack_id', 'stack_order']);
+        }
+      });
+      return;
+    }
+    arr.sort((a, b) => (a.row.stack_order || 0) - (b.row.stack_order || 0));
+    arr.forEach((n, i) => { n.stackOrder = i; n.stackSize = arr.length; });
+  });
+  s.notes.forEach((n) => updateStackBadge(s, n));
+}
+
+function updateStackBadge(s, n) {
+  let badge = n.el.querySelector('.m001-stack-badge');
+  const isAnchor = n.stackOrder === 0 && n.stackSize > 1;
+  if (isAnchor) {
+    if (!badge) {
+      badge = document.createElement('button');
+      badge.type = 'button';
+      badge.className = 'm001-stack-badge';
+      badge.title = 'Cycle stack — bring next to top';
+      badge.addEventListener('click', (e) => {
+        e.stopPropagation();
+        cycleStack(s, n);
+      });
+      n.el.appendChild(badge);
+    }
+    badge.innerHTML = `<span class="m001-stack-count">×${n.stackSize}</span><span class="m001-stack-arrow">↻</span>`;
+    badge.hidden = false;
+  } else if (badge) {
+    badge.hidden = true;
+  }
+  n.el.classList.toggle('is-stacked', !!n.row.stack_id);
+  n.el.classList.toggle('is-stack-anchor', isAnchor);
+}
+
+// Find nearest other note within snap range, ignoring the dragged one.
+function findSnapTarget(s, draggedId) {
+  const me = s.notes.get(draggedId);
+  if (!me) return null;
+  const myT = me.row.pos_x || 0;
+  const myY = me.row.pos_y || 0;
+  let best = null, bestScore = Infinity;
+  s.notes.forEach((other) => {
+    if (other.row.id === draggedId) return;
+    // If other is in a stack but isn't the anchor, target the anchor instead
+    if (other.row.stack_id && other.stackOrder !== 0) return;
+    const dT = Math.abs(angleDelta(other.row.pos_x || 0, myT));
+    const dY = Math.abs((other.row.pos_y || 0) - myY);
+    if (dT > 0.18 || dY > 110) return;
+    const score = dT * 250 + dY;
+    if (score < bestScore) { bestScore = score; best = other; }
+  });
+  return best;
+}
+
+async function joinStack(s, draggedNote, targetNote) {
+  // Either target already has a stack, or we create a new one with both
+  let stackId = targetNote.row.stack_id;
+  if (!stackId) {
+    stackId = (crypto.randomUUID && crypto.randomUUID()) ||
+              ('stk_' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8));
+    targetNote.row.stack_id = stackId;
+    targetNote.row.stack_order = 0;
+    scheduleSave(s, targetNote, ['stack_id', 'stack_order']);
+  }
+  // Find next stack_order
+  let maxOrder = -1;
+  s.notes.forEach((n) => {
+    if (n.row.stack_id === stackId) maxOrder = Math.max(maxOrder, n.row.stack_order || 0);
+  });
+  // Snap dragged to anchor's position
+  draggedNote.row.pos_x = targetNote.row.pos_x;
+  draggedNote.row.pos_y = targetNote.row.pos_y;
+  draggedNote.row.stack_id = stackId;
+  draggedNote.row.stack_order = maxOrder + 1;
+  scheduleSave(s, draggedNote, ['pos_x', 'pos_y', 'stack_id', 'stack_order']);
+  recomputeStacks(s);
+  toast(s, '// STACKED');
+}
+
+function leaveStack(s, note) {
+  note.row.stack_id = null;
+  note.row.stack_order = 0;
+  scheduleSave(s, note, ['stack_id', 'stack_order']);
+  recomputeStacks(s);
+  toast(s, '// UNSTACKED');
+}
+
+// Rotate stack: anchor goes to bottom, second-from-top becomes new anchor
+function cycleStack(s, anchorNote) {
+  const stackId = anchorNote.row.stack_id;
+  if (!stackId) return;
+  const members = Array.from(s.notes.values())
+    .filter((n) => n.row.stack_id === stackId)
+    .sort((a, b) => (a.row.stack_order || 0) - (b.row.stack_order || 0));
+  if (members.length < 2) return;
+  // Shift orders: top → bottom, others → up by 1
+  const top = members[0];
+  for (let i = 1; i < members.length; i++) {
+    members[i].row.stack_order = i - 1;
+    scheduleSave(s, members[i], ['stack_order']);
+  }
+  top.row.stack_order = members.length - 1;
+  scheduleSave(s, top, ['stack_order']);
+  recomputeStacks(s);
+}
+
+// Bring a specific note to the top of its stack (used by search fly-to)
+function bringToTop(s, note) {
+  if (!note.row.stack_id || note.stackOrder === 0) return;
+  const stackId = note.row.stack_id;
+  const members = Array.from(s.notes.values())
+    .filter((n) => n.row.stack_id === stackId)
+    .sort((a, b) => (a.row.stack_order || 0) - (b.row.stack_order || 0));
+  // Place `note` first, others follow in their existing relative order
+  const reordered = [note, ...members.filter((n) => n.row.id !== note.row.id)];
+  reordered.forEach((n, i) => {
+    if (n.row.stack_order !== i) {
+      n.row.stack_order = i;
+      scheduleSave(s, n, ['stack_order']);
+    }
+  });
+  recomputeStacks(s);
+}
+
+function clearSnapHint(s) {
+  s.notes.forEach((n) => n.el.classList.remove('is-snap-target'));
+}
+function showSnapHint(s, target) {
+  clearSnapHint(s);
+  if (target) target.el.classList.add('is-snap-target');
 }
 
 function updateBgTint(s) {
@@ -537,19 +699,62 @@ function bindInput(s) {
       const newY     = clamp(s.drag.origY - dy * 1.1 * fovScale, -1100, 1100);
       note.row.pos_x = newTheta;
       note.row.pos_y = newY;
+      // Live snap-target hint
+      const target = findSnapTarget(s, s.drag.id);
+      showSnapHint(s, target);
     }
   };
   const onPointerUp = (e) => {
     if (!s.drag) return;
     if (s.drag.kind === 'note') {
       const note = s.notes.get(s.drag.id);
-      if (note) scheduleSave(s, note, ['pos_x', 'pos_y']);
+      clearSnapHint(s);
+      if (note) handleNoteDrop(s, note);
     } else if (s.drag.kind === 'camera') {
       saveCamera(s);
     }
     s.drag = null;
     stage.releasePointerCapture?.(e.pointerId);
   };
+
+  function handleNoteDrop(s, note) {
+    const target = findSnapTarget(s, note.row.id);
+    if (target) {
+      // Don't re-stack if already in target's stack
+      if (note.row.stack_id && note.row.stack_id === target.row.stack_id) {
+        scheduleSave(s, note, ['pos_x', 'pos_y']);
+        return;
+      }
+      joinStack(s, note, target);
+      return;
+    }
+    // No snap target. If we're in a stack, check whether we've moved away enough to leave.
+    if (note.row.stack_id) {
+      const stackId = note.row.stack_id;
+      const others = Array.from(s.notes.values())
+        .filter((n) => n.row.stack_id === stackId && n.row.id !== note.row.id);
+      if (others.length === 0) {
+        leaveStack(s, note);
+        return;
+      }
+      // Anchor of the stack (excluding us)
+      others.sort((a, b) => (a.row.stack_order || 0) - (b.row.stack_order || 0));
+      const anchor = others[0];
+      const dT = Math.abs(angleDelta(anchor.row.pos_x || 0, note.row.pos_x || 0));
+      const dY = Math.abs((anchor.row.pos_y || 0) - (note.row.pos_y || 0));
+      if (dT > 0.35 || dY > 220) {
+        leaveStack(s, note);
+        return;
+      }
+      // Stayed near the stack — re-snap to anchor exactly so it stays grouped
+      note.row.pos_x = anchor.row.pos_x;
+      note.row.pos_y = anchor.row.pos_y;
+      scheduleSave(s, note, ['pos_x', 'pos_y']);
+      return;
+    }
+    // Plain solo note move
+    scheduleSave(s, note, ['pos_x', 'pos_y']);
+  }
   stage.addEventListener('pointerdown', onPointerDown);
   window.addEventListener('pointermove', onPointerMove);
   window.addEventListener('pointerup', onPointerUp);
@@ -710,6 +915,8 @@ function commitSearch(s) {
   if (!note) return;
   closeSearch(s);
   if (s.mode === 'map') exitMap(s);
+  // If buried in a stack, surface it first
+  if (note.row.stack_id && note.stackOrder !== 0) bringToTop(s, note);
   flyTo(s, note.row.pos_x || 0, note.row.pos_y || 0);
   selectNote(s, note.row.id);
 }
@@ -868,7 +1075,8 @@ async function spawnNote(s, opts = {}) {
   const note = attachNote(s, data);
   selectNote(s, data.id);
   bumpR(s);
-  setTimeout(() => note.els.titleEl.focus(), 50);
+  recomputeStacks(s);
+  setTimeout(() => note.els.bodyEl.focus(), 50);
 }
 
 function spawnNoteInFront(s) {
@@ -908,6 +1116,7 @@ async function doDelete(s, id) {
   s.notes.delete(id);
   if (s.selectedId === id) s.selectedId = null;
   bumpR(s);
+  recomputeStacks(s);
 }
 
 async function loadNotes(s) {
@@ -927,10 +1136,12 @@ async function loadNotes(s) {
     }).select().single();
     if (welcome.data) attachNote(s, welcome.data);
     bumpR(s);
+    recomputeStacks(s);
     return;
   }
   data.forEach((row) => attachNote(s, row));
   bumpR(s);
+  recomputeStacks(s);
 }
 
 function toast(s, msg) {
@@ -1452,6 +1663,65 @@ const MOD001_CSS = `
 .m001-swatch.active { border-color: #fff; transform: scale(1.18); }
 .m001-note-saved.dirty { color: #ffaa00; }
 .m001-note-saved.error { color: #ff003c; }
+
+/* Stack badge (anchor only) */
+.m001-stack-badge {
+  position: absolute;
+  top: -14px; right: -14px;
+  z-index: 5;
+  min-width: 38px; height: 28px;
+  padding: 0 0.5rem;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  background: rgba(8,2,4,0.96);
+  color: var(--accent);
+  border: 1px solid var(--accent);
+  cursor: pointer;
+  box-shadow: 0 0 14px var(--accent-glow);
+  transition: all 0.15s;
+}
+.m001-stack-badge[hidden] { display: none !important; }
+.m001-stack-badge:hover {
+  background: var(--accent);
+  color: #000;
+  transform: scale(1.08);
+}
+.m001-stack-badge .m001-stack-count { font-weight: 700; }
+.m001-stack-badge .m001-stack-arrow {
+  font-size: 0.85rem;
+  opacity: 0.7;
+}
+.m001-stack-badge:hover .m001-stack-arrow { opacity: 1; }
+
+/* Subtle indicator on stacked notes */
+.m001-note.is-stacked.is-stack-anchor { /* anchor — keep full opacity */ }
+
+/* Snap-target highlight while dragging another note onto this one */
+.m001-note.is-snap-target {
+  box-shadow:
+    0 0 36px var(--accent-glow),
+    0 0 80px var(--accent-glow),
+    0 0 0 3px var(--accent),
+    inset 0 0 50px rgba(255,255,255,0.06);
+  opacity: 1;
+}
+.m001-note.is-snap-target::before {
+  content: '◉ STACK';
+  position: absolute;
+  top: -22px; left: 50%;
+  transform: translateX(-50%);
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  color: var(--accent);
+  text-shadow: 0 0 8px var(--accent-glow);
+  white-space: nowrap;
+  pointer-events: none;
+}
 `;
 
 // =============================================================================
