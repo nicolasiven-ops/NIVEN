@@ -20,14 +20,15 @@ const MODULE_CODE = 'MOD_002';
 const SAVE_DEBOUNCE_MS = 400;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
+const DEFAULT_PORTS = 2;
 const DEVICE_TYPES = [
-  { id: 'switch',   label: 'SWITCH',   glyph: '▤', ports: 24, accent: '#00d4ff' },
-  { id: 'router',   label: 'ROUTER',   glyph: '◈', ports: 4,  accent: '#35ff7a' },
-  { id: 'firewall', label: 'FIREWALL', glyph: '▥', ports: 4,  accent: '#ff003c' },
-  { id: 'server',   label: 'SERVER',   glyph: '▣', ports: 2,  accent: '#b87aff' },
-  { id: 'ap',       label: 'AP',       glyph: '⊙', ports: 2,  accent: '#ffae00' },
-  { id: 'client',   label: 'CLIENT',   glyph: '▭', ports: 1,  accent: '#9aa0a8' },
-  { id: 'cloud',    label: 'CLOUD',    glyph: '☁', ports: 1,  accent: '#7afcff' },
+  { id: 'switch',   label: 'SWITCH',   ports: DEFAULT_PORTS, accent: '#00d4ff' },
+  { id: 'router',   label: 'ROUTER',   ports: DEFAULT_PORTS, accent: '#35ff7a' },
+  { id: 'firewall', label: 'FIREWALL', ports: DEFAULT_PORTS, accent: '#ff003c' },
+  { id: 'server',   label: 'SERVER',   ports: DEFAULT_PORTS, accent: '#b87aff' },
+  { id: 'ap',       label: 'AP',       ports: DEFAULT_PORTS, accent: '#ffae00' },
+  { id: 'client',   label: 'CLIENT',   ports: DEFAULT_PORTS, accent: '#9aa0a8' },
+  { id: 'cloud',    label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#7afcff' },
 ];
 const typeOf = (id) => DEVICE_TYPES.find((t) => t.id === id) || DEVICE_TYPES[0];
 
@@ -83,8 +84,9 @@ function createState(stage, ctx) {
     gLinks: null, gDevices: null, gOverlay: null,
     palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
 
-    devices: [],   // { id, type, x, y, name, ip, notes, ports: [{n,name,vlan}] }
-    links: [],     // { id, from, to, fromPort, toPort, vlan, label }
+    devices: [],   // { id, type, x, y, name, ip, notes, ports: [{n,name,vlans:[]}] }
+    links: [],     // { id, from, to, fromPort, toPort }
+    portModalOpen: null, // { deviceId, portN } or null
     selected: null,// { kind: 'device'|'link', id }
 
     view: { ...DEFAULT_VIEW },
@@ -174,6 +176,16 @@ function buildDOM(s) {
       <span class="m002-stat-mode">SELECT</span>
     </div>
 
+    <div class="m002-port-modal" hidden>
+      <div class="m002-port-panel">
+        <div class="m002-port-modal-head">
+          <span class="m002-port-modal-id">// PORT</span>
+          <button type="button" class="m002-port-modal-close" title="Close">×</button>
+        </div>
+        <div class="m002-port-modal-body"></div>
+      </div>
+    </div>
+
     <div class="m002-toast"></div>
   `;
   s.stage.appendChild(host);
@@ -209,6 +221,10 @@ function buildDOM(s) {
   s.activeLayer = 'physical';
 
   host.querySelector('.m002-insp-close')?.addEventListener('click', () => deselect(s));
+
+  const portModal = host.querySelector('.m002-port-modal');
+  portModal.querySelector('.m002-port-modal-close')?.addEventListener('click', () => closePortModal(s));
+  portModal.addEventListener('click', (e) => { if (e.target === portModal) closePortModal(s); });
 
   // Click empty board area → deselect
   s.svg.addEventListener('mousedown', (e) => {
@@ -361,7 +377,8 @@ function bindKeyboard(s) {
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (s.selected) deleteSelected(s);
     } else if (e.key === 'Escape') {
-      if (s.linkMode) toggleLinkMode(s);
+      if (s.portModalOpen) closePortModal(s);
+      else if (s.linkMode) toggleLinkMode(s);
       else deselect(s);
     }
   };
@@ -385,7 +402,7 @@ function spawnDevice(s, typeId) {
     name: `${t.label}-${(s.devices.filter((d) => d.type === t.id).length + 1).toString().padStart(2, '0')}`,
     ip: '',
     notes: '',
-    ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlan: '' })),
+    ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
   s.devices.push(dev);
   drawDevice(s, dev);
@@ -407,8 +424,8 @@ function drawDevice(s, dev) {
     <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
     <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label}</text>
     <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
-    <text class="m002-dev-ip" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(dev.ip || '—')}</text>
-    <text class="m002-dev-ports" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${dev.ports.length}P</text>
+    <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(dev.notes, 18) || '—')}</text>
+    <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(dev.ip || '')}</text>
   `;
   s.gDevices.appendChild(g);
 }
@@ -458,8 +475,6 @@ function handleLinkClick(s, deviceId) {
     to: deviceId,
     fromPort: '',
     toPort: '',
-    vlan: '',
-    label: '',
   };
   s.links.push(link);
   drawLink(s, link);
@@ -490,17 +505,35 @@ function orthPath(a, b) {
   return { d: `M ${a.x} ${ey1} L ${a.x} ${mid} L ${b.x} ${mid} L ${b.x} ${ey2}`, lx: (a.x + b.x) / 2, ly: mid };
 }
 
+function linkVlans(s, link) {
+  const a = s.devices.find((d) => d.id === link.from);
+  const b = s.devices.find((d) => d.id === link.to);
+  if (!a || !b) return [];
+  const pa = a.ports.find((p) => String(p.n) === String(link.fromPort));
+  const pb = b.ports.find((p) => String(p.n) === String(link.toPort));
+  const va = new Set((pa?.vlans || []).map(String));
+  const vb = new Set((pb?.vlans || []).map(String));
+  return [...va].filter((v) => vb.has(v));
+}
+
+function portLabel(dev, portN) {
+  const p = dev?.ports.find((pp) => String(pp.n) === String(portN));
+  if (!p) return '?';
+  return p.name || String(p.n);
+}
+
 function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return;
   const isVlanLayer = s.activeLayer === 'vlan';
-  const stroke = isVlanLayer ? vlanColor(link.vlan) : '#9aa0a8';
+  const vlans = linkVlans(s, link);
+  const stroke = isVlanLayer ? vlanColor(vlans[0]) : '#9aa0a8';
   const path = orthPath(a, b);
   const labelText = isVlanLayer
-    ? (link.vlan !== '' ? `VLAN ${link.vlan}` : '')
+    ? (vlans.length ? `VLAN ${vlans.join(',')}` : '')
     : ((link.fromPort || link.toPort)
-        ? `${link.fromPort || '?'} ⇄ ${link.toPort || '?'}`
+        ? `${portLabel(a, link.fromPort)} ⇄ ${portLabel(b, link.toPort)}`
         : '');
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
@@ -566,17 +599,23 @@ function openInspector(s) {
       <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
       <label class="m002-field"><span>PORTS</span><input data-f="ports" type="number" min="1" max="96" value="${dev.ports.length}"/></label>
       <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
-      <details class="m002-ports-details">
-        <summary>PORT TABLE (${dev.ports.length})</summary>
+      <div class="m002-ports-block">
+        <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
         <div class="m002-ports-grid">
-          ${dev.ports.map((p) => `
-            <div class="m002-port-row">
+          <div class="m002-port-head-row">
+            <span>#</span><span>PORT</span><span>COUNTERPART</span>
+          </div>
+          ${dev.ports.map((p) => {
+            const cp = counterpartFor(s, dev.id, p.n);
+            return `
+            <div class="m002-port-row" data-port-open="${p.n}" tabindex="0">
               <span class="m002-port-num">${p.n}</span>
-              <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="label"/>
-              <input data-port="${p.n}" data-pf="vlan" value="${escAttr(p.vlan)}" placeholder="vlan"/>
-            </div>`).join('')}
+              <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="port name"/>
+              <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}</span>
+            </div>`;
+          }).join('')}
         </div>
-      </details>
+      </div>
       <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
@@ -588,8 +627,16 @@ function openInspector(s) {
         const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
         if (!p) return;
         p[el.dataset.pf] = el.value;
+        // Counterpart text in this row stays the same; redraw link labels
+        s.links.filter((l) => (l.from === dev.id && Number(l.fromPort) === p.n) || (l.to === dev.id && Number(l.toPort) === p.n))
+              .forEach((l) => redrawLink(s, l));
         schedSave(s);
       });
+      // Don't open the port modal when the user clicks INTO the input
+      el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+    body.querySelectorAll('[data-port-open]').forEach((row) => {
+      row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
   } else {
@@ -612,8 +659,7 @@ function openInspector(s) {
           <select data-f="toPort"><option value="">—</option>${(b?.ports || []).map((p) => `<option value="${p.n}" ${String(link.toPort) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
         </label>
       </div>
-      <label class="m002-field"><span>VLAN</span><input data-f="vlan" value="${escAttr(link.vlan)}" placeholder="10, 20 …"/></label>
-      <label class="m002-field"><span>LABEL</span><input data-f="label" value="${escAttr(link.label)}" placeholder="trunk, uplink …"/></label>
+      <p class="m002-link-hint">VLANs werden über die Ports an beiden Enden definiert. Klick im Device-Inspector auf eine Portzeile.</p>
       <button type="button" class="m002-insp-del" data-del>DELETE LINK</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
@@ -629,7 +675,7 @@ function updateDeviceField(s, dev, el) {
   if (f === 'ports') {
     const n = Math.max(1, Math.min(96, parseInt(el.value, 10) || 1));
     if (n > dev.ports.length) {
-      for (let i = dev.ports.length; i < n; i++) dev.ports.push({ n: i + 1, name: '', vlan: '' });
+      for (let i = dev.ports.length; i < n; i++) dev.ports.push({ n: i + 1, name: '', vlans: [] });
     } else {
       dev.ports.length = n;
       // Drop links that referenced removed ports
@@ -644,7 +690,11 @@ function updateDeviceField(s, dev, el) {
     redrawDevice(s, dev);
   } else {
     dev[f] = el.value;
-    if (f === 'name' || f === 'ip') redrawDevice(s, dev);
+    if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
+    if (f === 'name') {
+      // Counterpart text on other devices' inspector rows references this name
+      s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
+    }
   }
   schedSave(s);
 }
@@ -665,6 +715,153 @@ function deleteSelected(s) {
     s.links = s.links.filter((l) => l.id !== s.selected.id);
   }
   deselect(s);
+  render(s);
+  schedSave(s);
+}
+
+// =============================================================================
+// Counterpart helpers + Port modal
+// =============================================================================
+function counterpartFor(s, deviceId, portN) {
+  const link = s.links.find((l) =>
+    (l.from === deviceId && String(l.fromPort) === String(portN)) ||
+    (l.to   === deviceId && String(l.toPort)   === String(portN))
+  );
+  if (!link) return null;
+  const otherId = link.from === deviceId ? link.to : link.from;
+  const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
+  const other = s.devices.find((d) => d.id === otherId);
+  if (!other) return null;
+  const op = other.ports.find((p) => String(p.n) === String(otherPort));
+  const portTxt = op ? (op.name || op.n) : '?';
+  return `${other.name} · ${portTxt}`;
+}
+
+function openPortModal(s, deviceId, portN) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  const port = dev.ports.find((p) => p.n === portN);
+  if (!port) return;
+  s.portModalOpen = { deviceId, portN };
+  const modal = s.host.querySelector('.m002-port-modal');
+  const idEl = modal.querySelector('.m002-port-modal-id');
+  const body = modal.querySelector('.m002-port-modal-body');
+  idEl.textContent = `// ${dev.name} · PORT ${port.n}`;
+
+  const link = s.links.find((l) =>
+    (l.from === deviceId && Number(l.fromPort) === portN) ||
+    (l.to   === deviceId && Number(l.toPort)   === portN)
+  );
+  const cp = counterpartFor(s, deviceId, portN);
+
+  body.innerHTML = `
+    <label class="m002-field"><span>PORT NAME</span>
+      <input class="m002-pmodal-name" value="${escAttr(port.name)}" placeholder="e.g. GE0/0/1"/>
+    </label>
+    <div class="m002-field">
+      <span>VLANS</span>
+      <div class="m002-vlan-chips"></div>
+      <div class="m002-vlan-add">
+        <input class="m002-vlan-input" placeholder="VLAN id (e.g. 10)" inputmode="numeric"/>
+        <button type="button" class="m002-vlan-add-btn">+ ADD</button>
+      </div>
+    </div>
+    <div class="m002-field">
+      <span>COUNTERPART</span>
+      <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '— not connected —')}</div>
+    </div>
+    <div class="m002-port-actions">
+      ${link ? `<button type="button" class="m002-action" data-pact="unlink">DISCONNECT LINK</button>` : ''}
+      <button type="button" class="m002-action danger" data-pact="delete">DELETE PORT</button>
+    </div>
+  `;
+
+  const renderChips = () => {
+    const chipsEl = body.querySelector('.m002-vlan-chips');
+    if (!port.vlans.length) {
+      chipsEl.innerHTML = `<span class="m002-vlan-empty">no VLANs assigned</span>`;
+      return;
+    }
+    chipsEl.innerHTML = port.vlans.map((v) => `
+      <span class="m002-vlan-chip" style="--vc:${vlanColor(v)}">
+        <span>VLAN ${escSvg(v)}</span>
+        <button type="button" data-vrm="${escAttr(v)}" title="Remove">×</button>
+      </span>`).join('');
+    chipsEl.querySelectorAll('[data-vrm]').forEach((b) => {
+      b.addEventListener('click', () => {
+        port.vlans = port.vlans.filter((v) => String(v) !== b.dataset.vrm);
+        renderChips();
+        s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
+              .forEach((l) => redrawLink(s, l));
+        schedSave(s);
+      });
+    });
+  };
+  renderChips();
+
+  body.querySelector('.m002-pmodal-name').addEventListener('input', (e) => {
+    port.name = e.target.value;
+    schedSave(s);
+    s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
+          .forEach((l) => redrawLink(s, l));
+    // refresh row in inspector
+    const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
+    if (row) row.value = port.name;
+  });
+
+  const addInput = body.querySelector('.m002-vlan-input');
+  const addBtn   = body.querySelector('.m002-vlan-add-btn');
+  const addVlan = () => {
+    const v = (addInput.value || '').trim();
+    if (!v) return;
+    if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
+    addInput.value = '';
+    renderChips();
+    s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
+          .forEach((l) => redrawLink(s, l));
+    schedSave(s);
+  };
+  addBtn.addEventListener('click', addVlan);
+  addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addVlan(); } });
+
+  body.querySelector('[data-pact="unlink"]')?.addEventListener('click', () => {
+    if (!link) return;
+    s.links = s.links.filter((l) => l.id !== link.id);
+    closePortModal(s);
+    if (s.selected?.kind === 'device' && s.selected.id === deviceId) openInspector(s);
+    render(s);
+    schedSave(s);
+  });
+  body.querySelector('[data-pact="delete"]')?.addEventListener('click', () => {
+    deletePort(s, deviceId, portN);
+    closePortModal(s);
+  });
+
+  modal.hidden = false;
+  setTimeout(() => body.querySelector('.m002-pmodal-name')?.focus(), 30);
+}
+
+function closePortModal(s) {
+  const modal = s.host?.querySelector('.m002-port-modal');
+  if (modal) modal.hidden = true;
+  s.portModalOpen = null;
+}
+
+function deletePort(s, deviceId, portN) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  // Drop any links using this port on this device
+  s.links = s.links.filter((l) =>
+    !((l.from === deviceId && Number(l.fromPort) === portN) ||
+      (l.to   === deviceId && Number(l.toPort)   === portN)));
+  // Renumber: remove the port, shift later ports down
+  dev.ports = dev.ports.filter((p) => p.n !== portN).map((p, idx) => ({ ...p, n: idx + 1 }));
+  // Re-map link ports for this device whose port number was above the deleted one
+  s.links.forEach((l) => {
+    if (l.from === deviceId && Number(l.fromPort) > portN) l.fromPort = String(Number(l.fromPort) - 1);
+    if (l.to   === deviceId && Number(l.toPort)   > portN) l.toPort   = String(Number(l.toPort)   - 1);
+  });
+  if (s.selected?.kind === 'device' && s.selected.id === deviceId) openInspector(s);
   render(s);
   schedSave(s);
 }
@@ -710,13 +907,32 @@ function loadFromStorage(s) {
     s.devices = Array.isArray(data.devices) ? data.devices : [];
     s.links = Array.isArray(data.links) ? data.links : [];
     s.view = data.view || { ...DEFAULT_VIEW };
+    migrate(s);
   } catch (e) { console.warn('[m002] load failed', e); }
+}
+
+// Convert legacy schema → current. Idempotent.
+function migrate(s) {
+  s.devices.forEach((d) => {
+    if (!Array.isArray(d.ports)) d.ports = [];
+    d.ports.forEach((p) => {
+      if (!Array.isArray(p.vlans)) {
+        p.vlans = (p.vlan != null && p.vlan !== '') ? [String(p.vlan)] : [];
+      }
+      delete p.vlan;
+    });
+  });
+  s.links.forEach((l) => {
+    delete l.vlan;
+    delete l.label;
+  });
 }
 
 // =============================================================================
 // Utils
 // =============================================================================
 function rid() { return 'x' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
+function truncate(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 function escSvg(s) { return String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escAttr(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(s, msg) {
@@ -752,12 +968,13 @@ const MOD002_CSS = `
 .m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
-.m002-dev-ports{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
+.m002-dev-notes{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;font-style:italic;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
 .m002-link:hover .m002-link-line{stroke:#ff003c!important;stroke-width:2;}
-.m002-link.m002-selected .m002-link-line{stroke:#ff003c!important;stroke-width:2.4;filter:url(#m002-glow);}
+.m002-link.m002-selected .m002-link-line{stroke:#ffffff!important;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
+.m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
 .m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
 
 .m002-palette{position:absolute;top:24px;left:24px;display:flex;flex-direction:column;gap:4px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px;backdrop-filter:blur(6px);min-width:160px;}
@@ -788,12 +1005,41 @@ const MOD002_CSS = `
 .m002-link-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;background:#0a0a10;border:1px solid #1a1a22;}
 .m002-link-end{font-weight:600;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .m002-link-arrow{color:#ff003c;font-family:'Share Tech Mono',monospace;}
-.m002-ports-details summary{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1.5px;cursor:pointer;padding:4px 0;}
-.m002-ports-grid{display:flex;flex-direction:column;gap:3px;max-height:200px;overflow-y:auto;padding-top:4px;}
-.m002-port-row{display:grid;grid-template-columns:24px 1fr 70px;gap:4px;align-items:center;}
-.m002-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:#5a5f6e;text-align:right;}
+.m002-ports-block{display:flex;flex-direction:column;gap:4px;}
+.m002-ports-head{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1.5px;padding:4px 0;}
+.m002-ports-grid{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
+.m002-port-head-row{display:grid;grid-template-columns:24px 1fr 1fr;gap:4px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 0;}
+.m002-port-row{display:grid;grid-template-columns:24px 1fr 1fr;gap:4px;align-items:center;cursor:pointer;padding:2px 4px;border:1px solid transparent;border-radius:2px;}
+.m002-port-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
+.m002-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;text-align:right;}
 .m002-port-row input{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:3px 6px;font-size:11px;font-family:'Share Tech Mono',monospace;outline:none;}
 .m002-port-row input:focus{border-color:#ff003c;}
+.m002-port-counter{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
+.m002-port-counter.dim{color:#5a5f6e;}
+.m002-link-hint{font-size:11px;color:#7a7f8e;line-height:1.4;margin:0;font-style:italic;}
+
+.m002-port-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
+.m002-port-panel{background:#0a0a10;border:1px solid #ff003c;width:340px;max-width:calc(100% - 32px);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:0 0 20px rgba(255,0,60,0.25);}
+.m002-port-modal-head{display:flex;justify-content:space-between;align-items:center;}
+.m002-port-modal-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:#ff003c;letter-spacing:2px;}
+.m002-port-modal-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
+.m002-port-modal-close:hover{color:#ff003c;}
+.m002-port-modal-body{display:flex;flex-direction:column;gap:10px;}
+.m002-vlan-chips{display:flex;flex-wrap:wrap;gap:4px;min-height:24px;padding:4px;background:#06060a;border:1px solid #1a1a22;}
+.m002-vlan-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
+.m002-vlan-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
+.m002-vlan-chip button{background:transparent;border:none;color:var(--vc);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;opacity:.6;}
+.m002-vlan-chip button:hover{opacity:1;}
+.m002-vlan-add{display:flex;gap:4px;}
+.m002-vlan-input{flex:1;background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:5px 8px;font-family:'Share Tech Mono',monospace;font-size:12px;outline:none;}
+.m002-vlan-input:focus{border-color:#ff003c;}
+.m002-vlan-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:5px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;}
+.m002-vlan-add-btn:hover{background:rgba(255,0,60,0.1);}
+.m002-port-actions{display:flex;flex-direction:column;gap:6px;margin-top:4px;}
+.m002-action{display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:7px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;transition:.15s;}
+.m002-action:hover{border-color:#9aa0a8;}
+.m002-action.danger{border-color:#ff003c;color:#ff003c;}
+.m002-action.danger:hover{background:rgba(255,0,60,0.1);}
 .m002-insp-del{margin-top:6px;background:transparent;border:1px solid #ff003c;color:#ff003c;padding:6px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;}
 .m002-insp-del:hover{background:rgba(255,0,60,0.1);}
 
