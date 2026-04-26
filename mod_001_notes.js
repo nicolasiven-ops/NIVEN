@@ -154,13 +154,13 @@ function buildDOM(s) {
 
     <div class="m001-actionbar">
       <button type="button" class="m001-action" data-act="new"      title="New note (N)"><span>+ NEW</span></button>
-      <button type="button" class="m001-action" data-act="search"   title="Search (Ctrl+K)"><span>⌕ SEARCH</span></button>
+      <button type="button" class="m001-action" data-act="search"   title="Overview (Ctrl+K)"><span>⊕ OVERVIEW</span></button>
       <button type="button" class="m001-action" data-act="recenter" title="Recenter view (R)"><span>◎ RECENTER</span></button>
       <button type="button" class="m001-action" data-act="undo"     title="Undo last delete (Ctrl+Z)" hidden><span>↶ UNDO <em class="m001-undo-count">0</em></span></button>
       <button type="button" class="m001-action ghost" data-act="legend" title="Toggle shortcut legend"><span>?</span></button>
     </div>
 
-    <div class="m001-legend" hidden>
+    <div class="m001-legend">
       <div class="m001-legend-title">// CHAMBER · controls</div>
       <div class="m001-legend-grid">
         <span class="key">DRAG H</span><span>Rotate around axis</span>
@@ -170,32 +170,34 @@ function buildDOM(s) {
         <span class="key">N</span><span>New note in front</span>
         <span class="key">R</span><span>Recenter (θ=0, y=0)</span>
         <span class="key">CLICK MAP</span><span>Rotate camera to that angle</span>
-        <span class="key">CTRL+K</span><span>Search</span>
-        <span class="key">/</span><span>Quick search</span>
-        <span class="key">DEL</span><span>Purge selected</span>
+        <span class="key">CTRL+K</span><span>Open Overview</span>
+        <span class="key">/</span><span>Quick filter</span>
+        <span class="key">DEL TAB</span><span>Purge note (right-edge strip)</span>
         <span class="key">CTRL+Z</span><span>Undo last purge</span>
         <span class="key">ESC</span><span>Deselect / close</span>
         <span class="key">DROP</span><span>Drop note on another to stack</span>
+        <span class="key">DRAG STACK</span><span>Move whole stack together</span>
+        <span class="key">CTRL+DRAG</span><span>Extract single note from stack</span>
         <span class="key">↻ BADGE</span><span>Cycle stack (next on top)</span>
         <span class="key">SLIDER</span><span>Adjust wall radius</span>
       </div>
     </div>
 
-    <div class="m001-search" hidden>
+    <div class="m001-search">
       <div class="m001-search-panel">
         <span class="corner tl"></span><span class="corner tr"></span>
         <span class="corner bl"></span><span class="corner br"></span>
         <div class="m001-search-input-wrap">
-          <span class="m001-search-prompt">QUERY //</span>
-          <input class="m001-search-input" placeholder="search title or body…" spellcheck="false" autocomplete="off" />
+          <span class="m001-search-prompt">// OVERVIEW</span>
+          <input class="m001-search-input" placeholder="filter by title or body…" spellcheck="false" autocomplete="off" />
           <span class="m001-search-count">0</span>
         </div>
         <ul class="m001-search-results"></ul>
-        <div class="m001-search-hint">↑↓ navigate · ↵ fly-to · ESC close</div>
+        <div class="m001-search-hint">↑↓ navigate · ↵ fly-to · ⨯ purge · ESC close</div>
       </div>
     </div>
 
-    <div class="m001-confirm" hidden>
+    <div class="m001-confirm">
       <div class="m001-confirm-panel">
         <span class="corner tl"></span><span class="corner tr"></span>
         <span class="corner bl"></span><span class="corner br"></span>
@@ -211,7 +213,7 @@ function buildDOM(s) {
       </div>
     </div>
 
-    <div class="m001-toast" hidden></div>
+    <div class="m001-toast"></div>
   `;
   s.stage.appendChild(host);
   s.host = host;
@@ -241,7 +243,7 @@ function buildDOM(s) {
       case 'search':   openSearch(s); break;
       case 'recenter': recenter(s); break;
       case 'undo':     undoLast(s); break;
-      case 'legend':   s.legendEl.hidden = !s.legendEl.hidden; break;
+      case 'legend':   s.legendEl.classList.toggle('is-open'); break;
     }
   });
   s.undoBtn = host.querySelector('[data-act="undo"]');
@@ -880,11 +882,24 @@ function bindInput(s) {
       const { x, y } = ndc(e);
       const p = projectToWall(s, x, y);
       if (p) {
-        // Apply offset so grabbed point stays under cursor — no first-frame jump
-        note.row.pos_x = wrapTheta(p.theta + s.drag.offsetTheta);
-        note.row.pos_y = clamp(p.y + s.drag.offsetY, -1100, 1100);
+        const newTheta = wrapTheta(p.theta + s.drag.offsetTheta);
+        const newY = clamp(p.y + s.drag.offsetY, -1100, 1100);
+        note.row.pos_x = newTheta;
+        note.row.pos_y = newY;
+        // Drag the whole stack together (default). Ctrl/Cmd extracts this one.
+        if (note.row.stack_id && !s.drag.extractFromStack) {
+          s.notes.forEach((n) => {
+            if (n.row.id !== note.row.id && n.row.stack_id === note.row.stack_id) {
+              n.row.pos_x = newTheta;
+              n.row.pos_y = newY;
+            }
+          });
+        }
       }
-      const target = findSnapTarget(s, s.drag.id);
+      // Snap-target hints only matter when we're moving a single note —
+      // dragging a whole stack onto another note shouldn't merge stacks.
+      const wholeStack = note.row.stack_id && !s.drag.extractFromStack;
+      const target = wholeStack ? null : findSnapTarget(s, s.drag.id);
       showSnapHint(s, target);
     }
   };
@@ -902,6 +917,15 @@ function bindInput(s) {
   };
 
   function handleNoteDrop(s, note) {
+    // Whole-stack drag (no Ctrl) → just persist new pos for every member.
+    if (note.row.stack_id && !s.drag?.extractFromStack) {
+      s.notes.forEach((n) => {
+        if (n.row.stack_id === note.row.stack_id) {
+          scheduleSave(s, n, ['pos_x', 'pos_y']);
+        }
+      });
+      return;
+    }
     const target = findSnapTarget(s, note.row.id);
     if (target) {
       // Don't re-stack if already in target's stack
@@ -986,14 +1010,14 @@ function flyTo(s, theta, y) {
 // Search overlay
 // =============================================================================
 function openSearch(s) {
-  s.searchEl.hidden = false;
+  s.searchEl.classList.add('is-open');
   s.searchOpen = true;
   s.searchInput.value = '';
   runSearch(s);
-  setTimeout(() => s.searchInput.focus(), 30);
+  setTimeout(() => s.searchInput.focus(), 60);
 }
 function closeSearch(s) {
-  s.searchEl.hidden = true;
+  s.searchEl.classList.remove('is-open');
   s.searchOpen = false;
   s.searchActiveIdx = 0;
   s.searchHits = [];
@@ -1042,10 +1066,20 @@ function renderSearchResults(s, q) {
         <div class="m001-hit-title">${highlight(title, q)}</div>
         <div class="m001-hit-preview">${highlight(preview, q) || '<span class="dim">// empty</span>'}</div>
       </div>
+      <button type="button" class="m001-hit-del" title="Purge note" aria-label="Purge note">DEL</button>
     `;
-    li.addEventListener('click', () => {
+    li.addEventListener('click', (e) => {
+      if (e.target.closest('.m001-hit-del')) return;
       s.searchActiveIdx = i;
       commitSearch(s);
+    });
+    li.querySelector('.m001-hit-del').addEventListener('click', (e) => {
+      e.stopPropagation();
+      requestDelete(s, n.row.id);
+      // Drop from current view immediately, refresh list
+      s.searchHits = s.searchHits.filter((x) => x.row.id !== n.row.id);
+      s.searchActiveIdx = Math.min(s.searchActiveIdx, Math.max(0, s.searchHits.length - 1));
+      renderSearchResults(s, q);
     });
     s.searchResults.appendChild(li);
   });
@@ -1092,7 +1126,6 @@ function makeNoteEl() {
     <div class="m001-note-head" data-drag>
       <span class="m001-note-glyph">◈</span>
       <input type="text" class="m001-note-title" placeholder="UNTITLED" maxlength="60" spellcheck="false" />
-      <button type="button" class="m001-note-del" title="Delete (Del)">×</button>
     </div>
     <textarea class="m001-note-body" placeholder="// your thoughts go here…" spellcheck="false"></textarea>
     <div class="m001-note-foot">
@@ -1101,6 +1134,9 @@ function makeNoteEl() {
       </div>
       <span class="m001-note-saved">SYNCED</span>
     </div>
+    <button type="button" class="m001-note-purge" title="Purge note (Del)" aria-label="Purge note">
+      <span class="m001-note-purge-text">DEL</span>
+    </button>
   `;
   return wrap;
 }
@@ -1127,7 +1163,7 @@ function attachNote(s, row) {
   const bodyEl = el.querySelector('.m001-note-body');
   const savedEl = el.querySelector('.m001-note-saved');
   const headEl = el.querySelector('.m001-note-head');
-  const delBtn = el.querySelector('.m001-note-del');
+  const purgeBtn = el.querySelector('.m001-note-purge');
 
   titleEl.value = row.title || '';
   bodyEl.value = row.body || '';
@@ -1135,7 +1171,7 @@ function attachNote(s, row) {
   const css3d = new CSS3DObject(el);
   s.cssScene.add(css3d);
 
-  const note = { row, el, css3d, els: { titleEl, bodyEl, savedEl, headEl, delBtn }, dirty: new Set(), saveTimer: null };
+  const note = { row, el, css3d, els: { titleEl, bodyEl, savedEl, headEl, purgeBtn }, dirty: new Set(), saveTimer: null };
   s.notes.set(row.id, note);
   applyNoteColor(note);
   layoutNote(s, note);
@@ -1143,10 +1179,10 @@ function attachNote(s, row) {
   el.addEventListener('pointerdown', () => selectNote(s, row.id));
 
   headEl.addEventListener('pointerdown', (e) => {
-    if (e.target.closest('.m001-note-title, .m001-note-del')) return;
+    if (e.target.closest('.m001-note-title, .m001-note-purge')) return;
     e.stopPropagation();
-    // Capture the offset between the cursor's wall-projection and the note's
-    // current position so the grabbed point stays under the cursor (no jump).
+    // Offset between cursor's wall-projection and note position so the
+    // grabbed point stays under the cursor (no jump on first frame).
     const rect = s.host.getBoundingClientRect();
     const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
     const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
@@ -1158,6 +1194,9 @@ function attachNote(s, row) {
       offsetY:     p ? (row.pos_y || 0) - p.y : 0,
       origTheta: row.pos_x || 0,
       origY: row.pos_y || 0,
+      // Hold Ctrl/Cmd while grabbing → extract this note from its stack.
+      // Default behavior (no modifier) drags the whole stack as a group.
+      extractFromStack: e.ctrlKey || e.metaKey,
     };
     s.host.setPointerCapture?.(e.pointerId);
   });
@@ -1165,7 +1204,8 @@ function attachNote(s, row) {
   titleEl.addEventListener('input', () => { row.title = titleEl.value; markDirty(s, note, 'title'); });
   bodyEl.addEventListener('input', () => { row.body = bodyEl.value; markDirty(s, note, 'body'); });
   titleEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); bodyEl.focus(); } });
-  delBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDelete(s, row.id); });
+  purgeBtn.addEventListener('click', (e) => { e.stopPropagation(); requestDelete(s, row.id); });
+  purgeBtn.addEventListener('pointerdown', (e) => e.stopPropagation()); // don't initiate note drag
 
   el.querySelectorAll('.m001-swatch').forEach((sw) => {
     sw.addEventListener('click', (e) => {
@@ -1275,7 +1315,7 @@ async function requestDelete(s, id) {
 
 // Stub kept for any leftover callers
 function closeConfirm(s, ok) {
-  if (s.confirmEl) s.confirmEl.hidden = true;
+  if (s.confirmEl) s.confirmEl.classList.remove('is-open');
   if (s.confirmResolve) { s.confirmResolve(ok); s.confirmResolve = null; }
 }
 
@@ -1315,6 +1355,7 @@ async function undoLast(s) {
   recomputeStacks(s);
   selectNote(s, data.id);
   flyTo(s, data.pos_x || 0, data.pos_y || 0);
+  if (s.searchOpen) runSearch(s);
   toast(s, '// RESTORED');
 }
 
@@ -1344,9 +1385,9 @@ async function loadNotes(s) {
 function toast(s, msg) {
   if (!s.toastEl) return;
   s.toastEl.textContent = msg;
-  s.toastEl.hidden = false;
+  s.toastEl.classList.add('is-open');
   clearTimeout(s.toastTimer);
-  s.toastTimer = setTimeout(() => { s.toastEl.hidden = true; }, 2400);
+  s.toastTimer = setTimeout(() => { s.toastEl.classList.remove('is-open'); }, 2400);
 }
 
 // =============================================================================
@@ -1374,7 +1415,7 @@ function bindKeyboard(s) {
     }
     if (e.key === 'Escape') {
       if (s.searchOpen) { e.preventDefault(); closeSearch(s); return; }
-      if (!s.confirmEl.hidden) { e.preventDefault(); closeConfirm(s, false); return; }
+      if (s.confirmEl.classList.contains('is-open')) { e.preventDefault(); closeConfirm(s, false); return; }
       if (inEditable(document.activeElement)) { e.preventDefault(); document.activeElement.blur(); return; }
       if (s.selectedId) { e.preventDefault(); deselect(s); return; }
       return;
@@ -1536,7 +1577,7 @@ const MOD001_CSS = `
 .m001-legend {
   position: absolute;
   bottom: 4.5rem; left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(8px);
   z-index: 5;
   padding: 0.9rem 1rem;
   border: 1px solid rgba(255,0,60,0.35);
@@ -1546,6 +1587,14 @@ const MOD001_CSS = `
   color: rgba(255,255,255,0.7);
   letter-spacing: 0.08em;
   min-width: 380px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, transform 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.m001-legend.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateX(-50%) translateY(0);
 }
 .m001-legend-title {
   font-family: 'Orbitron', sans-serif;
@@ -1661,7 +1710,7 @@ const MOD001_CSS = `
 .m001-toast {
   position: absolute;
   top: 1.2rem; left: 50%;
-  transform: translateX(-50%);
+  transform: translateX(-50%) translateY(-12px);
   z-index: 6;
   padding: 0.6rem 1rem;
   border: 1px solid #ff003c;
@@ -1669,21 +1718,37 @@ const MOD001_CSS = `
   color: #ff003c;
   font-size: 0.8rem;
   letter-spacing: 0.12em;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.m001-toast.is-open {
+  opacity: 1;
+  transform: translateX(-50%) translateY(0);
 }
 
-/* Search overlay */
-.m001-search[hidden],
-.m001-confirm[hidden] { display: none !important; }
+/* Overview overlay (formerly search) */
 .m001-search {
   position: absolute;
   inset: 0;
   z-index: 7;
-  background: rgba(0,0,0,0.55);
-  backdrop-filter: blur(4px);
+  background: rgba(0,0,0,0);
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
   display: flex;
   align-items: flex-start;
   justify-content: center;
   padding-top: 12vh;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, background 0.22s ease, backdrop-filter 0.22s ease;
+}
+.m001-search.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
 }
 .m001-search-panel {
   position: relative;
@@ -1691,6 +1756,13 @@ const MOD001_CSS = `
   background: linear-gradient(160deg, rgba(15,4,8,0.95), rgba(5,0,3,0.98));
   border: 1px solid rgba(255,0,60,0.5);
   box-shadow: 0 30px 80px rgba(0,0,0,0.8), 0 0 60px rgba(255,0,60,0.25);
+  opacity: 0;
+  transform: translateY(-14px) scale(0.96);
+  transition: opacity 0.26s ease 0.04s, transform 0.26s cubic-bezier(0.2, 0.8, 0.3, 1) 0.04s;
+}
+.m001-search.is-open .m001-search-panel {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 .m001-search-panel .corner {
   position: absolute; width: 14px; height: 14px;
@@ -1779,6 +1851,26 @@ const MOD001_CSS = `
 }
 .m001-hit mark { background: rgba(255,0,60,0.3); color: #fff; padding: 0 1px; }
 .m001-hit-preview .dim { color: rgba(255,255,255,0.3); font-style: italic; }
+.m001-hit-del {
+  flex: 0 0 auto;
+  align-self: center;
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.65rem;
+  letter-spacing: 0.18em;
+  padding: 0.35rem 0.7rem;
+  background: transparent;
+  color: rgba(255,255,255,0.4);
+  border: 1px solid rgba(255,0,60,0.35);
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.m001-hit-del:hover {
+  background: #ff003c;
+  color: #000;
+  letter-spacing: 0.24em;
+  box-shadow: 0 0 14px rgba(255,0,60,0.5);
+}
 .m001-search-hint {
   padding: 0.55rem 1rem;
   border-top: 1px solid rgba(255,0,60,0.18);
@@ -1793,11 +1885,22 @@ const MOD001_CSS = `
   position: absolute;
   inset: 0;
   z-index: 8;
-  background: rgba(0,0,0,0.6);
-  backdrop-filter: blur(3px);
+  background: rgba(0,0,0,0);
+  backdrop-filter: blur(0px);
+  -webkit-backdrop-filter: blur(0px);
   display: flex;
   align-items: center;
   justify-content: center;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.22s ease, background 0.22s ease, backdrop-filter 0.22s ease;
+}
+.m001-confirm.is-open {
+  opacity: 1;
+  pointer-events: auto;
+  background: rgba(0,0,0,0.6);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
 }
 .m001-confirm-panel {
   position: relative;
@@ -1806,6 +1909,13 @@ const MOD001_CSS = `
   background: linear-gradient(135deg, rgba(40,0,8,0.95), rgba(8,0,3,0.98));
   border: 1px solid #ff003c;
   box-shadow: 0 30px 80px rgba(0,0,0,0.85), 0 0 50px rgba(255,0,60,0.45);
+  opacity: 0;
+  transform: translateY(-14px) scale(0.96);
+  transition: opacity 0.26s ease 0.04s, transform 0.26s cubic-bezier(0.2, 0.8, 0.3, 1) 0.04s;
+}
+.m001-confirm.is-open .m001-confirm-panel {
+  opacity: 1;
+  transform: translateY(0) scale(1);
 }
 .m001-confirm-panel .corner { position: absolute; width: 14px; height: 14px; border: 0; }
 .m001-confirm-panel .corner.tl { top: -1px; left: -1px; border-top: 1px solid #ff003c; border-left: 1px solid #ff003c; }
@@ -1903,17 +2013,48 @@ const MOD001_CSS = `
   padding: 0.2rem 0;
 }
 .m001-note-title::placeholder { color: rgba(255,255,255,0.3); }
-.m001-note-del {
-  background: transparent;
-  border: 1px solid transparent;
-  color: rgba(255,255,255,0.4);
-  font-size: 1.1rem;
-  line-height: 1;
-  width: 24px; height: 24px;
+/* Side-tab purge button — runs along the right edge of every note */
+.m001-note-purge {
+  position: absolute;
+  right: -1px;
+  top: 14%;
+  bottom: 14%;
+  width: 18px;
+  background: linear-gradient(90deg,
+    transparent,
+    color-mix(in srgb, var(--accent) 22%, transparent) 50%,
+    color-mix(in srgb, var(--accent) 38%, transparent));
+  border: 1px solid color-mix(in srgb, var(--accent) 50%, transparent);
+  border-left: 0;
   cursor: pointer;
-  transition: all 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  z-index: 4;
+  transition: width 0.18s ease, background 0.18s ease, box-shadow 0.18s ease;
+  overflow: hidden;
 }
-.m001-note-del:hover { color: var(--accent); border-color: var(--accent); }
+.m001-note-purge-text {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.6rem;
+  letter-spacing: 0.2em;
+  color: rgba(255,255,255,0.55);
+  writing-mode: vertical-rl;
+  text-orientation: mixed;
+  text-transform: uppercase;
+  transition: color 0.18s ease;
+  pointer-events: none;
+}
+.m001-note-purge:hover {
+  width: 32px;
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--accent) 30%, transparent),
+    var(--accent));
+  box-shadow: 0 0 18px var(--accent-glow);
+}
+.m001-note-purge:hover .m001-note-purge-text { color: #000; }
+.m001-note-purge:active { background: var(--accent); }
 .m001-note-body {
   flex: 1;
   background: transparent;
