@@ -137,8 +137,8 @@ function buildDOM(s) {
     <div class="m002-palette">
       <div class="m002-palette-title">// FORGE</div>
       ${DEVICE_TYPES.map((t) => `
-        <button type="button" class="m002-pal-btn" data-spawn="${t.id}" title="Spawn ${t.label}">
-          <span class="m002-pal-glyph" style="color:${t.accent}">${t.glyph}</span>
+        <button type="button" class="m002-pal-btn" data-spawn="${t.id}" title="Spawn ${t.label}" style="--accent:${t.accent}">
+          <span class="m002-pal-dot"></span>
           <span>${t.label}</span>
         </button>`).join('')}
       <div class="m002-pal-sep"></div>
@@ -490,19 +490,27 @@ function orthPath(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
   if (Math.abs(dx) >= Math.abs(dy)) {
-    // H-V-H — exit/enter on left or right edge
     const sx = Math.sign(dx) || 1;
     const ex1 = a.x + sx * halfW;
     const ex2 = b.x - sx * halfW;
     const mid = Math.round(((ex1 + ex2) / 2) / GRID) * GRID;
-    return { d: `M ${ex1} ${a.y} L ${mid} ${a.y} L ${mid} ${b.y} L ${ex2} ${b.y}`, lx: mid, ly: (a.y + b.y) / 2 };
+    return {
+      d: `M ${ex1} ${a.y} L ${mid} ${a.y} L ${mid} ${b.y} L ${ex2} ${b.y}`,
+      lx: mid, ly: (a.y + b.y) / 2,
+      from: { x: ex1 + sx * 6, y: a.y - 6, anchor: sx > 0 ? 'start' : 'end' },
+      to:   { x: ex2 - sx * 6, y: b.y - 6, anchor: sx > 0 ? 'end'   : 'start' },
+    };
   }
-  // V-H-V — exit/enter on top or bottom edge
   const sy = Math.sign(dy) || 1;
   const ey1 = a.y + sy * halfH;
   const ey2 = b.y - sy * halfH;
   const mid = Math.round(((ey1 + ey2) / 2) / GRID) * GRID;
-  return { d: `M ${a.x} ${ey1} L ${a.x} ${mid} L ${b.x} ${mid} L ${b.x} ${ey2}`, lx: (a.x + b.x) / 2, ly: mid };
+  return {
+    d: `M ${a.x} ${ey1} L ${a.x} ${mid} L ${b.x} ${mid} L ${b.x} ${ey2}`,
+    lx: (a.x + b.x) / 2, ly: mid,
+    from: { x: a.x + 6, y: ey1 + sy * 12, anchor: 'start' },
+    to:   { x: b.x + 6, y: ey2 - sy * 4,  anchor: 'start' },
+  };
 }
 
 function linkVlans(s, link) {
@@ -530,18 +538,24 @@ function drawLink(s, link) {
   const vlans = linkVlans(s, link);
   const stroke = isVlanLayer ? vlanColor(vlans[0]) : '#9aa0a8';
   const path = orthPath(a, b);
-  const labelText = isVlanLayer
-    ? (vlans.length ? `VLAN ${vlans.join(',')}` : '')
-    : ((link.fromPort || link.toPort)
-        ? `${portLabel(a, link.fromPort)} ⇄ ${portLabel(b, link.toPort)}`
-        : '');
+  let labelsHTML = '';
+  if (isVlanLayer) {
+    if (vlans.length) {
+      labelsHTML = `<text class="m002-link-label" x="${path.lx}" y="${path.ly - 6}" fill="${stroke}" text-anchor="middle">${escSvg('VLAN ' + vlans.join(','))}</text>`;
+    }
+  } else {
+    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) : '';
+    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   : '';
+    if (fromTxt) labelsHTML += `<text class="m002-link-label" x="${path.from.x}" y="${path.from.y}" fill="${stroke}" text-anchor="${path.from.anchor}">${escSvg(fromTxt)}</text>`;
+    if (toTxt)   labelsHTML += `<text class="m002-link-label" x="${path.to.x}"   y="${path.to.y}"   fill="${stroke}" text-anchor="${path.to.anchor}">${escSvg(toTxt)}</text>`;
+  }
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
   g.innerHTML = `
     <path class="m002-link-hit" d="${path.d}"/>
     <path class="m002-link-line" d="${path.d}" stroke="${stroke}"/>
-    ${labelText ? `<text class="m002-link-label" x="${path.lx}" y="${path.ly - 6}" fill="${stroke}">${escSvg(labelText)}</text>` : ''}
+    ${labelsHTML}
   `;
   s.gLinks.appendChild(g);
 }
@@ -972,7 +986,8 @@ const MOD002_CSS = `
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
-.m002-link:hover .m002-link-line{stroke:#ff003c!important;stroke-width:2;}
+.m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
+.m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
 .m002-link.m002-selected .m002-link-line{stroke:#ffffff!important;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
 .m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
 .m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
@@ -984,6 +999,7 @@ const MOD002_CSS = `
 .m002-pal-btn.ghost{color:#9aa0a8;}
 .m002-pal-btn.active{background:rgba(0,212,255,0.1);border-color:#00d4ff;color:#00d4ff;}
 .m002-pal-glyph{font-family:'Share Tech Mono',monospace;font-size:18px;width:20px;text-align:center;}
+.m002-pal-dot{width:10px;height:10px;background:var(--accent);box-shadow:0 0 4px var(--accent),0 0 10px var(--accent);flex:0 0 auto;margin-left:4px;}
 .m002-pal-sep{height:1px;background:#1a1a22;margin:6px 0;}
 
 .m002-layerbar{position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);}
@@ -1008,10 +1024,10 @@ const MOD002_CSS = `
 .m002-ports-block{display:flex;flex-direction:column;gap:4px;}
 .m002-ports-head{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1.5px;padding:4px 0;}
 .m002-ports-grid{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
-.m002-port-head-row{display:grid;grid-template-columns:24px 1fr 1fr;gap:4px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 0;}
-.m002-port-row{display:grid;grid-template-columns:24px 1fr 1fr;gap:4px;align-items:center;cursor:pointer;padding:2px 4px;border:1px solid transparent;border-radius:2px;}
+.m002-port-head-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 4px;}
+.m002-port-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;cursor:pointer;padding:2px 4px;border:1px solid transparent;border-radius:2px;}
 .m002-port-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
-.m002-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;text-align:right;}
+.m002-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;text-align:left;}
 .m002-port-row input{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:3px 6px;font-size:11px;font-family:'Share Tech Mono',monospace;outline:none;}
 .m002-port-row input:focus{border-color:#ff003c;}
 .m002-port-counter{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
