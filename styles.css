@@ -1458,7 +1458,7 @@ body.view-runtime main { padding: 0; max-width: none; }
   position: fixed;
   inset: 0;
   z-index: 50;
-  background: var(--bg);
+  background: transparent;
   display: flex;
   flex-direction: column;
 }
@@ -1518,7 +1518,7 @@ body.view-runtime main { padding: 0; max-width: none; }
   flex: 1 1 auto;
   position: relative;
   overflow: hidden;
-  background: var(--bg);
+  background: transparent;
 }
 .runtime-empty[hidden] { display: none !important; }
 .runtime-empty {

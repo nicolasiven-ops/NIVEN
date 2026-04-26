@@ -26,6 +26,8 @@ import { CSS3DRenderer, CSS3DObject } from 'three/addons/renderers/CSS3DRenderer
 const MODULE_CODE = 'MOD_001';
 const SAVE_DEBOUNCE_MS = 600;
 const CAM_KEY = 'niven:m001:cam';
+const R_KEY   = 'niven:m001:radius';
+const UNDO_LIMIT = 3;
 
 const COLORS = [
   { id: 'red',    hex: '#ff003c', glow: 'rgba(255,0,60,0.55)' },
@@ -37,8 +39,9 @@ const COLORS = [
 const colorBy = (id) => COLORS.find((c) => c.id === id) || COLORS[0];
 
 // Cylinder constants
-const R_BASE = 900;          // minimum wall radius
-const R_PER_NOTE = 60;       // each note adds this much circumferential capacity
+const R_MIN = 600;
+const R_MAX = 3000;
+const R_DEFAULT = 1200;      // user-controlled via slider
 const WALL_HEIGHT = 2400;    // total interior height
 const FOV_DEFAULT = 55;
 const FOV_MIN = 30;
@@ -71,6 +74,8 @@ function unmount() {
   state.glRenderer.domElement.remove();
   state.glRenderer.dispose();
   if (state.wall) { state.wall.geometry.dispose(); state.wall.material.map?.dispose?.(); state.wall.material.dispose(); }
+  if (state.wallRingTop) { state.wallRingTop.geometry.dispose(); state.wallRingTop.material.dispose(); }
+  if (state.wallRingBot) { state.wallRingBot.material.dispose(); }
   state.host.remove();
   state = null;
 }
@@ -101,9 +106,13 @@ function createState(stage, ctx) {
     cameraTheta: 0,   targetTheta: 0,
     cameraY:     0,   targetY:     0,
     cameraFov:   FOV_DEFAULT, targetFov: FOV_DEFAULT,
-    currentR:    R_BASE,      targetR:   R_BASE,
+    currentR:    R_DEFAULT,   targetR:   R_DEFAULT,
     preMapFov:   null,
     mode: 'free',
+
+    radiusInput: null, radiusValueEl: null,
+    undoStack: [],     // last UNDO_LIMIT deleted note rows
+    undoBtn: null,
 
     cameraSaveTimer: null,
     confirmResolve: null,
@@ -125,6 +134,7 @@ function buildDOM(s) {
   const host = document.createElement('div');
   host.className = 'm001-host';
   host.innerHTML = `
+    <div class="m001-tint"></div>
     <div class="m001-gl"></div>
     <div class="m001-css"></div>
     <div class="m001-vignette"></div>
@@ -134,11 +144,18 @@ function buildDOM(s) {
       <span class="m001-altitude-label">Y±0</span>
     </div>
 
+    <div class="m001-radiusbar" title="Wall radius">
+      <span class="m001-radiusbar-label">R</span>
+      <input type="range" min="${R_MIN}" max="${R_MAX}" step="50" value="${R_DEFAULT}" class="m001-radiusbar-slider" />
+      <span class="m001-radiusbar-value">${R_DEFAULT}</span>
+    </div>
+
     <div class="m001-actionbar">
       <button type="button" class="m001-action" data-act="new"      title="New note (N)"><span>+ NEW</span></button>
       <button type="button" class="m001-action" data-act="search"   title="Search (Ctrl+K)"><span>⌕ SEARCH</span></button>
       <button type="button" class="m001-action" data-act="map"      title="Map overview (M)"><span>◗ MAP</span></button>
       <button type="button" class="m001-action" data-act="recenter" title="Recenter view (R)"><span>◎ RECENTER</span></button>
+      <button type="button" class="m001-action" data-act="undo"     title="Undo last delete (Ctrl+Z)" hidden><span>↶ UNDO <em class="m001-undo-count">0</em></span></button>
       <button type="button" class="m001-action ghost" data-act="legend" title="Toggle shortcut legend"><span>?</span></button>
     </div>
 
@@ -154,10 +171,12 @@ function buildDOM(s) {
         <span class="key">M</span><span>Map overview</span>
         <span class="key">CTRL+K</span><span>Search</span>
         <span class="key">/</span><span>Quick search</span>
-        <span class="key">DEL</span><span>Delete selected</span>
+        <span class="key">DEL</span><span>Purge selected</span>
+        <span class="key">CTRL+Z</span><span>Undo last purge</span>
         <span class="key">ESC</span><span>Deselect / close</span>
         <span class="key">DROP</span><span>Drop note on another to stack</span>
         <span class="key">↻ BADGE</span><span>Cycle stack (next on top)</span>
+        <span class="key">SLIDER</span><span>Adjust wall radius</span>
       </div>
     </div>
 
@@ -221,9 +240,24 @@ function buildDOM(s) {
       case 'search':   openSearch(s); break;
       case 'map':      toggleMap(s); break;
       case 'recenter': recenter(s); break;
+      case 'undo':     undoLast(s); break;
       case 'legend':   s.legendEl.hidden = !s.legendEl.hidden; break;
     }
   });
+  s.undoBtn = host.querySelector('[data-act="undo"]');
+
+  // Radius slider
+  s.radiusInput = host.querySelector('.m001-radiusbar-slider');
+  s.radiusValueEl = host.querySelector('.m001-radiusbar-value');
+  s.radiusInput.addEventListener('input', () => {
+    const v = parseInt(s.radiusInput.value, 10) || R_DEFAULT;
+    s.targetR = clamp(v, R_MIN, R_MAX);
+    s.radiusValueEl.textContent = String(s.targetR);
+    try { localStorage.setItem(R_KEY, String(s.targetR)); } catch (_) {}
+  });
+  // Don't let the slider's drag bubble into camera-pan
+  ['pointerdown', 'pointermove', 'pointerup', 'wheel', 'dblclick']
+    .forEach((ev) => s.radiusInput.parentElement.addEventListener(ev, (e) => e.stopPropagation()));
 
   s.confirmOk.addEventListener('click', () => closeConfirm(s, true));
   s.confirmCancel.addEventListener('click', () => closeConfirm(s, false));
@@ -254,58 +288,12 @@ function ensureStyles() {
 // =============================================================================
 // Three.js scene — cylinder chamber
 // =============================================================================
-function makeWallTexture() {
-  const cv = document.createElement('canvas');
-  cv.width = 2048; cv.height = 1024;
-  const ctx = cv.getContext('2d');
-
-  // Vertical gradient (deep red top/bottom, near-black middle)
-  const grad = ctx.createLinearGradient(0, 0, 0, 1024);
-  grad.addColorStop(0,    '#180008');
-  grad.addColorStop(0.45, '#080003');
-  grad.addColorStop(0.55, '#080003');
-  grad.addColorStop(1,    '#180008');
-  ctx.fillStyle = grad;
-  ctx.fillRect(0, 0, 2048, 1024);
-
-  // Vertical "ribs" — thin red lines around the cylinder
-  ctx.strokeStyle = 'rgba(255,0,60,0.18)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 64; i++) {
-    const x = (i / 64) * 2048;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1024); ctx.stroke();
-  }
-  // Brighter accent ribs every 8
-  ctx.strokeStyle = 'rgba(255,0,60,0.4)';
-  ctx.lineWidth = 1.5;
-  for (let i = 0; i < 8; i++) {
-    const x = (i / 8) * 2048;
-    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, 1024); ctx.stroke();
-  }
-  // Scanlines
-  ctx.strokeStyle = 'rgba(255,0,60,0.05)';
-  for (let y = 0; y < 1024; y += 4) {
-    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(2048, y); ctx.stroke();
-  }
-  // Horizontal "deck" lines at top + bottom
-  ctx.strokeStyle = 'rgba(255,0,60,0.5)';
-  ctx.lineWidth = 2;
-  ctx.beginPath(); ctx.moveTo(0, 6); ctx.lineTo(2048, 6); ctx.stroke();
-  ctx.beginPath(); ctx.moveTo(0, 1018); ctx.lineTo(2048, 1018); ctx.stroke();
-
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.RepeatWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.anisotropy = 4;
-  return tex;
-}
-
 function buildScene(s) {
   const w = s.stage.clientWidth;
   const h = s.stage.clientHeight;
 
   s.scene = new THREE.Scene();
-  s.scene.fog = new THREE.Fog(0x040406, R_BASE * 0.6, R_BASE * 2.4);
+  s.scene.fog = new THREE.Fog(0x040406, R_DEFAULT * 0.6, R_DEFAULT * 2.4);
   s.cssScene = new THREE.Scene();
 
   s.camera = new THREE.PerspectiveCamera(FOV_DEFAULT, w / h, 1, 8000);
@@ -321,37 +309,45 @@ function buildScene(s) {
   s.cssRenderer.setSize(w, h);
   s.cssLayer.appendChild(s.cssRenderer.domElement);
 
-  // Wall — base radius 1, scaled at runtime
+  // Wall — invisible mesh, kept for raycasting only (radius scaled at runtime)
   const wallGeo = new THREE.CylinderGeometry(1, 1, WALL_HEIGHT, 96, 1, true);
   const wallMat = new THREE.MeshBasicMaterial({
-    map: makeWallTexture(),
-    side: THREE.BackSide,
     transparent: true,
-    opacity: 0.92,
+    opacity: 0,
+    depthWrite: false,
+    side: THREE.BackSide,
   });
   s.wall = new THREE.Mesh(wallGeo, wallMat);
-  s.wall.scale.set(R_BASE, 1, R_BASE);
+  s.wall.scale.set(R_DEFAULT, 1, R_DEFAULT);
   s.scene.add(s.wall);
 
-  // Subtle wireframe halo just inside the wall
-  const wireGeo = new THREE.CylinderGeometry(0.99, 0.99, WALL_HEIGHT, 24, 8, true);
-  const wireMat = new THREE.MeshBasicMaterial({
+  // Very faint wireframe ring at top + bottom for "this is the chamber" hint
+  const ringGeoTop = new THREE.RingGeometry(0.99, 1, 96);
+  const ringMatTop = new THREE.MeshBasicMaterial({
     color: 0xff003c,
-    wireframe: true,
     transparent: true,
-    opacity: 0.06,
-    side: THREE.BackSide,
+    opacity: 0.18,
+    side: THREE.DoubleSide,
   });
-  s.wallWire = new THREE.Mesh(wireGeo, wireMat);
-  s.wallWire.scale.set(R_BASE, 1, R_BASE);
-  s.scene.add(s.wallWire);
+  const ringTop = new THREE.Mesh(ringGeoTop, ringMatTop);
+  ringTop.rotation.x = -Math.PI / 2;
+  ringTop.position.y = WALL_HEIGHT / 2 - 4;
+  ringTop.scale.set(R_DEFAULT, R_DEFAULT, 1);
+  s.scene.add(ringTop);
+  const ringBot = ringTop.clone();
+  ringBot.material = ringMatTop.clone();
+  ringBot.position.y = -WALL_HEIGHT / 2 + 4;
+  s.scene.add(ringBot);
+  s.wallRingTop = ringTop;
+  s.wallRingBot = ringBot;
+  // Keep s.wallWire reference null — we replaced it
+  s.wallWire = null;
 
   // Floating dust particles inside the chamber
-  const particleCount = 380;
+  const particleCount = 320;
   const positions = new Float32Array(particleCount * 3);
   for (let i = 0; i < particleCount; i++) {
-    // Distribute roughly inside a smaller cylinder than the wall
-    const r = Math.sqrt(Math.random()) * (R_BASE * 0.65);
+    const r = Math.sqrt(Math.random()) * (R_DEFAULT * 0.6);
     const a = Math.random() * Math.PI * 2;
     positions[i * 3 + 0] = r * Math.cos(a);
     positions[i * 3 + 1] = (Math.random() - 0.5) * WALL_HEIGHT * 0.7;
@@ -405,7 +401,8 @@ function startLoop(s) {
 
     // Update wall scale + camera projection
     s.wall.scale.set(s.currentR, 1, s.currentR);
-    s.wallWire.scale.set(s.currentR, 1, s.currentR);
+    if (s.wallRingTop) s.wallRingTop.scale.set(s.currentR, s.currentR, 1);
+    if (s.wallRingBot) s.wallRingBot.scale.set(s.currentR, s.currentR, 1);
     if (s.scene.fog) {
       s.scene.fog.near = s.currentR * 0.6;
       s.scene.fog.far  = s.currentR * 2.4;
@@ -614,15 +611,26 @@ function showSnapHint(s, target) {
 }
 
 function updateBgTint(s) {
-  const norm = Math.max(-1, Math.min(1, s.cameraY / 800));
-  // Negative y → cool blue tint, positive y → warm amber tint, zero → neutral red-black
-  const r = 10 + (norm > 0 ? Math.round(norm * 22) : 0);
-  const g = 0  + (norm > 0 ? Math.round(norm * 6)  : 0);
-  const b = 5  + (norm < 0 ? Math.round(-norm * 28) : 0);
-  s.host.style.setProperty('--m001-bg-r', r);
-  s.host.style.setProperty('--m001-bg-g', g);
-  s.host.style.setProperty('--m001-bg-b', b);
-  // Altitude readout
+  // Tint the polygon background through a soft radial overlay. Y near 0 is
+  // neutral (zero alpha), high → warm amber, low → cool violet/blue.
+  const norm = Math.max(-1, Math.min(1, s.cameraY / 1000));
+  let r, g, b, a;
+  if (norm > 0) {
+    // Warm amber up
+    r = 255; g = 140; b = 30;
+    a = norm * 0.18;
+  } else if (norm < 0) {
+    // Cool indigo/violet down
+    r = 80; g = 40; b = 220;
+    a = -norm * 0.18;
+  } else {
+    r = g = b = 0; a = 0;
+  }
+  s.host.style.setProperty('--m001-tint-r', r);
+  s.host.style.setProperty('--m001-tint-g', g);
+  s.host.style.setProperty('--m001-tint-b', b);
+  s.host.style.setProperty('--m001-tint-a', a.toFixed(3));
+
   if (s.altitudePip) {
     const pct = 50 + Math.max(-1, Math.min(1, s.cameraY / 1000)) * 50;
     s.altitudePip.style.bottom = pct + '%';
@@ -639,11 +647,19 @@ function updateBgTint(s) {
 function loadCamera(s) {
   try {
     const raw = localStorage.getItem(CAM_KEY);
-    if (!raw) return;
-    const p = JSON.parse(raw);
-    if (typeof p.theta === 'number') s.cameraTheta = s.targetTheta = p.theta;
-    if (typeof p.y     === 'number') s.cameraY     = s.targetY     = p.y;
-    if (typeof p.fov   === 'number') s.cameraFov   = s.targetFov   = clamp(p.fov, FOV_MIN, FOV_MAX);
+    if (raw) {
+      const p = JSON.parse(raw);
+      if (typeof p.theta === 'number') s.cameraTheta = s.targetTheta = p.theta;
+      if (typeof p.y     === 'number') s.cameraY     = s.targetY     = p.y;
+      if (typeof p.fov   === 'number') s.cameraFov   = s.targetFov   = clamp(p.fov, FOV_MIN, FOV_MAX);
+    }
+    const rRaw = localStorage.getItem(R_KEY);
+    if (rRaw) {
+      const r = clamp(parseInt(rRaw, 10) || R_DEFAULT, R_MIN, R_MAX);
+      s.currentR = s.targetR = r;
+      if (s.radiusInput) s.radiusInput.value = String(r);
+      if (s.radiusValueEl) s.radiusValueEl.textContent = String(r);
+    }
   } catch (_) {}
 }
 function saveCamera(s) {
@@ -663,12 +679,40 @@ function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 // =============================================================================
 // Input — drag rotates / rides, scroll zooms
 // =============================================================================
+// Mathematical ray-vs-cylinder intersection. Camera sits on the y-axis, so the
+// ray equation simplifies cleanly. Returns world-cylinder coords {theta, y}
+// that always match the cursor exactly — no sign confusion possible.
+function projectToWall(s, ndcX, ndcY) {
+  const v = new THREE.Vector3(ndcX, ndcY, 0.5);
+  v.unproject(s.camera);
+  const dir = v.sub(s.camera.position).normalize();
+  const denom2 = dir.x * dir.x + dir.z * dir.z;
+  if (denom2 < 1e-8) return null;
+  const t = s.currentR / Math.sqrt(denom2);
+  if (t < 0) return null;
+  const px = dir.x * t;
+  const pz = dir.z * t;
+  const py = s.camera.position.y + dir.y * t;
+  return {
+    theta: wrapTheta(Math.atan2(pz, px)),
+    y: clamp(py, -1100, 1100),
+  };
+}
+
 function bindInput(s) {
   const stage = s.host;
 
+  function ndc(e) {
+    const rect = s.host.getBoundingClientRect();
+    return {
+      x: ((e.clientX - rect.left) / rect.width) * 2 - 1,
+      y: -(((e.clientY - rect.top) / rect.height) * 2 - 1),
+    };
+  }
+
   const onPointerDown = (e) => {
     if (e.button !== 0 && e.button !== 1) return;
-    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend')) return;
+    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend, .m001-radiusbar')) return;
     s.drag = {
       kind: 'camera',
       startX: e.clientX,
@@ -690,16 +734,14 @@ function bindInput(s) {
       // Drag down (dy>0) → world slides down → camera moves up
       s.targetY = clamp(s.drag.origY + dy * 1.1 * fovScale, -1500, 1500);
     } else if (s.drag.kind === 'note') {
-      const dx = e.clientX - s.drag.startX;
-      const dy = e.clientY - s.drag.startY;
       const note = s.notes.get(s.drag.id);
       if (!note) return;
-      // Note moves with mouse: drag right → note moves right → note theta decreases
-      const newTheta = wrapTheta(s.drag.origTheta - dx * 0.0022 * fovScale);
-      const newY     = clamp(s.drag.origY - dy * 1.1 * fovScale, -1100, 1100);
-      note.row.pos_x = newTheta;
-      note.row.pos_y = newY;
-      // Live snap-target hint
+      const { x, y } = ndc(e);
+      const p = projectToWall(s, x, y);
+      if (p) {
+        note.row.pos_x = p.theta;
+        note.row.pos_y = p.y;
+      }
       const target = findSnapTarget(s, s.drag.id);
       showSnapHint(s, target);
     }
@@ -773,21 +815,13 @@ function bindInput(s) {
   stage.addEventListener('wheel', onWheel, { passive: false });
   s.cleanups.push(() => stage.removeEventListener('wheel', onWheel));
 
-  // Double-click empty wall → spawn note at intersection
-  const raycaster = new THREE.Raycaster();
   const onDblClick = (e) => {
-    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend')) return;
+    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend, .m001-radiusbar')) return;
     if (s.mode === 'map') return;
-    const rect = s.host.getBoundingClientRect();
-    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
-    const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
-    raycaster.setFromCamera(new THREE.Vector2(ndcX, ndcY), s.camera);
-    const hits = raycaster.intersectObject(s.wall);
-    if (!hits.length) return;
-    const p = hits[0].point;
-    const theta = wrapTheta(Math.atan2(p.z, p.x));
-    const y = clamp(p.y, -1100, 1100);
-    spawnNote(s, { pos_x: theta, pos_y: y, pos_z: 0 });
+    const { x, y } = ndc(e);
+    const p = projectToWall(s, x, y);
+    if (!p) return;
+    spawnNote(s, { pos_x: p.theta, pos_y: p.y, pos_z: 0 });
   };
   stage.addEventListener('dblclick', onDblClick);
   s.cleanups.push(() => stage.removeEventListener('dblclick', onDblClick));
@@ -1074,7 +1108,6 @@ async function spawnNote(s, opts = {}) {
   if (error) { toast(s, 'INSERT_FAIL · ' + error.message); return; }
   const note = attachNote(s, data);
   selectNote(s, data.id);
-  bumpR(s);
   recomputeStacks(s);
   setTimeout(() => note.els.bodyEl.focus(), 50);
 }
@@ -1089,34 +1122,75 @@ function spawnNoteInFront(s) {
   });
 }
 
-function bumpR(s) {
-  // Wall stretches based on note count
-  s.targetR = Math.max(R_BASE, Math.sqrt(s.notes.size) * R_PER_NOTE * 6);
-}
+// (R is now manually controlled by the slider; bumpR removed.)
 
-function requestDelete(s, id) {
+// Direct delete — no confirmation. Pushes to undoStack so the last
+// UNDO_LIMIT deletions can be restored.
+async function requestDelete(s, id) {
   const note = s.notes.get(id);
   if (!note) return;
-  s.confirmTitle.textContent = note.row.title || '(untitled)';
-  s.confirmEl.hidden = false;
-  s.confirmResolve = (ok) => { if (ok) doDelete(s, id); };
-  setTimeout(() => s.confirmCancel.focus(), 30);
-}
-function closeConfirm(s, ok) {
-  s.confirmEl.hidden = true;
-  if (s.confirmResolve) { s.confirmResolve(ok); s.confirmResolve = null; }
-}
-async function doDelete(s, id) {
-  const note = s.notes.get(id);
-  if (!note) return;
-  const { error } = await s.sb.from('notes').delete().eq('id', id);
-  if (error) { toast(s, 'DELETE_FAIL · ' + error.message); return; }
+  // Snapshot row so we can restore it later (deep clone — primitives only)
+  const snapshot = JSON.parse(JSON.stringify(note.row));
+  s.undoStack.push(snapshot);
+  while (s.undoStack.length > UNDO_LIMIT) s.undoStack.shift();
+  updateUndoButton(s);
+  // Optimistic remove
   s.cssScene.remove(note.css3d);
   note.el.remove();
   s.notes.delete(id);
   if (s.selectedId === id) s.selectedId = null;
-  bumpR(s);
   recomputeStacks(s);
+  toast(s, `// PURGED · ↶ to restore (${s.undoStack.length}/${UNDO_LIMIT})`);
+  const { error } = await s.sb.from('notes').delete().eq('id', id);
+  if (error) {
+    console.error('[notes] delete failed', error);
+    toast(s, 'DELETE_FAIL · ' + error.message);
+  }
+}
+
+// Stub kept for any leftover callers
+function closeConfirm(s, ok) {
+  if (s.confirmEl) s.confirmEl.hidden = true;
+  if (s.confirmResolve) { s.confirmResolve(ok); s.confirmResolve = null; }
+}
+
+function updateUndoButton(s) {
+  if (!s.undoBtn) return;
+  s.undoBtn.hidden = s.undoStack.length === 0;
+  const countEl = s.undoBtn.querySelector('.m001-undo-count');
+  if (countEl) countEl.textContent = String(s.undoStack.length);
+}
+
+async function undoLast(s) {
+  if (s.undoStack.length === 0) return;
+  const row = s.undoStack.pop();
+  updateUndoButton(s);
+  // Re-insert with same id so any external references stay stable
+  const payload = {
+    id: row.id,
+    module_code: row.module_code || MODULE_CODE,
+    title: row.title || '',
+    body: row.body || '',
+    pos_x: row.pos_x || 0,
+    pos_y: row.pos_y || 0,
+    pos_z: row.pos_z || 0,
+    color: row.color || '#ff003c',
+    stack_id: row.stack_id || null,
+    stack_order: row.stack_order || 0,
+  };
+  const { data, error } = await s.sb.from('notes').insert(payload).select().single();
+  if (error) {
+    toast(s, 'RESTORE_FAIL · ' + error.message);
+    // Push back so user can try again
+    s.undoStack.push(row);
+    updateUndoButton(s);
+    return;
+  }
+  attachNote(s, data);
+  recomputeStacks(s);
+  selectNote(s, data.id);
+  flyTo(s, data.pos_x || 0, data.pos_y || 0);
+  toast(s, '// RESTORED');
 }
 
 async function loadNotes(s) {
@@ -1135,12 +1209,10 @@ async function loadNotes(s) {
       color: '#ff003c',
     }).select().single();
     if (welcome.data) attachNote(s, welcome.data);
-    bumpR(s);
     recomputeStacks(s);
     return;
   }
   data.forEach((row) => attachNote(s, row));
-  bumpR(s);
   recomputeStacks(s);
 }
 
@@ -1166,6 +1238,13 @@ function bindKeyboard(s) {
     if ((e.ctrlKey || e.metaKey) && (e.key === 'k' || e.key === 'K')) {
       e.preventDefault();
       if (s.searchOpen) closeSearch(s); else openSearch(s);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      // Allow native undo inside text fields
+      if (inEditable(document.activeElement)) return;
+      e.preventDefault();
+      undoLast(s);
       return;
     }
     if (e.key === 'Escape') {
@@ -1203,35 +1282,38 @@ function bindKeyboard(s) {
 // =============================================================================
 const MOD001_CSS = `
 .m001-host {
-  --m001-bg-r: 10; --m001-bg-g: 0; --m001-bg-b: 5;
+  --m001-tint-r: 0; --m001-tint-g: 0; --m001-tint-b: 0; --m001-tint-a: 0;
   position: absolute;
   inset: 0;
-  background: radial-gradient(ellipse at center,
-    rgb(var(--m001-bg-r), var(--m001-bg-g), var(--m001-bg-b)) 0%,
-    #000 75%);
+  background: transparent;
   overflow: hidden;
   font-family: 'Share Tech Mono', monospace;
   color: #e8e8e8;
   user-select: none;
   cursor: grab;
-  transition: background 0.4s linear;
 }
 .m001-host:active { cursor: grabbing; }
 .m001-host.is-map { cursor: zoom-out; }
+.m001-tint {
+  position: absolute; inset: 0; z-index: 0; pointer-events: none;
+  background: radial-gradient(ellipse at center,
+    rgba(var(--m001-tint-r), var(--m001-tint-g), var(--m001-tint-b), var(--m001-tint-a)) 0%,
+    transparent 70%);
+  transition: background 0.5s linear;
+}
 .m001-gl, .m001-css { position: absolute; inset: 0; }
-.m001-gl { z-index: 0; }
-.m001-css { z-index: 1; pointer-events: none; }
+.m001-gl { z-index: 1; }
+.m001-css { z-index: 2; pointer-events: none; }
 .m001-css > div { pointer-events: auto; }
 .m001-vignette {
-  position: absolute; inset: 0; z-index: 2; pointer-events: none;
+  position: absolute; inset: 0; z-index: 3; pointer-events: none;
   background:
-    radial-gradient(ellipse at center, transparent 50%, rgba(0,0,0,0.7) 100%),
-    linear-gradient(180deg, rgba(255,0,60,0.05), transparent 30%, transparent 70%, rgba(255,0,60,0.05));
+    radial-gradient(ellipse at center, transparent 60%, rgba(0,0,0,0.55) 100%);
 }
 .m001-scanlines {
-  position: absolute; inset: 0; z-index: 3; pointer-events: none;
+  position: absolute; inset: 0; z-index: 4; pointer-events: none;
   background: repeating-linear-gradient(
-    0deg, transparent 0, transparent 2px, rgba(255,0,60,0.025) 2px, rgba(255,0,60,0.025) 3px
+    0deg, transparent 0, transparent 3px, rgba(255,0,60,0.018) 3px, rgba(255,0,60,0.018) 4px
   );
   mix-blend-mode: screen;
 }
@@ -1364,6 +1446,62 @@ const MOD001_CSS = `
   background: rgba(255,0,60,0.05);
   text-transform: uppercase;
   font-size: 0.7rem;
+}
+
+/* Radius slider */
+.m001-radiusbar {
+  position: absolute;
+  top: 1.1rem; left: 50%;
+  transform: translateX(-50%);
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.4rem 0.8rem;
+  border: 1px solid rgba(255,0,60,0.25);
+  background: rgba(8,2,4,0.7);
+  backdrop-filter: blur(6px);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  color: rgba(255,255,255,0.6);
+  text-transform: uppercase;
+}
+.m001-radiusbar-label { color: #ff003c; font-family: 'Orbitron', sans-serif; letter-spacing: 0.18em; }
+.m001-radiusbar-value { color: #fff; min-width: 3.2em; text-align: right; }
+.m001-radiusbar-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 200px;
+  height: 4px;
+  background: linear-gradient(90deg, rgba(255,0,60,0.5), rgba(255,0,60,0.18));
+  outline: none;
+  cursor: pointer;
+}
+.m001-radiusbar-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 12px; height: 16px;
+  background: #ff003c;
+  border: 1px solid #ffaa00;
+  cursor: grab;
+  box-shadow: 0 0 10px rgba(255,0,60,0.7);
+}
+.m001-radiusbar-slider::-moz-range-thumb {
+  width: 12px; height: 16px;
+  background: #ff003c;
+  border: 1px solid #ffaa00;
+  cursor: grab;
+  box-shadow: 0 0 10px rgba(255,0,60,0.7);
+}
+
+/* Undo button count badge */
+.m001-action [hidden] { display: none !important; }
+.m001-action em.m001-undo-count {
+  font-style: normal;
+  margin-left: 0.4rem;
+  font-size: 0.7rem;
+  opacity: 0.7;
 }
 
 /* Toast */
