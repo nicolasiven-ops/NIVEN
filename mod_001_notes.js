@@ -256,9 +256,11 @@ function buildDOM(s) {
     const dx = e.clientX - rect.left - cx;
     const dy = e.clientY - rect.top - cy;
     if (Math.hypot(dx, dy) < 10) return;
-    // Canvas Y is flipped relative to math: world theta = -atan2(dy, dx)
-    const theta = wrapTheta(-Math.atan2(dy, dx));
-    s.targetTheta = s.cameraTheta + angleDelta(s.cameraTheta, theta);
+    // Camera-up convention: dx = sin(relTheta) * r, dy = -cos(relTheta) * r
+    // → relTheta = atan2(dx, -dy). Adding to cameraTheta rotates camera by
+    // the relative angle the user clicked toward.
+    const relTheta = Math.atan2(dx, -dy);
+    s.targetTheta = s.cameraTheta + relTheta;
     saveCamera(s);
   });
 
@@ -449,8 +451,31 @@ function startLoop(s) {
   s.rafId = requestAnimationFrame(tick);
 }
 
-// LoL-style top-down map. Camera at center, FOV wedge shows where you're
-// looking, notes plotted as colored dots on the wall ring.
+// Camera-up minimap. The FOV wedge always points UP — the world rotates
+// around the player as you turn. A note's screen position on the map matches
+// what you actually see in 3D: notes to your right in the chamber are right
+// of the wedge on the map.
+//
+// Conversion: relTheta = noteTheta - cameraTheta. Then plot at
+//   x = sin(relTheta) * r,   y = -cos(relTheta) * r
+// so relTheta=0 is up, π/2 is right, π is down, -π/2 is left.
+//
+// Each note's dot is tinted by its altitude (matching the chamber's bg tint
+// system) so you can tell at a glance which "floor" a note lives on.
+function altitudeColor(y, alphaBoost = 0) {
+  const norm = Math.max(-1, Math.min(1, y / 1000));
+  if (norm > 0.05) {
+    // Warm amber up
+    return `rgba(255, 140, 30, ${(0.55 + norm * 0.4 + alphaBoost).toFixed(3)})`;
+  } else if (norm < -0.05) {
+    // Cool indigo down
+    return `rgba(110, 70, 235, ${(0.55 + -norm * 0.4 + alphaBoost).toFixed(3)})`;
+  } else {
+    // Neutral red at Y=0
+    return `rgba(255, 0, 60, ${(0.85 + alphaBoost).toFixed(3)})`;
+  }
+}
+
 function drawMinimap(s) {
   const ctx = s.minimapCtx;
   if (!ctx) return;
@@ -469,57 +494,83 @@ function drawMinimap(s) {
   ctx.arc(cx, cy, radius, 0, Math.PI * 2);
   ctx.stroke();
 
-  // FOV wedge — pointing in cameraTheta direction (Y-flipped for canvas)
+  // Cardinal ticks — camera-relative (forward / right / behind / left)
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.18)';
+  ctx.lineWidth = 1;
+  // Canvas angles: -π/2 = up (forward), 0 = right, π/2 = down (behind), π = left
+  const cardinals = [-Math.PI / 2, 0, Math.PI / 2, Math.PI];
+  cardinals.forEach((a) => {
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * (radius - 4), cy + Math.sin(a) * (radius - 4));
+    ctx.lineTo(cx + Math.cos(a) * (radius + 4), cy + Math.sin(a) * (radius + 4));
+    ctx.stroke();
+  });
+
+  // FOV wedge — always points UP (camera-up orientation)
   const halfFov = (s.cameraFov / 2) * Math.PI / 180;
-  const ct = -s.cameraTheta;
   ctx.fillStyle = 'rgba(255, 170, 0, 0.18)';
   ctx.strokeStyle = 'rgba(255, 170, 0, 0.7)';
   ctx.lineWidth = 1;
   ctx.beginPath();
   ctx.moveTo(cx, cy);
-  ctx.arc(cx, cy, radius, ct - halfFov, ct + halfFov);
+  ctx.arc(cx, cy, radius, -Math.PI / 2 - halfFov, -Math.PI / 2 + halfFov);
   ctx.closePath();
   ctx.fill();
   ctx.stroke();
 
-  // Notes as dots on the wall
+  // Notes — plotted at angle relative to camera (so the world rotates as you turn)
   s.notes.forEach((n) => {
-    const theta = n.row.pos_x || 0;
-    const x = cx + Math.cos(-theta) * radius;
-    const y = cy + Math.sin(-theta) * radius;
+    const relTheta = (n.row.pos_x || 0) - s.cameraTheta;
+    const x = cx + Math.sin(relTheta) * radius;
+    const y = cy - Math.cos(relTheta) * radius;
     const isSelected = n.row.id === s.selectedId;
     const isStacked = !!n.row.stack_id && n.stackOrder === 0;
-    const r = isSelected ? 4.5 : (isStacked ? 3.5 : 2.5);
-    ctx.fillStyle = n.row.color || '#ff003c';
-    ctx.shadowBlur = isSelected ? 8 : 0;
-    ctx.shadowColor = n.row.color || '#ff003c';
+    const r = isSelected ? 5 : (isStacked ? 3.8 : 3);
+    const fill = altitudeColor(n.row.pos_y || 0, isSelected ? 0.15 : 0);
+    ctx.fillStyle = fill;
+    ctx.shadowBlur = isSelected ? 10 : 4;
+    ctx.shadowColor = fill;
     ctx.beginPath();
     ctx.arc(x, y, r, 0, Math.PI * 2);
     ctx.fill();
     ctx.shadowBlur = 0;
     if (isSelected) {
       ctx.strokeStyle = '#fff';
-      ctx.lineWidth = 1.4;
+      ctx.lineWidth = 1.6;
       ctx.stroke();
     }
   });
 
-  // Camera position dot
+  // Camera position dot at center
   ctx.fillStyle = '#ffaa00';
   ctx.beginPath();
   ctx.arc(cx, cy, 3, 0, Math.PI * 2);
   ctx.fill();
 
-  // Cardinal markers (subtle tick marks at ±π/2 and 0/π)
-  ctx.strokeStyle = 'rgba(255, 0, 60, 0.25)';
-  ctx.lineWidth = 1;
-  for (let i = 0; i < 4; i++) {
-    const a = (i * Math.PI) / 2;
-    ctx.beginPath();
-    ctx.moveTo(cx + Math.cos(a) * (radius - 4), cy + Math.sin(a) * (radius - 4));
-    ctx.lineTo(cx + Math.cos(a) * (radius + 4), cy + Math.sin(a) * (radius + 4));
-    ctx.stroke();
-  }
+  // Tiny altitude legend on the right edge of the map
+  drawAltitudeLegend(ctx, W, H, s.cameraY);
+}
+
+// Vertical altitude scale on the right side of the minimap so the user knows
+// which color = which Y, plus a pip showing where the camera currently is.
+function drawAltitudeLegend(ctx, W, H, cameraY) {
+  const x0 = W - 8;
+  const yTop = 16;
+  const yBot = H - 16;
+  const len = yBot - yTop;
+  // Gradient strip
+  const grad = ctx.createLinearGradient(0, yTop, 0, yBot);
+  grad.addColorStop(0,    'rgba(255, 140, 30, 0.85)');
+  grad.addColorStop(0.5,  'rgba(255, 0, 60, 0.85)');
+  grad.addColorStop(1,    'rgba(110, 70, 235, 0.85)');
+  ctx.fillStyle = grad;
+  ctx.fillRect(x0 - 1.5, yTop, 3, len);
+
+  // Pip at current cameraY
+  const norm = Math.max(-1, Math.min(1, cameraY / 1000));
+  const py = yTop + (1 - (norm + 1) / 2) * len; // -1=top of strip, +1=bottom… invert because warm = up
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(x0 - 4, py - 0.5, 8, 1.5);
 }
 
 // Shortest signed delta from a → b on a circle
