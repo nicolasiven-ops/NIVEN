@@ -120,17 +120,20 @@ function createState(stage, ctx) {
     storageKey: `niven:m002:${ctx.project?.id || ctx.code}`,
 
     host: null, board: null, svg: null, gWorld: null,
-    gLinks: null, gDevices: null, gOverlay: null,
+    gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null,
     palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
 
     devices: [],   // { id, type, x, y, name, ip, notes, ports: [{n,name,vlans:[]}] }
     links: [],     // { id, from, to, fromPort, toPort }
+    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded }
     portModalOpen: null, // { deviceId, portN } or null
-    selected: null,// { kind: 'device'|'link', id }
+    selected: null,// { kind: 'device'|'link'|'stack', id }
 
     view: { ...DEFAULT_VIEW },
     linkMode: false,
     linkPending: null, // first device id in link mode
+    stackMode: false,
+    stackPending: null,// first target id (device or stack) in stack mode
     spawnIdx: 0,
 
     drag: null,
@@ -166,6 +169,7 @@ function buildDOM(s) {
         <rect class="m002-grid-bg" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid)"/>
         <rect class="m002-grid-bg2" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid-major)"/>
         <g class="m002-world">
+          <g class="m002-stacks-bg"></g>
           <g class="m002-links"></g>
           <g class="m002-devices"></g>
           <g class="m002-overlay"></g>
@@ -184,6 +188,10 @@ function buildDOM(s) {
       <button type="button" class="m002-pal-btn m002-link-tool" data-tool="link" title="Link tool (L)">
         <span class="m002-pal-glyph">⌇</span>
         <span>LINK</span>
+      </button>
+      <button type="button" class="m002-pal-btn m002-stack-tool" data-tool="stack" title="Stack tool (S) — group devices into a stack">
+        <span class="m002-pal-glyph">⊟</span>
+        <span>STACK</span>
       </button>
       <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
         <span class="m002-pal-glyph">◎</span>
@@ -239,6 +247,7 @@ function buildDOM(s) {
   s.board = host.querySelector('.m002-board');
   s.svg = host.querySelector('.m002-svg');
   s.gWorld = host.querySelector('.m002-world');
+  s.gStacksBg = host.querySelector('.m002-stacks-bg');
   s.gLinks = host.querySelector('.m002-links');
   s.gDevices = host.querySelector('.m002-devices');
   s.gOverlay = host.querySelector('.m002-overlay');
@@ -255,6 +264,7 @@ function buildDOM(s) {
     const tool = e.target.closest('[data-tool]');
     if (!tool) return;
     if (tool.dataset.tool === 'link') toggleLinkMode(s);
+    if (tool.dataset.tool === 'stack') toggleStackMode(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
   });
 
@@ -317,15 +327,30 @@ function bindBoard(s) {
   svg.addEventListener('wheel', onWheel, { passive: false });
   s.cleanups.push(() => svg.removeEventListener('wheel', onWheel));
 
-  // Mouse interactions: pan empty, drag device
+  // Mouse interactions: pan empty, drag device, drag stack
   const onDown = (e) => {
     if (e.button !== 0 && e.button !== 1) return;
     const devEl = e.target.closest('[data-device-id]');
+    const stackEl = e.target.closest('[data-stack-id]');
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
     if (s.linkMode && devEl && e.button === 0) {
       handleLinkClick(s, devEl.dataset.deviceId);
+      e.preventDefault();
+      return;
+    }
+    if (s.stackMode && e.button === 0) {
+      if (stackEl) { handleStackPick(s, { kind: 'stack',  id: stackEl.dataset.stackId  }); e.preventDefault(); return; }
+      if (devEl)   { handleStackPick(s, { kind: 'device', id: devEl.dataset.deviceId }); e.preventDefault(); return; }
+    }
+
+    if (stackEl && e.button === 0) {
+      const st = findStackById(s, stackEl.dataset.stackId);
+      if (!st) return;
+      select(s, 'stack', st.id);
+      const w = clientToWorld(s, e.clientX, e.clientY);
+      s.drag = { kind: 'stack', id: st.id, dx: st.x - w.x, dy: st.y - w.y };
       e.preventDefault();
       return;
     }
@@ -364,22 +389,59 @@ function bindBoard(s) {
       if (!dev) return;
       let nx = w.x + s.drag.dx;
       let ny = w.y + s.drag.dy;
-      if (!e.altKey) { // snap unless Alt
+      if (!e.altKey) {
         nx = Math.round(nx / GRID) * GRID;
         ny = Math.round(ny / GRID) * GRID;
       }
       dev.x = nx; dev.y = ny;
       updateDeviceTransform(s, dev);
       updateLinksFor(s, dev.id);
+      // If this device sits inside an expanded stack, the envelope/cables track too
+      const stk = findStack(s, dev.id);
+      if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
+    } else if (s.drag.kind === 'stack') {
+      const w = clientToWorld(s, e.clientX, e.clientY);
+      const st = findStackById(s, s.drag.id);
+      if (!st) return;
+      let nx = w.x + s.drag.dx;
+      let ny = w.y + s.drag.dy;
+      if (!e.altKey) {
+        nx = Math.round(nx / GRID) * GRID;
+        ny = Math.round(ny / GRID) * GRID;
+      }
+      const ddx = nx - st.x, ddy = ny - st.y;
+      st.x = nx; st.y = ny;
+      // Shift members so they keep their formation when expanded later
+      st.members.forEach((mid) => {
+        const m = s.devices.find((d) => d.id === mid);
+        if (m) { m.x += ddx; m.y += ddy; }
+      });
+      const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
+      g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
+      // Redraw any links touching members (they anchor on stack pos when collapsed)
+      s.links.forEach((l) => { if (st.members.includes(l.from) || st.members.includes(l.to)) redrawLink(s, l); });
     }
   };
   const onUp = () => {
     if (s.drag) {
       svg.style.cursor = '';
-      if (s.drag.kind === 'device' || s.drag.kind === 'pan') schedSave(s);
+      if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
     }
     s.drag = null;
   };
+
+  const onDblClick = (e) => {
+    const stackEl = e.target.closest('[data-stack-id]');
+    if (!stackEl) return;
+    if (s.activeLayer !== 'physical') {
+      toast(s, 'Switch to PHYSICAL to expand stack');
+      return;
+    }
+    toggleStackExpanded(s, stackEl.dataset.stackId);
+    e.preventDefault();
+  };
+  svg.addEventListener('dblclick', onDblClick);
+  s.cleanups.push(() => svg.removeEventListener('dblclick', onDblClick));
   svg.addEventListener('mousedown', onDown);
   window.addEventListener('mousemove', onMove);
   window.addEventListener('mouseup', onUp);
@@ -419,6 +481,8 @@ function bindKeyboard(s) {
       spawnDevice(s, t.id);
     } else if (e.key === 'l' || e.key === 'L') {
       toggleLinkMode(s);
+    } else if (e.key === 's' || e.key === 'S') {
+      toggleStackMode(s);
     } else if (e.key === 'r' || e.key === 'R') {
       recenter(s);
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -426,6 +490,7 @@ function bindKeyboard(s) {
     } else if (e.key === 'Escape') {
       if (s.portModalOpen) closePortModal(s);
       else if (s.linkMode) toggleLinkMode(s);
+      else if (s.stackMode) toggleStackMode(s);
       else deselect(s);
     }
   };
@@ -533,6 +598,222 @@ function handleLinkClick(s, deviceId) {
   select(s, 'link', link.id);
 }
 
+// =============================================================================
+// Stacks
+// =============================================================================
+function findStack(s, deviceId) {
+  return s.stacks.find((st) => st.members.includes(deviceId)) || null;
+}
+function findStackById(s, stackId) {
+  return s.stacks.find((st) => st.id === stackId) || null;
+}
+// In logical layers (vlan/routing) the stack is always one entity. In Physical
+// the stack respects its `expanded` flag.
+function isStackCollapsed(s, stack) {
+  if (!stack) return false;
+  return s.activeLayer !== 'physical' || !stack.expanded;
+}
+// Where to anchor a link on this device — the device itself, or the stack icon
+// if the device sits inside a collapsed stack.
+function effectivePos(s, deviceId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return null;
+  const stack = findStack(s, deviceId);
+  if (stack && isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
+  return { x: dev.x, y: dev.y };
+}
+
+function toggleStackMode(s) {
+  s.stackMode = !s.stackMode;
+  s.stackPending = null;
+  if (s.stackMode && s.linkMode) toggleLinkMode(s);
+  s.host.classList.toggle('m002-stacking', s.stackMode);
+  s.palette.querySelector('.m002-stack-tool')?.classList.toggle('active', s.stackMode);
+  s.gDevices.querySelectorAll('.m002-stack-pending').forEach((el) => el.classList.remove('m002-stack-pending'));
+  setMode(s, s.stackMode ? 'STACK · pick first node/stack' : 'SELECT');
+}
+
+// In stack mode the user clicks two targets. A target is either a regular
+// device or an existing stack icon. Combinations:
+//   (dev,dev)   → new stack with both as members
+//   (dev,stack) → add the device to the stack  (also stack,dev)
+//   (stk,stk)   → merge stacks
+function handleStackPick(s, target) {
+  // target = { kind: 'device'|'stack', id }
+  if (!s.stackPending) {
+    s.stackPending = target;
+    setMode(s, 'STACK · pick second node/stack');
+    markStackPending(s, target, true);
+    return;
+  }
+  if (s.stackPending.kind === target.kind && s.stackPending.id === target.id) {
+    toast(s, 'Stack cancelled');
+    markStackPending(s, s.stackPending, false);
+    s.stackPending = null;
+    setMode(s, 'STACK · pick first node/stack');
+    return;
+  }
+  const a = s.stackPending, b = target;
+  markStackPending(s, a, false);
+  s.stackPending = null;
+  let createdId = null;
+  if (a.kind === 'device' && b.kind === 'device') {
+    createdId = createStack(s, [a.id, b.id]);
+  } else if (a.kind === 'stack' && b.kind === 'device') {
+    addToStack(s, a.id, b.id); createdId = a.id;
+  } else if (a.kind === 'device' && b.kind === 'stack') {
+    addToStack(s, b.id, a.id); createdId = b.id;
+  } else {
+    createdId = mergeStacks(s, a.id, b.id);
+  }
+  setMode(s, 'STACK · pick first node/stack');
+  if (createdId) select(s, 'stack', createdId);
+}
+
+function markStackPending(s, target, on) {
+  const sel = target.kind === 'device'
+    ? s.gDevices.querySelector(`[data-device-id="${target.id}"]`)
+    : s.gDevices.querySelector(`[data-stack-id="${target.id}"]`);
+  sel?.classList.toggle('m002-stack-pending', !!on);
+}
+
+function createStack(s, deviceIds) {
+  const members = deviceIds.filter((id) => !findStack(s, id));
+  if (members.length < 2) {
+    toast(s, 'Need two un-stacked devices');
+    return null;
+  }
+  const devs = members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  const cx = devs.reduce((sum, d) => sum + d.x, 0) / devs.length;
+  const cy = devs.reduce((sum, d) => sum + d.y, 0) / devs.length;
+  const idx = s.stacks.length + 1;
+  const st = {
+    id: 'stk_' + rid(),
+    name: `STACK-${String(idx).padStart(2, '0')}`,
+    members: [...members],
+    x: Math.round(cx / GRID) * GRID,
+    y: Math.round(cy / GRID) * GRID,
+    expanded: false,
+  };
+  s.stacks.push(st);
+  render(s);
+  schedSave(s);
+  return st.id;
+}
+
+function addToStack(s, stackId, deviceId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  if (findStack(s, deviceId)) { toast(s, 'Device is already in a stack'); return; }
+  st.members.push(deviceId);
+  render(s);
+  schedSave(s);
+}
+
+function mergeStacks(s, idA, idB) {
+  if (idA === idB) return idA;
+  const a = findStackById(s, idA), b = findStackById(s, idB);
+  if (!a || !b) return null;
+  a.members = [...a.members, ...b.members.filter((m) => !a.members.includes(m))];
+  s.stacks = s.stacks.filter((st) => st.id !== idB);
+  render(s);
+  schedSave(s);
+  return a.id;
+}
+
+function removeFromStack(s, stackId, deviceId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  st.members = st.members.filter((m) => m !== deviceId);
+  if (st.members.length < 2) {
+    s.stacks = s.stacks.filter((x) => x.id !== stackId);
+  }
+  render(s);
+  schedSave(s);
+}
+
+function deleteStack(s, stackId) {
+  // Members survive as standalone devices.
+  s.stacks = s.stacks.filter((x) => x.id !== stackId);
+  render(s);
+  schedSave(s);
+}
+
+function toggleStackExpanded(s, stackId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  st.expanded = !st.expanded;
+  // On collapse, snap stack position to the centroid of members so the icon
+  // appears where the cluster was.
+  if (!st.expanded) {
+    const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+    if (devs.length) {
+      st.x = Math.round((devs.reduce((sum, d) => sum + d.x, 0) / devs.length) / GRID) * GRID;
+      st.y = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
+    }
+  }
+  render(s);
+  schedSave(s);
+}
+
+function drawCollapsedStack(s, stack) {
+  const firstMember = stack.members.map((id) => s.devices.find((d) => d.id === id)).find(Boolean);
+  const t = typeOf(firstMember?.type);
+  const w = DEVICE_W, h = DEVICE_H;
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-stack-collapsed');
+  g.setAttribute('data-stack-id', stack.id);
+  g.style.setProperty('--accent', t.accent);
+  g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
+  const memberCount = stack.members.length;
+  // Two ghost rects behind to suggest depth — capped at 2 visible layers
+  g.innerHTML = `
+    <rect class="m002-stack-ghost" x="${-w/2 + 6}" y="${-h/2 - 6}" width="${w}" height="${h}" rx="3"/>
+    <rect class="m002-stack-ghost" x="${-w/2 + 3}" y="${-h/2 - 3}" width="${w}" height="${h}" rx="3"/>
+    <rect class="m002-dev-bg"      x="${-w/2}"     y="${-h/2}"     width="${w}" height="${h}" rx="3"/>
+    <text class="m002-dev-type"   x="${-w/2 + 10}" y="${-h/2 + 18}">STACK · ${t.label}</text>
+    <text class="m002-dev-name"   x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(stack.name)}</text>
+    <text class="m002-stack-badge" x="${w/2 - 10}"  y="${-h/2 + 18}" text-anchor="end">×${memberCount}</text>
+    <text class="m002-dev-notes"  x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(memberCount + ' members')}</text>
+  `;
+  s.gDevices.appendChild(g);
+}
+
+function refreshStackVisuals(s, stack) {
+  // Cheaper than a full render: clear envelope + cables for this stack and redraw.
+  s.gStacksBg.querySelectorAll(`[data-stack-id="${stack.id}"]`).forEach((el) => el.remove());
+  // Stack cables sit in gStacksBg too without an id wrapper — easier to rebuild fully.
+  s.gStacksBg.innerHTML = '';
+  s.stacks.forEach((st) => { if (!isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
+}
+
+function drawStackEnvelope(s, stack) {
+  const members = stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  if (members.length < 2) return;
+  const padding = 18;
+  const minX = Math.min(...members.map((m) => m.x - DEVICE_W / 2)) - padding;
+  const minY = Math.min(...members.map((m) => m.y - DEVICE_H / 2)) - padding - 8;
+  const maxX = Math.max(...members.map((m) => m.x + DEVICE_W / 2)) + padding;
+  const maxY = Math.max(...members.map((m) => m.y + DEVICE_H / 2)) + padding;
+  const env = document.createElementNS(SVG_NS, 'g');
+  env.setAttribute('class', 'm002-stack-envelope');
+  env.setAttribute('data-stack-id', stack.id);
+  env.innerHTML = `
+    <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
+    <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
+  `;
+  s.gStacksBg.appendChild(env);
+  // Stack cables between consecutive members
+  for (let i = 0; i < members.length - 1; i++) {
+    const a = members[i], b = members[i + 1];
+    const cab = document.createElementNS(SVG_NS, 'path');
+    cab.setAttribute('class', 'm002-stack-cable');
+    const path = orthPath(a, b, 0);
+    cab.setAttribute('d', path.d);
+    s.gStacksBg.appendChild(cab);
+  }
+}
+
 function orthPath(a, b, off = 0) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
@@ -583,8 +864,14 @@ function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return;
+  // Hide intra-stack links when the stack is collapsed (logical view, or
+  // physical w/ stack collapsed) — they would self-loop on the stack icon.
+  const stackA = findStack(s, a.id), stackB = findStack(s, b.id);
+  if (stackA && stackA === stackB && isStackCollapsed(s, stackA)) return;
+  const aPos = effectivePos(s, a.id);
+  const bPos = effectivePos(s, b.id);
   const layer = s.activeLayer;
-  const base = orthPath(a, b, 0);
+  const base = orthPath(aPos, bPos, 0);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
@@ -599,7 +886,7 @@ function drawLink(s, link) {
       const gap = 6;
       vlans.forEach((v, i) => {
         const off = (i - (vlans.length - 1) / 2) * gap;
-        const p = orthPath(a, b, off);
+        const p = orthPath(aPos, bPos, off);
         const c = vlanColor(s, v);
         inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}"/>`;
         inner += `<text class="m002-link-label" x="${p.lx}" y="${p.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
@@ -647,9 +934,10 @@ function deselect(s) {
 function markSelected(s) {
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   if (!s.selected) return;
-  const sel = s.selected.kind === 'device'
-    ? s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`)
-    : s.gLinks.querySelector(`[data-link-id="${s.selected.id}"]`);
+  let sel;
+  if (s.selected.kind === 'device') sel = s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`);
+  else if (s.selected.kind === 'link') sel = s.gLinks.querySelector(`[data-link-id="${s.selected.id}"]`);
+  else if (s.selected.kind === 'stack') sel = s.gDevices.querySelector(`[data-stack-id="${s.selected.id}"]`);
   sel?.classList.add('m002-selected');
 }
 
@@ -712,7 +1000,7 @@ function openInspector(s) {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
-  } else {
+  } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
     if (!link) return;
     const a = s.devices.find((d) => d.id === link.from);
@@ -738,6 +1026,57 @@ function openInspector(s) {
     body.querySelectorAll('[data-f]').forEach((el) => {
       el.addEventListener('input', () => updateLinkField(s, link, el));
       el.addEventListener('change', () => updateLinkField(s, link, el));
+    });
+    body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+  } else if (s.selected.kind === 'stack') {
+    const stack = findStackById(s, s.selected.id);
+    if (!stack) return;
+    idEl.textContent = `// STACK · ×${stack.members.length}`;
+    body.innerHTML = `
+      <label class="m002-field"><span>NAME</span><input data-sf="name" value="${escAttr(stack.name)}"/></label>
+      <div class="m002-field">
+        <span>VIEW</span>
+        <button type="button" class="m002-action" data-stk="toggle">
+          ${stack.expanded ? '▴ COLLAPSE' : '▾ EXPAND (Physical only)'}
+        </button>
+      </div>
+      <div class="m002-field">
+        <span>MEMBERS (${stack.members.length})</span>
+        <div class="m002-stack-members">
+          ${stack.members.map((mid) => {
+            const m = s.devices.find((d) => d.id === mid);
+            if (!m) return '';
+            const t = typeOf(m.type);
+            return `
+              <div class="m002-stack-member" style="--accent:${t.accent}">
+                <span class="m002-stack-member-dot"></span>
+                <span class="m002-stack-member-name">${escSvg(m.name)}</span>
+                <span class="m002-stack-member-type">${t.label}</span>
+                <button type="button" data-stk-rm="${escAttr(mid)}" title="Remove from stack">×</button>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+      <p class="m002-link-hint">Double-click den Stack im Physical-Layer um ihn aus-/einzuklappen. Logische Layer (VLAN/Routing) zeigen den Stack immer als ein Element.</p>
+      <button type="button" class="m002-insp-del" data-del>UNGROUP STACK</button>
+    `;
+    body.querySelector('[data-sf="name"]').addEventListener('input', (e) => {
+      stack.name = e.target.value;
+      const g = s.gDevices.querySelector(`[data-stack-id="${stack.id}"] .m002-dev-name`);
+      if (g) g.textContent = stack.name;
+      schedSave(s);
+    });
+    body.querySelector('[data-stk="toggle"]').addEventListener('click', () => {
+      if (s.activeLayer !== 'physical') { toast(s, 'Switch to PHYSICAL to expand'); return; }
+      toggleStackExpanded(s, stack.id);
+      openInspector(s);
+    });
+    body.querySelectorAll('[data-stk-rm]').forEach((b) => {
+      b.addEventListener('click', () => {
+        removeFromStack(s, stack.id, b.dataset.stkRm);
+        if (findStackById(s, stack.id)) openInspector(s);
+        else { deselect(s); }
+      });
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
   }
@@ -782,8 +1121,15 @@ function deleteSelected(s) {
   if (!s.selected) return;
   if (s.selected.kind === 'device') {
     const id = s.selected.id;
+    // Remove from any stack first
+    const st = findStack(s, id);
+    if (st) removeFromStack(s, st.id, id);
     s.devices = s.devices.filter((d) => d.id !== id);
     s.links = s.links.filter((l) => l.from !== id && l.to !== id);
+  } else if (s.selected.kind === 'stack') {
+    deleteStack(s, s.selected.id);
+    deselect(s);
+    return;
   } else {
     s.links = s.links.filter((l) => l.id !== s.selected.id);
   }
@@ -944,10 +1290,24 @@ function deletePort(s, deviceId, portN) {
 function render(s) {
   recomputeVlanIndex(s);
   renderLegend(s);
+  s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
+
+  // Stack envelopes (only when expanded in physical layer)
+  s.stacks.forEach((st) => { if (!isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
+
+  // Links — drawLink itself filters intra-stack collapsed.
   s.links.forEach((l) => drawLink(s, l));
-  s.devices.forEach((d) => drawDevice(s, d));
+
+  // Members of collapsed stacks are not drawn as individual devices.
+  const hidden = new Set();
+  s.stacks.forEach((st) => { if (isStackCollapsed(s, st)) st.members.forEach((m) => hidden.add(m)); });
+  s.devices.forEach((d) => { if (!hidden.has(d.id)) drawDevice(s, d); });
+
+  // Collapsed stack icons drawn last so they sit on top.
+  s.stacks.forEach((st) => { if (isStackCollapsed(s, st)) drawCollapsedStack(s, st); });
+
   markSelected(s);
   updateStatus(s);
 }
@@ -969,7 +1329,7 @@ function schedSave(s) {
 }
 function saveNow(s) {
   try {
-    const payload = { v: 1, devices: s.devices, links: s.links, view: s.view };
+    const payload = { v: 1, devices: s.devices, links: s.links, stacks: s.stacks, view: s.view };
     localStorage.setItem(s.storageKey, JSON.stringify(payload));
   } catch (e) { console.warn('[m002] save failed', e); }
 }
@@ -980,6 +1340,7 @@ function loadFromStorage(s) {
     const data = JSON.parse(raw);
     s.devices = Array.isArray(data.devices) ? data.devices : [];
     s.links = Array.isArray(data.links) ? data.links : [];
+    s.stacks = Array.isArray(data.stacks) ? data.stacks : [];
     s.view = data.view || { ...DEFAULT_VIEW };
     migrate(s);
   } catch (e) { console.warn('[m002] load failed', e); }
@@ -1001,6 +1362,18 @@ function migrate(s) {
     delete l.vlan;
     delete l.label;
   });
+  // Purge stale references in stacks
+  if (Array.isArray(s.stacks)) {
+    const live = new Set(s.devices.map((d) => d.id));
+    s.stacks.forEach((st) => {
+      if (typeof st.expanded !== 'boolean') st.expanded = false;
+      if (!Array.isArray(st.members)) st.members = [];
+      st.members = st.members.filter((m) => live.has(m));
+    });
+    s.stacks = s.stacks.filter((st) => st.members.length >= 2);
+  } else {
+    s.stacks = [];
+  }
   recomputeVlanIndex(s);
 }
 
@@ -1031,6 +1404,7 @@ const MOD002_CSS = `
 .m002-board{position:absolute;inset:0;}
 .m002-svg{width:100%;height:100%;display:block;cursor:grab;}
 .m002-host.m002-linking .m002-svg{cursor:crosshair;}
+.m002-host.m002-stacking .m002-svg{cursor:cell;}
 .m002-svg:active{cursor:grabbing;}
 
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
@@ -1045,6 +1419,19 @@ const MOD002_CSS = `
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
 .m002-dev-notes{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;font-style:italic;}
+
+.m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
+.m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+.m002-stack-collapsed.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-stack-collapsed.m002-stack-pending .m002-dev-bg{stroke-dasharray:4 3;}
+.m002-stack-ghost{fill:#0a0a10;stroke:var(--accent);stroke-width:1;opacity:.55;}
+.m002-stack-collapsed .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.4;}
+.m002-stack-collapsed.m002-selected .m002-dev-bg{stroke-width:2;}
+.m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
+
+.m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:#3a3a44;stroke-width:1;stroke-dasharray:5 4;}
+.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
+.m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:2 3;fill:none;opacity:.6;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
@@ -1095,6 +1482,14 @@ const MOD002_CSS = `
 .m002-port-counter{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
 .m002-port-counter.dim{color:#5a5f6e;}
 .m002-link-hint{font-size:11px;color:#7a7f8e;line-height:1.4;margin:0;font-style:italic;}
+
+.m002-stack-members{display:flex;flex-direction:column;gap:4px;}
+.m002-stack-member{display:grid;grid-template-columns:14px 1fr auto 22px;gap:6px;align-items:center;background:#06060a;border:1px solid #1a1a22;padding:4px 8px;}
+.m002-stack-member-dot{width:8px;height:8px;background:var(--accent);box-shadow:0 0 4px var(--accent);}
+.m002-stack-member-name{font-size:12px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.m002-stack-member-type{font-size:9px;font-family:'Share Tech Mono',monospace;color:var(--accent);letter-spacing:1px;}
+.m002-stack-member button{background:transparent;border:none;color:#9aa0a8;cursor:pointer;font-size:14px;line-height:1;padding:0;}
+.m002-stack-member button:hover{color:#ff003c;}
 
 .m002-port-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
 .m002-port-panel{background:#0a0a10;border:1px solid #ff003c;width:340px;max-width:calc(100% - 32px);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:0 0 20px rgba(255,0,60,0.25);}
