@@ -399,17 +399,16 @@ function drawDevice(s, dev) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-device');
   g.setAttribute('data-device-id', dev.id);
+  g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
   const w = DEVICE_W, h = DEVICE_H;
   g.innerHTML = `
     <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-    <rect class="m002-dev-accent" x="${-w/2}" y="${-h/2}" width="4" height="${h}" fill="${t.accent}"/>
-    <text class="m002-dev-glyph" x="${-w/2 + 18}" y="${-h/2 + 30}" fill="${t.accent}">${t.glyph}</text>
-    <text class="m002-dev-type" x="${-w/2 + 36}" y="${-h/2 + 18}">${t.label}</text>
-    <text class="m002-dev-name" x="${-w/2 + 36}" y="${-h/2 + 36}">${escSvg(dev.name)}</text>
-    <text class="m002-dev-ip" x="${-w/2 + 8}" y="${h/2 - 8}">${escSvg(dev.ip || '—')}</text>
-    <text class="m002-dev-ports" x="${w/2 - 8}" y="${h/2 - 8}" text-anchor="end">${dev.ports.length}P</text>
+    <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label}</text>
+    <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
+    <text class="m002-dev-ip" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(dev.ip || '—')}</text>
+    <text class="m002-dev-ports" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${dev.ports.length}P</text>
   `;
   s.gDevices.appendChild(g);
 }
@@ -472,19 +471,44 @@ function handleLinkClick(s, deviceId) {
   select(s, 'link', link.id);
 }
 
+function orthPath(a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    // H-V-H — exit/enter on left or right edge
+    const sx = Math.sign(dx) || 1;
+    const ex1 = a.x + sx * halfW;
+    const ex2 = b.x - sx * halfW;
+    const mid = Math.round(((ex1 + ex2) / 2) / GRID) * GRID;
+    return { d: `M ${ex1} ${a.y} L ${mid} ${a.y} L ${mid} ${b.y} L ${ex2} ${b.y}`, lx: mid, ly: (a.y + b.y) / 2 };
+  }
+  // V-H-V — exit/enter on top or bottom edge
+  const sy = Math.sign(dy) || 1;
+  const ey1 = a.y + sy * halfH;
+  const ey2 = b.y - sy * halfH;
+  const mid = Math.round(((ey1 + ey2) / 2) / GRID) * GRID;
+  return { d: `M ${a.x} ${ey1} L ${a.x} ${mid} L ${b.x} ${mid} L ${b.x} ${ey2}`, lx: (a.x + b.x) / 2, ly: mid };
+}
+
 function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return;
   const isVlanLayer = s.activeLayer === 'vlan';
   const stroke = isVlanLayer ? vlanColor(link.vlan) : '#9aa0a8';
+  const path = orthPath(a, b);
+  const labelText = isVlanLayer
+    ? (link.vlan !== '' ? `VLAN ${link.vlan}` : '')
+    : ((link.fromPort || link.toPort)
+        ? `${link.fromPort || '?'} ⇄ ${link.toPort || '?'}`
+        : '');
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
   g.innerHTML = `
-    <line class="m002-link-hit" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}"/>
-    <line class="m002-link-line" x1="${a.x}" y1="${a.y}" x2="${b.x}" y2="${b.y}" stroke="${stroke}"/>
-    ${link.vlan !== '' ? `<text class="m002-link-vlan" x="${(a.x + b.x)/2}" y="${(a.y + b.y)/2 - 6}" fill="${stroke}">VLAN ${escSvg(link.vlan)}</text>` : ''}
+    <path class="m002-link-hit" d="${path.d}"/>
+    <path class="m002-link-line" d="${path.d}" stroke="${stroke}"/>
+    ${labelText ? `<text class="m002-link-label" x="${path.lx}" y="${path.ly - 6}" fill="${stroke}">${escSvg(labelText)}</text>` : ''}
   `;
   s.gLinks.appendChild(g);
 }
@@ -719,22 +743,22 @@ const MOD002_CSS = `
 
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
 
-.m002-device{cursor:move;}
-.m002-dev-bg{fill:#101019;stroke:#2a2a36;stroke-width:1;}
-.m002-device:hover .m002-dev-bg{stroke:#ff003c;}
-.m002-device.m002-selected .m002-dev-bg{stroke:#ff003c;stroke-width:1.6;filter:url(#m002-glow);}
-.m002-device.m002-link-pending .m002-dev-bg{stroke:#00d4ff;stroke-width:1.6;}
-.m002-dev-glyph{font-size:22px;font-family:'Share Tech Mono',monospace;dominant-baseline:middle;}
-.m002-dev-type{font-size:9px;letter-spacing:1.4px;font-family:'Share Tech Mono',monospace;fill:#9aa0a8;}
-.m002-dev-name{font-size:13px;font-weight:600;fill:#e8e8ee;}
-.m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;}
-.m002-dev-ports{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;}
+.m002-device{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
+.m002-device:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+.m002-device.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.2;}
+.m002-device.m002-selected .m002-dev-bg{stroke-width:2;}
+.m002-device.m002-link-pending .m002-dev-bg{stroke-dasharray:4 3;}
+.m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
+.m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
+.m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
+.m002-dev-ports{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
-.m002-link:hover .m002-link-line{stroke:#ff003c;stroke-width:2;}
-.m002-link.m002-selected .m002-link-line{stroke:#ff003c;stroke-width:2.4;filter:url(#m002-glow);}
-.m002-link-vlan{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
+.m002-link:hover .m002-link-line{stroke:#ff003c!important;stroke-width:2;}
+.m002-link.m002-selected .m002-link-line{stroke:#ff003c!important;stroke-width:2.4;filter:url(#m002-glow);}
+.m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
 
 .m002-palette{position:absolute;top:24px;left:24px;display:flex;flex-direction:column;gap:4px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px;backdrop-filter:blur(6px);min-width:160px;}
 .m002-palette-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
