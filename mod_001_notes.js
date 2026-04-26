@@ -46,7 +46,6 @@ const WALL_HEIGHT = 2400;    // total interior height
 const FOV_DEFAULT = 55;
 const FOV_MIN = 30;
 const FOV_MAX = 95;
-const FOV_MAP = 130;
 
 // =============================================================================
 // Lifecycle
@@ -107,8 +106,6 @@ function createState(stage, ctx) {
     cameraY:     0,   targetY:     0,
     cameraFov:   FOV_DEFAULT, targetFov: FOV_DEFAULT,
     currentR:    R_DEFAULT,   targetR:   R_DEFAULT,
-    preMapFov:   null,
-    mode: 'free',
 
     radiusInput: null, radiusValueEl: null,
     undoStack: [],     // last UNDO_LIMIT deleted note rows
@@ -144,6 +141,11 @@ function buildDOM(s) {
       <span class="m001-altitude-label">Y±0</span>
     </div>
 
+    <div class="m001-minimap-wrap" title="Top-down map · click to rotate camera">
+      <canvas class="m001-minimap" width="170" height="170"></canvas>
+      <span class="m001-minimap-label">// MAP</span>
+    </div>
+
     <div class="m001-radiusbar" title="Wall radius">
       <span class="m001-radiusbar-label">R</span>
       <input type="range" min="${R_MIN}" max="${R_MAX}" step="50" value="${R_DEFAULT}" class="m001-radiusbar-slider" />
@@ -153,7 +155,6 @@ function buildDOM(s) {
     <div class="m001-actionbar">
       <button type="button" class="m001-action" data-act="new"      title="New note (N)"><span>+ NEW</span></button>
       <button type="button" class="m001-action" data-act="search"   title="Search (Ctrl+K)"><span>⌕ SEARCH</span></button>
-      <button type="button" class="m001-action" data-act="map"      title="Map overview (M)"><span>◗ MAP</span></button>
       <button type="button" class="m001-action" data-act="recenter" title="Recenter view (R)"><span>◎ RECENTER</span></button>
       <button type="button" class="m001-action" data-act="undo"     title="Undo last delete (Ctrl+Z)" hidden><span>↶ UNDO <em class="m001-undo-count">0</em></span></button>
       <button type="button" class="m001-action ghost" data-act="legend" title="Toggle shortcut legend"><span>?</span></button>
@@ -168,7 +169,7 @@ function buildDOM(s) {
         <span class="key">DBL-CLICK</span><span>Spawn note on wall</span>
         <span class="key">N</span><span>New note in front</span>
         <span class="key">R</span><span>Recenter (θ=0, y=0)</span>
-        <span class="key">M</span><span>Map overview</span>
+        <span class="key">CLICK MAP</span><span>Rotate camera to that angle</span>
         <span class="key">CTRL+K</span><span>Search</span>
         <span class="key">/</span><span>Quick search</span>
         <span class="key">DEL</span><span>Purge selected</span>
@@ -238,13 +239,28 @@ function buildDOM(s) {
     switch (btn.dataset.act) {
       case 'new':      spawnNoteInFront(s); break;
       case 'search':   openSearch(s); break;
-      case 'map':      toggleMap(s); break;
       case 'recenter': recenter(s); break;
       case 'undo':     undoLast(s); break;
       case 'legend':   s.legendEl.hidden = !s.legendEl.hidden; break;
     }
   });
   s.undoBtn = host.querySelector('[data-act="undo"]');
+
+  // Minimap
+  s.minimapEl = host.querySelector('.m001-minimap');
+  s.minimapCtx = s.minimapEl.getContext('2d');
+  s.minimapEl.addEventListener('click', (e) => {
+    const rect = s.minimapEl.getBoundingClientRect();
+    const cx = rect.width / 2;
+    const cy = rect.height / 2;
+    const dx = e.clientX - rect.left - cx;
+    const dy = e.clientY - rect.top - cy;
+    if (Math.hypot(dx, dy) < 10) return;
+    // Canvas Y is flipped relative to math: world theta = -atan2(dy, dx)
+    const theta = wrapTheta(-Math.atan2(dy, dx));
+    s.targetTheta = s.cameraTheta + angleDelta(s.cameraTheta, theta);
+    saveCamera(s);
+  });
 
   // Radius slider
   s.radiusInput = host.querySelector('.m001-radiusbar-slider');
@@ -427,9 +443,83 @@ function startLoop(s) {
 
     s.glRenderer.render(s.scene, s.camera);
     s.cssRenderer.render(s.cssScene, s.camera);
+    drawMinimap(s);
     s.rafId = requestAnimationFrame(tick);
   };
   s.rafId = requestAnimationFrame(tick);
+}
+
+// LoL-style top-down map. Camera at center, FOV wedge shows where you're
+// looking, notes plotted as colored dots on the wall ring.
+function drawMinimap(s) {
+  const ctx = s.minimapCtx;
+  if (!ctx) return;
+  const W = s.minimapEl.width;
+  const H = s.minimapEl.height;
+  const cx = W / 2;
+  const cy = H / 2;
+  const radius = Math.min(W, H) / 2 - 14;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // Wall ring
+  ctx.strokeStyle = 'rgba(255, 0, 60, 0.55)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.arc(cx, cy, radius, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // FOV wedge — pointing in cameraTheta direction (Y-flipped for canvas)
+  const halfFov = (s.cameraFov / 2) * Math.PI / 180;
+  const ct = -s.cameraTheta;
+  ctx.fillStyle = 'rgba(255, 170, 0, 0.18)';
+  ctx.strokeStyle = 'rgba(255, 170, 0, 0.7)';
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.arc(cx, cy, radius, ct - halfFov, ct + halfFov);
+  ctx.closePath();
+  ctx.fill();
+  ctx.stroke();
+
+  // Notes as dots on the wall
+  s.notes.forEach((n) => {
+    const theta = n.row.pos_x || 0;
+    const x = cx + Math.cos(-theta) * radius;
+    const y = cy + Math.sin(-theta) * radius;
+    const isSelected = n.row.id === s.selectedId;
+    const isStacked = !!n.row.stack_id && n.stackOrder === 0;
+    const r = isSelected ? 4.5 : (isStacked ? 3.5 : 2.5);
+    ctx.fillStyle = n.row.color || '#ff003c';
+    ctx.shadowBlur = isSelected ? 8 : 0;
+    ctx.shadowColor = n.row.color || '#ff003c';
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    if (isSelected) {
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 1.4;
+      ctx.stroke();
+    }
+  });
+
+  // Camera position dot
+  ctx.fillStyle = '#ffaa00';
+  ctx.beginPath();
+  ctx.arc(cx, cy, 3, 0, Math.PI * 2);
+  ctx.fill();
+
+  // Cardinal markers (subtle tick marks at ±π/2 and 0/π)
+  ctx.strokeStyle = 'rgba(255, 0, 60, 0.25)';
+  ctx.lineWidth = 1;
+  for (let i = 0; i < 4; i++) {
+    const a = (i * Math.PI) / 2;
+    ctx.beginPath();
+    ctx.moveTo(cx + Math.cos(a) * (radius - 4), cy + Math.sin(a) * (radius - 4));
+    ctx.lineTo(cx + Math.cos(a) * (radius + 4), cy + Math.sin(a) * (radius + 4));
+    ctx.stroke();
+  }
 }
 
 // Shortest signed delta from a → b on a circle
@@ -618,11 +708,11 @@ function updateBgTint(s) {
   if (norm > 0) {
     // Warm amber up
     r = 255; g = 140; b = 30;
-    a = norm * 0.18;
+    a = norm * 0.234;
   } else if (norm < 0) {
     // Cool indigo/violet down
     r = 80; g = 40; b = 220;
-    a = -norm * 0.18;
+    a = -norm * 0.234;
   } else {
     r = g = b = 0; a = 0;
   }
@@ -739,8 +829,9 @@ function bindInput(s) {
       const { x, y } = ndc(e);
       const p = projectToWall(s, x, y);
       if (p) {
-        note.row.pos_x = p.theta;
-        note.row.pos_y = p.y;
+        // Apply offset so grabbed point stays under cursor — no first-frame jump
+        note.row.pos_x = wrapTheta(p.theta + s.drag.offsetTheta);
+        note.row.pos_y = clamp(p.y + s.drag.offsetY, -1100, 1100);
       }
       const target = findSnapTarget(s, s.drag.id);
       showSnapHint(s, target);
@@ -806,7 +897,6 @@ function bindInput(s) {
 
   const onWheel = (e) => {
     if (e.target.closest('.m001-note .m001-note-body, .m001-note .m001-note-title, .m001-search')) return;
-    if (s.mode === 'map') return;
     e.preventDefault();
     const delta = e.deltaY * 0.045;
     s.targetFov = clamp(s.targetFov + delta, FOV_MIN, FOV_MAX);
@@ -816,8 +906,7 @@ function bindInput(s) {
   s.cleanups.push(() => stage.removeEventListener('wheel', onWheel));
 
   const onDblClick = (e) => {
-    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend, .m001-radiusbar')) return;
-    if (s.mode === 'map') return;
+    if (e.target.closest('.m001-note, .m001-actionbar, .m001-search, .m001-confirm, .m001-legend, .m001-radiusbar, .m001-minimap-wrap')) return;
     const { x, y } = ndc(e);
     const p = projectToWall(s, x, y);
     if (!p) return;
@@ -840,27 +929,6 @@ function flyTo(s, theta, y) {
   s.targetY = clamp(y, -1500, 1500);
   s.targetFov = FOV_DEFAULT;
   saveCamera(s);
-}
-
-// =============================================================================
-// Map mode — wide FOV blowout
-// =============================================================================
-function toggleMap(s) { s.mode === 'map' ? exitMap(s) : enterMap(s); }
-function enterMap(s) {
-  if (s.notes.size === 0) { toast(s, 'NO NOTES TO MAP'); return; }
-  s.preMapFov = s.targetFov;
-  s.targetFov = FOV_MAP;
-  s.mode = 'map';
-  s.host.classList.add('is-map');
-  s.actionBar.querySelector('[data-act="map"]')?.classList.add('active');
-  toast(s, '// MAP MODE');
-}
-function exitMap(s) {
-  s.targetFov = s.preMapFov ?? FOV_DEFAULT;
-  s.preMapFov = null;
-  s.mode = 'free';
-  s.host.classList.remove('is-map');
-  s.actionBar.querySelector('[data-act="map"]')?.classList.remove('active');
 }
 
 // =============================================================================
@@ -948,7 +1016,6 @@ function commitSearch(s) {
   const note = s.searchHits[s.searchActiveIdx];
   if (!note) return;
   closeSearch(s);
-  if (s.mode === 'map') exitMap(s);
   // If buried in a stack, surface it first
   if (note.row.stack_id && note.stackOrder !== 0) bringToTop(s, note);
   flyTo(s, note.row.pos_x || 0, note.row.pos_y || 0);
@@ -1027,11 +1094,17 @@ function attachNote(s, row) {
   headEl.addEventListener('pointerdown', (e) => {
     if (e.target.closest('.m001-note-title, .m001-note-del')) return;
     e.stopPropagation();
+    // Capture the offset between the cursor's wall-projection and the note's
+    // current position so the grabbed point stays under the cursor (no jump).
+    const rect = s.host.getBoundingClientRect();
+    const ndcX = ((e.clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -(((e.clientY - rect.top) / rect.height) * 2 - 1);
+    const p = projectToWall(s, ndcX, ndcY);
     s.drag = {
       kind: 'note',
       id: row.id,
-      startX: e.clientX,
-      startY: e.clientY,
+      offsetTheta: p ? angleDelta(p.theta, row.pos_x || 0) : 0,
+      offsetY:     p ? (row.pos_y || 0) - p.y : 0,
       origTheta: row.pos_x || 0,
       origY: row.pos_y || 0,
     };
@@ -1109,6 +1182,7 @@ async function spawnNote(s, opts = {}) {
   const note = attachNote(s, data);
   selectNote(s, data.id);
   recomputeStacks(s);
+  flyTo(s, data.pos_x || 0, data.pos_y || 0);
   setTimeout(() => note.els.bodyEl.focus(), 50);
 }
 
@@ -1251,14 +1325,12 @@ function bindKeyboard(s) {
       if (s.searchOpen) { e.preventDefault(); closeSearch(s); return; }
       if (!s.confirmEl.hidden) { e.preventDefault(); closeConfirm(s, false); return; }
       if (inEditable(document.activeElement)) { e.preventDefault(); document.activeElement.blur(); return; }
-      if (s.mode === 'map') { e.preventDefault(); exitMap(s); return; }
       if (s.selectedId) { e.preventDefault(); deselect(s); return; }
       return;
     }
     if (inEditable(document.activeElement)) return;
 
     if (e.key === 'n' || e.key === 'N') { e.preventDefault(); spawnNoteInFront(s); return; }
-    if (e.key === 'm' || e.key === 'M') { e.preventDefault(); toggleMap(s); return; }
     if (e.key === 'r' || e.key === 'R') { e.preventDefault(); recenter(s); return; }
     if (e.key === '/')                  { e.preventDefault(); openSearch(s); return; }
     if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1293,7 +1365,6 @@ const MOD001_CSS = `
   cursor: grab;
 }
 .m001-host:active { cursor: grabbing; }
-.m001-host.is-map { cursor: zoom-out; }
 .m001-tint {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
   background: radial-gradient(ellipse at center,
@@ -1446,6 +1517,37 @@ const MOD001_CSS = `
   background: rgba(255,0,60,0.05);
   text-transform: uppercase;
   font-size: 0.7rem;
+}
+
+/* Minimap */
+.m001-minimap-wrap {
+  position: absolute;
+  bottom: 1rem;
+  right: 1rem;
+  z-index: 5;
+  width: 170px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.5rem;
+  border: 1px solid rgba(255, 0, 60, 0.35);
+  background: rgba(8, 2, 4, 0.7);
+  backdrop-filter: blur(6px);
+  box-shadow: 0 0 14px rgba(255, 0, 60, 0.18);
+}
+.m001-minimap {
+  display: block;
+  width: 170px;
+  height: 170px;
+  cursor: crosshair;
+}
+.m001-minimap-label {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 0.62rem;
+  letter-spacing: 0.18em;
+  color: rgba(255, 0, 60, 0.7);
+  text-transform: uppercase;
 }
 
 /* Radius slider */
