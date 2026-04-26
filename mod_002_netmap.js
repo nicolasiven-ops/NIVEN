@@ -25,27 +25,66 @@ const DEVICE_TYPES = [
   { id: 'switch',   label: 'SWITCH',   ports: DEFAULT_PORTS, accent: '#00d4ff' },
   { id: 'router',   label: 'ROUTER',   ports: DEFAULT_PORTS, accent: '#35ff7a' },
   { id: 'firewall', label: 'FIREWALL', ports: DEFAULT_PORTS, accent: '#ff003c' },
-  { id: 'server',   label: 'SERVER',   ports: DEFAULT_PORTS, accent: '#b87aff' },
-  { id: 'ap',       label: 'AP',       ports: DEFAULT_PORTS, accent: '#ffae00' },
-  { id: 'client',   label: 'CLIENT',   ports: DEFAULT_PORTS, accent: '#9aa0a8' },
+  { id: 'endpoint', label: 'ENDPOINT', ports: DEFAULT_PORTS, accent: '#ffae00' },
   { id: 'cloud',    label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#7afcff' },
 ];
-const typeOf = (id) => DEVICE_TYPES.find((t) => t.id === id) || DEVICE_TYPES[0];
+const TYPE_ALIASES = { server: 'endpoint', client: 'endpoint', ap: 'endpoint' };
+const typeOf = (id) => DEVICE_TYPES.find((t) => t.id === id)
+  || DEVICE_TYPES.find((t) => t.id === TYPE_ALIASES[id])
+  || DEVICE_TYPES[0];
 
 const LAYERS = [
   { id: 'physical', label: 'PHYSICAL' },
   { id: 'vlan',     label: 'VLAN'     },
+  { id: 'routing',  label: 'ROUTING'  },
 ];
 
-const VLAN_PALETTE = [
-  '#00d4ff', '#35ff7a', '#ffae00', '#ff003c',
-  '#b87aff', '#7afcff', '#ff7ad9', '#f5f3ff',
-];
-function vlanColor(vlan) {
+// VLAN colors are computed from the live set of VLANs in the network so that
+// the spectrum stays evenly distributed — adding new VLANs shifts existing
+// hues. See recomputeVlanIndex().
+function vlanColor(s, vlan) {
   if (vlan == null || vlan === '') return '#5a5f6e';
-  const n = parseInt(String(vlan).replace(/\D/g, ''), 10);
-  if (!Number.isFinite(n)) return '#5a5f6e';
-  return VLAN_PALETTE[n % VLAN_PALETTE.length];
+  return s?.vlanColors?.get(String(vlan)) || '#5a5f6e';
+}
+
+function recomputeVlanIndex(s) {
+  const set = new Set();
+  s.devices.forEach((d) => (d.ports || []).forEach((p) => (p.vlans || []).forEach((v) => set.add(String(v)))));
+  const list = [...set].sort((a, b) => {
+    const na = parseInt(a, 10), nb = parseInt(b, 10);
+    if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+    return a.localeCompare(b);
+  });
+  const N = list.length;
+  s.vlanColors = new Map();
+  list.forEach((v, i) => {
+    const hue = N <= 1 ? 0 : Math.round((i / (N - 1)) * 300);
+    s.vlanColors.set(v, `hsl(${hue}, 85%, 60%)`);
+  });
+  s.vlanList = list;
+}
+
+// Call after any change that might add/remove a VLAN. Recomputes the spectrum,
+// redraws all links (their colors depend on it) and refreshes the legend.
+function vlansChanged(s) {
+  recomputeVlanIndex(s);
+  renderLegend(s);
+  s.links.forEach((l) => redrawLink(s, l));
+}
+
+function renderLegend(s) {
+  if (!s.legendEl) return;
+  s.legendEl.hidden = s.activeLayer !== 'vlan';
+  const body = s.legendEl.querySelector('.m002-vlan-legend-body');
+  if (!s.vlanList || !s.vlanList.length) {
+    body.innerHTML = `<span class="m002-vlan-legend-empty">no VLANs assigned yet</span>`;
+    return;
+  }
+  body.innerHTML = s.vlanList.map((v) => `
+    <span class="m002-vlan-legend-chip" style="--vc:${s.vlanColors.get(v)}">
+      <span class="m002-vlan-legend-dot"></span>
+      <span>VLAN ${escSvg(v)}</span>
+    </span>`).join('');
 }
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
@@ -176,6 +215,13 @@ function buildDOM(s) {
       <span class="m002-stat-mode">SELECT</span>
     </div>
 
+    <aside class="m002-vlan-legend" hidden>
+      <div class="m002-vlan-legend-title">// VLAN INDEX</div>
+      <div class="m002-vlan-legend-body">
+        <span class="m002-vlan-legend-empty">no VLANs assigned yet</span>
+      </div>
+    </aside>
+
     <div class="m002-port-modal" hidden>
       <div class="m002-port-panel">
         <div class="m002-port-modal-head">
@@ -201,6 +247,7 @@ function buildDOM(s) {
   s.layerBar = host.querySelector('.m002-layerbar');
   s.statusBar = host.querySelector('.m002-statusbar');
   s.toastEl = host.querySelector('.m002-toast');
+  s.legendEl = host.querySelector('.m002-vlan-legend');
 
   s.palette.addEventListener('click', (e) => {
     const spawn = e.target.closest('[data-spawn]');
@@ -486,30 +533,32 @@ function handleLinkClick(s, deviceId) {
   select(s, 'link', link.id);
 }
 
-function orthPath(a, b) {
+function orthPath(a, b, off = 0) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
   if (Math.abs(dx) >= Math.abs(dy)) {
     const sx = Math.sign(dx) || 1;
     const ex1 = a.x + sx * halfW;
     const ex2 = b.x - sx * halfW;
-    const mid = Math.round(((ex1 + ex2) / 2) / GRID) * GRID;
+    const mid = Math.round(((ex1 + ex2) / 2) / GRID) * GRID + off;
+    const ay = a.y + off, by = b.y + off;
     return {
-      d: `M ${ex1} ${a.y} L ${mid} ${a.y} L ${mid} ${b.y} L ${ex2} ${b.y}`,
-      lx: mid, ly: (a.y + b.y) / 2,
-      from: { x: ex1 + sx * 6, y: a.y - 6, anchor: sx > 0 ? 'start' : 'end' },
-      to:   { x: ex2 - sx * 6, y: b.y - 6, anchor: sx > 0 ? 'end'   : 'start' },
+      d: `M ${ex1} ${ay} L ${mid} ${ay} L ${mid} ${by} L ${ex2} ${by}`,
+      lx: mid, ly: (ay + by) / 2,
+      from: { x: ex1 + sx * 6, y: ay - 6, anchor: sx > 0 ? 'start' : 'end' },
+      to:   { x: ex2 - sx * 6, y: by - 6, anchor: sx > 0 ? 'end'   : 'start' },
     };
   }
   const sy = Math.sign(dy) || 1;
   const ey1 = a.y + sy * halfH;
   const ey2 = b.y - sy * halfH;
-  const mid = Math.round(((ey1 + ey2) / 2) / GRID) * GRID;
+  const mid = Math.round(((ey1 + ey2) / 2) / GRID) * GRID + off;
+  const ax = a.x + off, bx = b.x + off;
   return {
-    d: `M ${a.x} ${ey1} L ${a.x} ${mid} L ${b.x} ${mid} L ${b.x} ${ey2}`,
-    lx: (a.x + b.x) / 2, ly: mid,
-    from: { x: a.x + 6, y: ey1 + sy * 12, anchor: 'start' },
-    to:   { x: b.x + 6, y: ey2 - sy * 4,  anchor: 'start' },
+    d: `M ${ax} ${ey1} L ${ax} ${mid} L ${bx} ${mid} L ${bx} ${ey2}`,
+    lx: (ax + bx) / 2, ly: mid,
+    from: { x: ax + 6, y: ey1 + sy * 12, anchor: 'start' },
+    to:   { x: bx + 6, y: ey2 - sy * 4,  anchor: 'start' },
   };
 }
 
@@ -534,29 +583,39 @@ function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return;
-  const isVlanLayer = s.activeLayer === 'vlan';
-  const vlans = linkVlans(s, link);
-  const stroke = isVlanLayer ? vlanColor(vlans[0]) : '#9aa0a8';
-  const path = orthPath(a, b);
-  let labelsHTML = '';
-  if (isVlanLayer) {
-    if (vlans.length) {
-      labelsHTML = `<text class="m002-link-label" x="${path.lx}" y="${path.ly - 6}" fill="${stroke}" text-anchor="middle">${escSvg('VLAN ' + vlans.join(','))}</text>`;
-    }
-  } else {
-    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) : '';
-    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   : '';
-    if (fromTxt) labelsHTML += `<text class="m002-link-label" x="${path.from.x}" y="${path.from.y}" fill="${stroke}" text-anchor="${path.from.anchor}">${escSvg(fromTxt)}</text>`;
-    if (toTxt)   labelsHTML += `<text class="m002-link-label" x="${path.to.x}"   y="${path.to.y}"   fill="${stroke}" text-anchor="${path.to.anchor}">${escSvg(toTxt)}</text>`;
-  }
+  const layer = s.activeLayer;
+  const base = orthPath(a, b, 0);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
-  g.innerHTML = `
-    <path class="m002-link-hit" d="${path.d}"/>
-    <path class="m002-link-line" d="${path.d}" stroke="${stroke}"/>
-    ${labelsHTML}
-  `;
+
+  let inner = `<path class="m002-link-hit" d="${base.d}"/>`;
+
+  if (layer === 'vlan') {
+    const vlans = linkVlans(s, link);
+    if (vlans.length === 0) {
+      inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+    } else {
+      const gap = 6;
+      vlans.forEach((v, i) => {
+        const off = (i - (vlans.length - 1) / 2) * gap;
+        const p = orthPath(a, b, off);
+        const c = vlanColor(s, v);
+        inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}"/>`;
+        inner += `<text class="m002-link-label" x="${p.lx}" y="${p.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
+      });
+    }
+  } else if (layer === 'routing') {
+    // L3 placeholder — drawn dimmed; structure/edits coming later.
+    inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
+  } else {
+    inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
+    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) : '';
+    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   : '';
+    if (fromTxt) inner += `<text class="m002-link-label" x="${base.from.x}" y="${base.from.y}" fill="#9aa0a8" text-anchor="${base.from.anchor}">${escSvg(fromTxt)}</text>`;
+    if (toTxt)   inner += `<text class="m002-link-label" x="${base.to.x}"   y="${base.to.y}"   fill="#9aa0a8" text-anchor="${base.to.anchor}">${escSvg(toTxt)}</text>`;
+  }
+  g.innerHTML = inner;
   s.gLinks.appendChild(g);
 }
 
@@ -797,16 +856,15 @@ function openPortModal(s, deviceId, portN) {
       return;
     }
     chipsEl.innerHTML = port.vlans.map((v) => `
-      <span class="m002-vlan-chip" style="--vc:${vlanColor(v)}">
+      <span class="m002-vlan-chip" style="--vc:${vlanColor(s, v)}">
         <span>VLAN ${escSvg(v)}</span>
         <button type="button" data-vrm="${escAttr(v)}" title="Remove">×</button>
       </span>`).join('');
     chipsEl.querySelectorAll('[data-vrm]').forEach((b) => {
       b.addEventListener('click', () => {
         port.vlans = port.vlans.filter((v) => String(v) !== b.dataset.vrm);
+        vlansChanged(s);
         renderChips();
-        s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
-              .forEach((l) => redrawLink(s, l));
         schedSave(s);
       });
     });
@@ -830,9 +888,8 @@ function openPortModal(s, deviceId, portN) {
     if (!v) return;
     if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
     addInput.value = '';
+    vlansChanged(s);
     renderChips();
-    s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
-          .forEach((l) => redrawLink(s, l));
     schedSave(s);
   };
   addBtn.addEventListener('click', addVlan);
@@ -876,6 +933,7 @@ function deletePort(s, deviceId, portN) {
     if (l.to   === deviceId && Number(l.toPort)   > portN) l.toPort   = String(Number(l.toPort)   - 1);
   });
   if (s.selected?.kind === 'device' && s.selected.id === deviceId) openInspector(s);
+  recomputeVlanIndex(s);
   render(s);
   schedSave(s);
 }
@@ -884,6 +942,8 @@ function deletePort(s, deviceId, portN) {
 // Render — full redraw (used after layer toggle / load / delete)
 // =============================================================================
 function render(s) {
+  recomputeVlanIndex(s);
+  renderLegend(s);
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
   s.links.forEach((l) => drawLink(s, l));
@@ -928,6 +988,7 @@ function loadFromStorage(s) {
 // Convert legacy schema → current. Idempotent.
 function migrate(s) {
   s.devices.forEach((d) => {
+    if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
     d.ports.forEach((p) => {
       if (!Array.isArray(p.vlans)) {
@@ -940,6 +1001,7 @@ function migrate(s) {
     delete l.vlan;
     delete l.label;
   });
+  recomputeVlanIndex(s);
 }
 
 // =============================================================================
@@ -1058,6 +1120,13 @@ const MOD002_CSS = `
 .m002-action.danger:hover{background:rgba(255,0,60,0.1);}
 .m002-insp-del{margin-top:6px;background:transparent;border:1px solid #ff003c;color:#ff003c;padding:6px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;}
 .m002-insp-del:hover{background:rgba(255,0,60,0.1);}
+
+.m002-vlan-legend{position:absolute;bottom:60px;left:24px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px 12px;backdrop-filter:blur(6px);max-width:340px;}
+.m002-vlan-legend-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
+.m002-vlan-legend-body{display:flex;flex-wrap:wrap;gap:6px;}
+.m002-vlan-legend-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
+.m002-vlan-legend-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
+.m002-vlan-legend-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
 
 .m002-statusbar{position:absolute;bottom:16px;left:24px;display:flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#9aa0a8;}
 .m002-stat-tag{color:#ff003c;}
