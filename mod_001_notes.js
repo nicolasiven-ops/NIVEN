@@ -413,8 +413,8 @@ function startLoop(s) {
 
     if (s.particles) s.particles.rotation.y += dt * 0.012;
 
-    // Lerp camera state
-    s.cameraTheta += angleDelta(s.cameraTheta, s.targetTheta) * 0.16;
+    // Lerp camera state — slightly softer follow on rotation for a smoother feel
+    s.cameraTheta += angleDelta(s.cameraTheta, s.targetTheta) * 0.115;
     s.cameraY     += (s.targetY - s.cameraY) * 0.16;
     s.cameraFov   += (s.targetFov - s.cameraFov) * 0.14;
     s.currentR    += (s.targetR - s.currentR) * 0.06;
@@ -873,7 +873,7 @@ function bindInput(s) {
       const dx = e.clientX - s.drag.startX;
       const dy = e.clientY - s.drag.startY;
       // Drag right (dx>0) → world slides right → camera looks left → theta decreases
-      s.targetTheta = s.drag.origTheta - dx * 0.0022 * fovScale;
+      s.targetTheta = s.drag.origTheta - dx * 0.0017 * fovScale;
       // Drag down (dy>0) → world slides down → camera moves up
       s.targetY = clamp(s.drag.origY + dy * 1.1 * fovScale, -1500, 1500);
     } else if (s.drag.kind === 'note') {
@@ -2017,8 +2017,8 @@ const MOD001_CSS = `
 .m001-note-purge {
   position: absolute;
   right: -1px;
-  top: 14%;
-  bottom: 14%;
+  top: 0;
+  bottom: 0;
   width: 18px;
   background: linear-gradient(90deg,
     transparent,
