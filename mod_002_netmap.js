@@ -1506,12 +1506,10 @@ function orthPath(a, b, off = 0) {
 // summarizes the most common destination as { device, lag?, portCount }.
 function lagCounterpart(s, deviceId, lag) {
   // Manual override beats inference
-  if (lag?.counterpart?.deviceId) {
+  if (lag?.counterpart?.deviceId && lag?.counterpart?.lagId) {
     const dev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
-    if (dev) {
-      const otherLag = (dev.lags || []).find((ll) => (ll.ports || []).map(Number).includes(Number(lag.counterpart.portN)));
-      return { dev, lag: otherLag, count: 1, manual: true };
-    }
+    const otherLag = dev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+    if (dev && otherLag) return { dev, lag: otherLag, count: otherLag.ports?.length || 0, manual: true };
   }
   const counts = new Map(); // key (otherDeviceId|otherLagId?) → { dev, lag, count }
   for (const portN of (lag.ports || [])) {
@@ -2021,7 +2019,31 @@ function openPortModal(s, deviceId, portN) {
     </label>
     <div class="m002-field">
       <span>COUNTERPART</span>
-      <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '— not connected —')}</div>
+      ${(() => {
+        // Counterpart is "the other end of the link this port is on", picked
+        // from any port on devices currently linked to this device.
+        const linkedDevs = new Map();
+        s.links.forEach((l) => {
+          let other = null;
+          if (l.from === deviceId) other = s.devices.find((d) => d.id === l.to);
+          else if (l.to === deviceId) other = s.devices.find((d) => d.id === l.from);
+          if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
+        });
+        const opts = [...linkedDevs.values()].flatMap((d) =>
+          (d.ports || []).map((p) => ({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }))
+        );
+        let curKey = '';
+        if (link) {
+          const otherId = link.from === deviceId ? link.to : link.from;
+          const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
+          if (otherPort) curKey = otherId + ':' + otherPort;
+        }
+        if (!opts.length) return `<div class="m002-port-counter dim">— not connected —</div>`;
+        return `<select class="m002-pmodal-cp">
+          <option value="">— not connected —</option>
+          ${opts.map((o) => `<option value="${escAttr(o.devId + ':' + o.portN)}" ${curKey === (o.devId + ':' + o.portN) ? 'selected' : ''}>${escSvg(o.devName)} · ${o.portN}${o.portName ? ' · ' + escAttr(o.portName) : ''}</option>`).join('')}
+        </select>`;
+      })()}
     </div>
     <div class="m002-field">
       <span>VLANS (port)</span>
@@ -2041,6 +2063,31 @@ function openPortModal(s, deviceId, portN) {
   `;
   renderInspectorVlanPickers(s); // also covers the port-modal's picker (it's a .m002-vlan-picker too — but inside the modal, not inspector). Re-call directly:
   body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
+
+  // Port counterpart wiring — change rewires the underlying link so the peer
+  // sees the same counterpart automatically (link is symmetric).
+  body.querySelector('.m002-pmodal-cp')?.addEventListener('change', (e) => {
+    const v = e.target.value;
+    snapshot(s);
+    if (!v) {
+      // Disconnect: remove this port from the link if present
+      if (link) {
+        if (link.from === deviceId) link.fromPort = '';
+        else                         link.toPort = '';
+      }
+    } else {
+      const [otherId, otherPortN] = v.split(':');
+      // Find an existing link to that device, or reuse current link if already to that device
+      let target = link && (link.from === otherId || link.to === otherId) ? link
+                  : s.links.find((l) => (l.from === deviceId && l.to === otherId) || (l.to === deviceId && l.from === otherId));
+      if (!target) { toast(s, 'No link to that device — create one first via LINK tool'); return; }
+      if (target.from === deviceId) { target.fromPort = String(portN); target.toPort = otherPortN; }
+      else                          { target.toPort   = String(portN); target.fromPort = otherPortN; }
+    }
+    schedSave(s);
+    render(s);
+    openPortModal(s, deviceId, portN);
+  });
 
   // LAG wiring
   body.querySelector('[data-pact="lag-remove"]')?.addEventListener('click', () => {
@@ -2109,10 +2156,9 @@ function openLagModal(s, deviceId, lagId) {
   const cp = editing ? lagCounterpart(s, deviceId, editing) : null;
   const cpTxt = cp ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`) : '— not connected —';
 
-  // Build counterpart options: every port on every device that has at least
-  // one link to this device. Selecting a port forces that to be the LAG's
-  // counterpart end (lag.counterpart = { deviceId, portN }), which the
-  // bundling logic will respect.
+  // Counterpart options: every LAG on every device that has at least one
+  // link to this device. Picking one stores `lag.counterpart = { deviceId,
+  // lagId }` and reciprocally pairs the peer LAG.
   const linkedDevs = new Map();
   s.links.forEach((l) => {
     let other = null;
@@ -2121,9 +2167,9 @@ function openLagModal(s, deviceId, lagId) {
     if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
   });
   const cpOptions = [...linkedDevs.values()].flatMap((d) =>
-    (d.ports || []).map((p) => ({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }))
+    (d.lags || []).map((l) => ({ devId: d.id, devName: d.name, lagId: l.id, lagName: l.name }))
   );
-  const cpKey = editing?.counterpart ? `${editing.counterpart.deviceId}:${editing.counterpart.portN}` : '';
+  const cpKey = editing?.counterpart?.lagId ? `${editing.counterpart.deviceId}|${editing.counterpart.lagId}` : '';
 
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span>
@@ -2148,9 +2194,9 @@ function openLagModal(s, deviceId, lagId) {
         <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)} ${editing.counterpart ? '· (manual)' : '· (auto)'}</div>
         <select class="m002-lagm-cp">
           <option value="">— auto-derive from links —</option>
-          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + ':' + o.portN)}" ${cpKey === (o.devId + ':' + o.portN) ? 'selected' : ''}>${escSvg(o.devName)} · ${o.portN}${o.portName ? ' · ' + escAttr(o.portName) : ''}</option>`).join('')}
+          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${cpKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
         </select>
-        <p class="m002-link-hint">${cpOptions.length ? 'Pick a port on a connected device to force the LAG peer.' : 'No devices linked yet — wire up a port-link first, the counterpart will then auto-derive.'}</p>
+        <p class="m002-link-hint">${cpOptions.length ? 'Pick the matching LAG on the peer side. The other LAG will be paired automatically.' : 'No LAGs found on linked devices — create one over there first.'}</p>
       </div>
       <div class="m002-field">
         <span>VLANS</span>
@@ -2167,11 +2213,21 @@ function openLagModal(s, deviceId, lagId) {
   body.querySelector('.m002-lagm-cp')?.addEventListener('change', (e) => {
     if (!editing) return;
     snapshot(s);
+    // Drop any reciprocal pointer the previous counterpart held back
+    if (editing.counterpart?.lagId) {
+      const oldDev = s.devices.find((d) => d.id === editing.counterpart.deviceId);
+      const oldLag = oldDev?.lags?.find((ll) => ll.id === editing.counterpart.lagId);
+      if (oldLag?.counterpart?.lagId === editing.id) delete oldLag.counterpart;
+    }
     const v = e.target.value;
     if (!v) { delete editing.counterpart; }
     else {
-      const [devId, portN] = v.split(':');
-      editing.counterpart = { deviceId: devId, portN: Number(portN) };
+      const [devId, lagId] = v.split('|');
+      editing.counterpart = { deviceId: devId, lagId };
+      // Reciprocal pairing
+      const otherDev = s.devices.find((d) => d.id === devId);
+      const otherLag = otherDev?.lags?.find((ll) => ll.id === lagId);
+      if (otherLag) otherLag.counterpart = { deviceId, lagId: editing.id };
     }
     schedSave(s);
     render(s);
@@ -2633,6 +2689,10 @@ function migrate(s) {
       if (!Array.isArray(lag.ports)) lag.ports = [];
       if (!Array.isArray(lag.vlans)) lag.vlans = [];
       lag.ports = lag.ports.map(Number).filter((n) => d.ports.some((p) => p.n === n));
+      // Drop legacy port-based counterparts — only LAG-level pairings supported.
+      if (lag.counterpart && (!lag.counterpart.lagId || !lag.counterpart.deviceId)) {
+        delete lag.counterpart;
+      }
     });
     d.lags = d.lags.filter((lag) => lag.ports.length > 0);
   });
@@ -2922,7 +2982,8 @@ const MOD002_CSS = `
 .m002-vlan-legend-add{display:flex;gap:4px;flex-basis:100%;margin-top:6px;}
 .m002-vlan-legend-input{flex:1;background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
 .m002-vlan-legend-input:focus{border-color:#ff003c;}
-.m002-vlan-legend-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;}
+.m002-vlan-legend-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;white-space:nowrap;flex:0 0 auto;align-self:stretch;}
+.m002-vlan-legend-add{align-items:stretch;}
 .m002-vlan-legend-add-btn:hover{background:rgba(255,0,60,0.1);}
 
 .m002-minimap{position:absolute;bottom:18px;right:18px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;backdrop-filter:blur(6px);width:180px;z-index:5;}
