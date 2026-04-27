@@ -421,7 +421,10 @@ function buildDOM(s) {
       </button>
     </div>
 
-    <div class="m002-topbar">
+    <div class="m002-zonebar-wrap">
+      <div class="m002-zonebar"></div>
+    </div>
+    <div class="m002-righttop">
       <div class="m002-mapbar">
         <button type="button" class="m002-map-btn" title="Maps">
           <span class="m002-map-label">// MAP</span>
@@ -435,7 +438,6 @@ function buildDOM(s) {
           <button type="button" class="m002-layer-pill ${i === 0 ? 'active' : ''}" data-layer="${l.id}">${l.label}</button>
         `).join('')}
       </div>
-      <div class="m002-zonebar"></div>
     </div>
     <input type="file" class="m002-import-input" accept="application/json" hidden/>
 
@@ -2556,7 +2558,8 @@ const MOD002_CSS = `
 .m002-pal-dot{width:10px;height:10px;background:var(--accent);box-shadow:0 0 4px var(--accent),0 0 10px var(--accent);flex:0 0 auto;margin-left:4px;}
 .m002-pal-sep{height:1px;background:#1a1a22;margin:6px 0;}
 
-.m002-topbar{position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;}
+.m002-zonebar-wrap{position:absolute;top:24px;left:50%;transform:translateX(-50%);}
+.m002-righttop{position:absolute;top:24px;right:24px;display:flex;gap:8px;align-items:stretch;}
 .m002-mapbar{position:relative;}
 .m002-map-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;backdrop-filter:blur(6px);}
 .m002-map-btn:hover{border-color:#ff003c;}
@@ -2584,7 +2587,7 @@ const MOD002_CSS = `
 .m002-layer-pill:hover{color:#e8e8ee;}
 .m002-layer-pill.active{background:rgba(255,0,60,0.1);border-color:#ff003c;color:#ff003c;}
 
-.m002-inspector{position:absolute;top:24px;right:24px;width:300px;max-height:calc(100% - 48px);overflow-y:auto;background:rgba(8,8,14,0.92);border:1px solid #1a1a22;padding:14px;backdrop-filter:blur(6px);display:flex;flex-direction:column;gap:10px;}
+.m002-inspector{position:absolute;top:84px;right:24px;width:300px;max-height:calc(100% - 108px);overflow-y:auto;background:rgba(8,8,14,0.92);border:1px solid #1a1a22;padding:14px;backdrop-filter:blur(6px);display:flex;flex-direction:column;gap:10px;}
 .m002-insp-head{display:flex;justify-content:space-between;align-items:center;}
 .m002-insp-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:#ff003c;letter-spacing:2px;}
 .m002-insp-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
