@@ -417,7 +417,7 @@ function buildDOM(s) {
         <h3 class="m002-panel-title">// FORGE</h3>
         <div class="m002-panel-grid">
           ${DEVICE_TYPES.map((t) => `
-            <button type="button" class="m002-pal-btn" data-spawn="${t.id}" title="Spawn ${t.label}" style="--accent:${t.accent}">
+            <button type="button" class="m002-pal-btn" data-spawn="${t.id}" draggable="true" title="Click or drag to canvas to spawn ${t.label}" style="--accent:${t.accent}">
               <span class="m002-pal-dot"></span>
               <span>${t.label}</span>
             </button>`).join('')}
@@ -596,6 +596,26 @@ function buildDOM(s) {
     e.preventDefault();
     zoneContextMenu(s, pill.dataset.zone);
   });
+  // Drag-from-palette → drop-on-canvas spawning
+  s.palette.addEventListener('dragstart', (e) => {
+    const btn = e.target.closest('[data-spawn]');
+    if (!btn) return;
+    e.dataTransfer.setData('application/x-m002-spawn', btn.dataset.spawn);
+    e.dataTransfer.effectAllowed = 'copy';
+  });
+  s.svg.addEventListener('dragover', (e) => {
+    if (!e.dataTransfer.types.includes('application/x-m002-spawn')) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'copy';
+  });
+  s.svg.addEventListener('drop', (e) => {
+    const typeId = e.dataTransfer.getData('application/x-m002-spawn');
+    if (!typeId) return;
+    e.preventDefault();
+    const w = clientToWorld(s, e.clientX, e.clientY);
+    spawnDeviceAt(s, typeId, w.x, w.y);
+  });
+
   s.palette.addEventListener('click', (e) => {
     const spawn = e.target.closest('[data-spawn]');
     if (spawn) { spawnDevice(s, spawn.dataset.spawn); return; }
@@ -1002,16 +1022,20 @@ function bindKeyboard(s) {
 // Devices
 // =============================================================================
 function spawnDevice(s, typeId) {
-  snapshot(s);
-  const t = typeOf(typeId);
-  // Place at center of current view, snapped
+  // Center of current viewport, snapped.
   const rect = s.svg.getBoundingClientRect();
   const w = clientToWorld(s, rect.left + rect.width / 2, rect.top + rect.height / 2);
+  return spawnDeviceAt(s, typeId, w.x, w.y);
+}
+
+function spawnDeviceAt(s, typeId, wx, wy) {
+  snapshot(s);
+  const t = typeOf(typeId);
   const dev = {
     id: rid(),
     type: t.id,
-    x: Math.round(w.x / GRID) * GRID,
-    y: Math.round(w.y / GRID) * GRID,
+    x: Math.round(wx / GRID) * GRID,
+    y: Math.round(wy / GRID) * GRID,
     name: `${t.label}-${(s.devices.filter((d) => d.type === t.id).length + 1).toString().padStart(2, '0')}`,
     ip: '',
     notes: '',
@@ -1481,6 +1505,14 @@ function orthPath(a, b, off = 0) {
 // What does this LAG connect to? Walks each member port's existing link and
 // summarizes the most common destination as { device, lag?, portCount }.
 function lagCounterpart(s, deviceId, lag) {
+  // Manual override beats inference
+  if (lag?.counterpart?.deviceId) {
+    const dev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
+    if (dev) {
+      const otherLag = (dev.lags || []).find((ll) => (ll.ports || []).map(Number).includes(Number(lag.counterpart.portN)));
+      return { dev, lag: otherLag, count: 1, manual: true };
+    }
+  }
   const counts = new Map(); // key (otherDeviceId|otherLagId?) → { dev, lag, count }
   for (const portN of (lag.ports || [])) {
     const link = s.links.find((l) =>
@@ -2077,6 +2109,22 @@ function openLagModal(s, deviceId, lagId) {
   const cp = editing ? lagCounterpart(s, deviceId, editing) : null;
   const cpTxt = cp ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`) : '— not connected —';
 
+  // Build counterpart options: every port on every device that has at least
+  // one link to this device. Selecting a port forces that to be the LAG's
+  // counterpart end (lag.counterpart = { deviceId, portN }), which the
+  // bundling logic will respect.
+  const linkedDevs = new Map();
+  s.links.forEach((l) => {
+    let other = null;
+    if (l.from === deviceId) other = s.devices.find((d) => d.id === l.to);
+    else if (l.to === deviceId) other = s.devices.find((d) => d.id === l.from);
+    if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
+  });
+  const cpOptions = [...linkedDevs.values()].flatMap((d) =>
+    (d.ports || []).map((p) => ({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }))
+  );
+  const cpKey = editing?.counterpart ? `${editing.counterpart.deviceId}:${editing.counterpart.portN}` : '';
+
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span>
       <input class="m002-lagm-name" value="${escAttr(initialName)}" placeholder="e.g. Po1, LAG-CORE"/>
@@ -2097,7 +2145,12 @@ function openLagModal(s, deviceId, lagId) {
     ${editing ? `
       <div class="m002-field">
         <span>COUNTERPART</span>
-        <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)}</div>
+        <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)} ${editing.counterpart ? '· (manual)' : '· (auto)'}</div>
+        <select class="m002-lagm-cp">
+          <option value="">— auto-derive from links —</option>
+          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + ':' + o.portN)}" ${cpKey === (o.devId + ':' + o.portN) ? 'selected' : ''}>${escSvg(o.devName)} · ${o.portN}${o.portName ? ' · ' + escAttr(o.portName) : ''}</option>`).join('')}
+        </select>
+        <p class="m002-link-hint">${cpOptions.length ? 'Pick a port on a connected device to force the LAG peer.' : 'No devices linked yet — wire up a port-link first, the counterpart will then auto-derive.'}</p>
       </div>
       <div class="m002-field">
         <span>VLANS</span>
@@ -2111,6 +2164,18 @@ function openLagModal(s, deviceId, lagId) {
   `;
   // VLAN picker is a `lag:<deviceId>:<lagId>` target — wire up via existing helper
   body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
+  body.querySelector('.m002-lagm-cp')?.addEventListener('change', (e) => {
+    if (!editing) return;
+    snapshot(s);
+    const v = e.target.value;
+    if (!v) { delete editing.counterpart; }
+    else {
+      const [devId, portN] = v.split(':');
+      editing.counterpart = { deviceId: devId, portN: Number(portN) };
+    }
+    schedSave(s);
+    render(s);
+  });
   modal.hidden = false;
   setTimeout(() => body.querySelector('.m002-lagm-name')?.focus(), 30);
 
@@ -2716,7 +2781,9 @@ const MOD002_CSS = `
 
 .m002-palette{display:none;}
 .m002-palette-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
-.m002-pal-btn{display:flex;align-items:center;gap:10px;background:transparent;border:1px solid transparent;color:#e8e8ee;padding:6px 10px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:13px;letter-spacing:1.2px;text-align:left;transition:.15s;}
+.m002-pal-btn{flex:0 0 auto;display:flex;align-items:center;gap:10px;background:transparent;border:1px solid transparent;color:#e8e8ee;padding:6px 10px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:13px;letter-spacing:1.2px;text-align:left;transition:.15s;line-height:1.2;min-height:30px;}
+.m002-panel-section{flex:0 0 auto;}
+.m002-panel-grid{flex:0 0 auto;}
 .m002-pal-btn:hover{border-color:#ff003c;background:rgba(255,0,60,0.06);}
 .m002-pal-btn.ghost{color:#9aa0a8;}
 .m002-pal-btn.active{background:rgba(0,212,255,0.1);border-color:#00d4ff;color:#00d4ff;}
