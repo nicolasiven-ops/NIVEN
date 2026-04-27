@@ -26,7 +26,7 @@ const DEVICE_TYPES = [
   { id: 'router',   label: 'ROUTER',   ports: DEFAULT_PORTS, accent: '#35ff7a' },
   { id: 'firewall', label: 'FIREWALL', ports: DEFAULT_PORTS, accent: '#ff003c' },
   { id: 'endpoint', label: 'ENDPOINT', ports: DEFAULT_PORTS, accent: '#ffae00' },
-  { id: 'cloud',    label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#7afcff' },
+  { id: 'cloud',    label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#aab4c0' },
 ];
 const TYPE_ALIASES = { server: 'endpoint', client: 'endpoint', ap: 'endpoint' };
 const typeOf = (id) => DEVICE_TYPES.find((t) => t.id === id)
@@ -48,9 +48,7 @@ function vlanColor(s, vlan) {
 }
 
 function recomputeVlanIndex(s) {
-  const set = new Set();
-  s.devices.forEach((d) => (d.ports || []).forEach((p) => (p.vlans || []).forEach((v) => set.add(String(v)))));
-  const list = [...set].sort((a, b) => {
+  const list = (s.vlanRegistry || []).map((v) => String(v.id)).sort((a, b) => {
     const na = parseInt(a, 10), nb = parseInt(b, 10);
     if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
     return a.localeCompare(b);
@@ -64,27 +62,115 @@ function recomputeVlanIndex(s) {
   s.vlanList = list;
 }
 
+function vlanRegistryAdd(s, id, name) {
+  id = String(id || '').trim();
+  if (!id) return false;
+  if (s.vlanRegistry.find((v) => String(v.id) === id)) return false;
+  s.vlanRegistry.push({ id, name: (name || '').trim() });
+  return true;
+}
+
+function vlanRegistryRemove(s, id) {
+  id = String(id);
+  s.vlanRegistry = s.vlanRegistry.filter((v) => String(v.id) !== id);
+  s.devices.forEach((d) => { if (Array.isArray(d.vlans)) d.vlans = d.vlans.filter((x) => String(x) !== id); });
+  s.stacks.forEach((st) => { if (Array.isArray(st.vlans)) st.vlans = st.vlans.filter((x) => String(x) !== id); });
+}
+
+// VLANs effectively configured on a device — if it's a member of a collapsed
+// stack, the stack's VLANs apply. Otherwise the device's own VLANs.
+function effectiveVlansFor(s, deviceId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return [];
+  const stack = findStack(s, deviceId);
+  if (stack && isStackCollapsed(s, stack)) return Array.isArray(stack.vlans) ? stack.vlans.map(String) : [];
+  return Array.isArray(dev.vlans) ? dev.vlans.map(String) : [];
+}
+
 // Call after any change that might add/remove a VLAN. Recomputes the spectrum,
 // redraws all links (their colors depend on it) and refreshes the legend.
 function vlansChanged(s) {
   recomputeVlanIndex(s);
   renderLegend(s);
   s.links.forEach((l) => redrawLink(s, l));
+  // Re-render any VLAN pickers visible in inspector
+  s.host?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
+}
+
+// VLAN picker — chip per registered VLAN; click toggles assignment on the
+// target device / stack. The container's data-vlan-target encodes the kind+id.
+function renderVlanPicker(s, container) {
+  const [kind, id] = (container.dataset.vlanTarget || '').split(':');
+  const target = kind === 'stack'
+    ? findStackById(s, id)
+    : s.devices.find((d) => d.id === id);
+  if (!target) { container.innerHTML = ''; return; }
+  if (!Array.isArray(target.vlans)) target.vlans = [];
+  if (!s.vlanRegistry.length) {
+    container.innerHTML = `<span class="m002-vlan-empty">no VLANs declared — add them in the legend</span>`;
+    return;
+  }
+  const assigned = new Set(target.vlans.map(String));
+  container.innerHTML = (s.vlanList || []).map((v) => {
+    const c = vlanColor(s, v);
+    const on = assigned.has(v);
+    return `<button type="button" class="m002-vlan-chip-btn ${on ? 'on' : ''}" data-vtoggle="${escAttr(v)}" style="--vc:${c}">VLAN ${escSvg(v)}</button>`;
+  }).join('');
+  container.querySelectorAll('[data-vtoggle]').forEach((b) => {
+    b.addEventListener('click', () => {
+      const v = b.dataset.vtoggle;
+      if (assigned.has(v)) target.vlans = target.vlans.filter((x) => String(x) !== v);
+      else target.vlans.push(v);
+      snapshot(s);
+      vlansChanged(s);
+      schedSave(s);
+    });
+  });
 }
 
 function renderLegend(s) {
   if (!s.legendEl) return;
-  s.legendEl.hidden = s.activeLayer !== 'vlan';
+  s.legendEl.hidden = false;
   const body = s.legendEl.querySelector('.m002-vlan-legend-body');
-  if (!s.vlanList || !s.vlanList.length) {
-    body.innerHTML = `<span class="m002-vlan-legend-empty">no VLANs assigned yet</span>`;
-    return;
-  }
-  body.innerHTML = s.vlanList.map((v) => `
-    <span class="m002-vlan-legend-chip" style="--vc:${s.vlanColors.get(v)}">
-      <span class="m002-vlan-legend-dot"></span>
-      <span>VLAN ${escSvg(v)}</span>
-    </span>`).join('');
+  const chips = (s.vlanList && s.vlanList.length)
+    ? s.vlanList.map((v) => `
+        <span class="m002-vlan-legend-chip" style="--vc:${s.vlanColors.get(v)}">
+          <span class="m002-vlan-legend-dot"></span>
+          <span>VLAN ${escSvg(v)}</span>
+          <button type="button" class="m002-vlan-legend-rm" data-vrm="${escAttr(v)}" title="Remove VLAN globally">×</button>
+        </span>`).join('')
+    : `<span class="m002-vlan-legend-empty">no VLANs declared yet</span>`;
+
+  body.innerHTML = `
+    ${chips}
+    <form class="m002-vlan-legend-add">
+      <input class="m002-vlan-legend-input" placeholder="VLAN id (e.g. 10)" inputmode="numeric"/>
+      <button type="submit" class="m002-vlan-legend-add-btn">+ ADD</button>
+    </form>
+  `;
+  body.querySelectorAll('[data-vrm]').forEach((b) => {
+    b.addEventListener('click', () => {
+      snapshot(s);
+      vlanRegistryRemove(s, b.dataset.vrm);
+      vlansChanged(s);
+      schedSave(s);
+    });
+  });
+  const form = body.querySelector('.m002-vlan-legend-add');
+  const input = form.querySelector('input');
+  form.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const v = (input.value || '').trim();
+    if (!v) return;
+    snapshot(s);
+    if (vlanRegistryAdd(s, v)) {
+      input.value = '';
+      vlansChanged(s);
+      schedSave(s);
+    } else {
+      toast(s, `VLAN ${v} already declared`);
+    }
+  });
 }
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
@@ -103,6 +189,7 @@ function mount(stage, ctx) {
   bindBoard(state);
   bindKeyboard(state);
   loadFromStorage(state);
+  applyLayoutForLayer(state);
   applyView(state);
   render(state);
 }
@@ -123,11 +210,13 @@ function createState(stage, ctx) {
     gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null,
     palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
 
-    devices: [],   // { id, type, x, y, name, ip, notes, ports: [{n,name,vlans:[]}] }
+    devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], ports: [{n,name}] }
     links: [],     // { id, from, to, fromPort, toPort }
-    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded }
+    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded, vlans:[] }
+    vlanRegistry: [],  // [{ id: string, name?: string }] — declared VLANs in this network
     portModalOpen: null, // { deviceId, portN } or null
     selected: null,// { kind: 'device'|'link'|'stack', id }
+    multiSelected: new Set(), // additional selected targets — keys "device:ID" / "stack:ID"
 
     view: { ...DEFAULT_VIEW },
     linkMode: false,
@@ -139,6 +228,9 @@ function createState(stage, ctx) {
     drag: null,
     saveTimer: null,
     cleanups: [],
+    undoStack: [],     // last N snapshots (JSON strings) of mutable state
+    redoStack: [],     // forward stack after undo
+    UNDO_LIMIT: 40,
   };
 }
 
@@ -193,6 +285,10 @@ function buildDOM(s) {
         <span class="m002-pal-glyph">⊟</span>
         <span>STACK</span>
       </button>
+      <button type="button" class="m002-pal-btn ghost" data-tool="undo" title="Undo (Ctrl+Z)">
+        <span class="m002-pal-glyph">↶</span>
+        <span>UNDO</span>
+      </button>
       <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
         <span class="m002-pal-glyph">◎</span>
         <span>RECENTER</span>
@@ -222,6 +318,14 @@ function buildDOM(s) {
       <span class="m002-stat-sep">·</span>
       <span class="m002-stat-mode">SELECT</span>
     </div>
+
+    <aside class="m002-minimap" data-mm-state="open">
+      <div class="m002-minimap-head">
+        <span class="m002-minimap-title">// MAP</span>
+        <button type="button" class="m002-minimap-toggle" title="Hide / show map">▾</button>
+      </div>
+      <svg class="m002-minimap-svg" viewBox="0 0 160 110" preserveAspectRatio="xMidYMid meet"></svg>
+    </aside>
 
     <aside class="m002-vlan-legend" hidden>
       <div class="m002-vlan-legend-title">// VLAN INDEX</div>
@@ -257,6 +361,19 @@ function buildDOM(s) {
   s.statusBar = host.querySelector('.m002-statusbar');
   s.toastEl = host.querySelector('.m002-toast');
   s.legendEl = host.querySelector('.m002-vlan-legend');
+  s.minimapEl = host.querySelector('.m002-minimap');
+  s.minimapSvg = host.querySelector('.m002-minimap-svg');
+  host.querySelector('.m002-minimap-toggle').addEventListener('click', () => {
+    const open = s.minimapEl.dataset.mmState !== 'closed';
+    s.minimapEl.dataset.mmState = open ? 'closed' : 'open';
+    s.minimapEl.querySelector('.m002-minimap-toggle').textContent = open ? '▴' : '▾';
+  });
+  s.minimapSvg.addEventListener('click', (e) => {
+    const r = s.minimapSvg.getBoundingClientRect();
+    const px = (e.clientX - r.left) / r.width;
+    const py = (e.clientY - r.top) / r.height;
+    centerMinimapAt(s, px, py);
+  });
 
   s.palette.addEventListener('click', (e) => {
     const spawn = e.target.closest('[data-spawn]');
@@ -265,14 +382,17 @@ function buildDOM(s) {
     if (!tool) return;
     if (tool.dataset.tool === 'link') toggleLinkMode(s);
     if (tool.dataset.tool === 'stack') toggleStackMode(s);
+    if (tool.dataset.tool === 'undo') undo(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
   });
 
   s.layerBar.addEventListener('click', (e) => {
     const pill = e.target.closest('[data-layer]');
     if (!pill) return;
+    persistCurrentLayout(s);
     s.layerBar.querySelectorAll('.m002-layer-pill').forEach((p) => p.classList.toggle('active', p === pill));
     s.activeLayer = pill.dataset.layer;
+    applyLayoutForLayer(s);
     render(s);
   });
   s.activeLayer = 'physical';
@@ -348,7 +468,9 @@ function bindBoard(s) {
     if (stackEl && e.button === 0) {
       const st = findStackById(s, stackEl.dataset.stackId);
       if (!st) return;
+      if (e.shiftKey) { toggleMultiSelect(s, 'stack', st.id); e.preventDefault(); return; }
       select(s, 'stack', st.id);
+      snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
       s.drag = { kind: 'stack', id: st.id, dx: st.x - w.x, dy: st.y - w.y };
       e.preventDefault();
@@ -358,7 +480,9 @@ function bindBoard(s) {
     if (devEl && e.button === 0) {
       const dev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
       if (!dev) return;
+      if (e.shiftKey) { toggleMultiSelect(s, 'device', dev.id); e.preventDefault(); return; }
       select(s, 'device', dev.id);
+      snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
       s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y };
       e.preventDefault();
@@ -393,10 +517,11 @@ function bindBoard(s) {
         nx = Math.round(nx / GRID) * GRID;
         ny = Math.round(ny / GRID) * GRID;
       }
-      dev.x = nx; dev.y = ny;
-      updateDeviceTransform(s, dev);
+      const ddx = nx - dev.x, ddy = ny - dev.y;
+      // If this drag is part of a multi-selection, move every selected item
+      const group = collectGroupTargets(s, { kind: 'device', id: dev.id });
+      group.forEach((it) => moveItemBy(s, it, ddx, ddy));
       updateLinksFor(s, dev.id);
-      // If this device sits inside an expanded stack, the envelope/cables track too
       const stk = findStack(s, dev.id);
       if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
     } else if (s.drag.kind === 'stack') {
@@ -410,14 +535,17 @@ function bindBoard(s) {
         ny = Math.round(ny / GRID) * GRID;
       }
       const ddx = nx - st.x, ddy = ny - st.y;
-      st.x = nx; st.y = ny;
+      writeLayoutPos(st, s.activeLayer, nx, ny);
       st.members.forEach((mid) => {
         const m = s.devices.find((d) => d.id === mid);
         if (m) {
-          m.x += ddx; m.y += ddy;
+          writeLayoutPos(m, s.activeLayer, m.x + ddx, m.y + ddy);
           updateDeviceTransform(s, m);
         }
       });
+      // If part of a multi-selection, also move other selected items
+      const group = collectGroupTargets(s, { kind: 'stack', id: st.id });
+      group.filter((it) => !(it.kind === 'stack' && it.id === st.id)).forEach((it) => moveItemBy(s, it, ddx, ddy));
       // Move the collapsed icon if present
       const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
       g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
@@ -438,10 +566,6 @@ function bindBoard(s) {
   const onDblClick = (e) => {
     const stackEl = e.target.closest('[data-stack-id]');
     if (!stackEl) return;
-    if (s.activeLayer !== 'physical') {
-      toast(s, 'Switch to PHYSICAL to expand stack');
-      return;
-    }
     toggleStackExpanded(s, stackEl.dataset.stackId);
     e.preventDefault();
   };
@@ -465,6 +589,68 @@ function clientToWorld(s, cx, cy) {
 
 function applyView(s) {
   s.gWorld.setAttribute('transform', `translate(${s.view.x} ${s.view.y}) scale(${s.view.zoom})`);
+  renderMinimap(s);
+}
+
+// =============================================================================
+// Mini-map
+// =============================================================================
+function worldBounds(s) {
+  // Bounding box across visible items in the active layer.
+  const items = [];
+  s.devices.forEach((d) => { if (!findStack(s, d.id) || !isStackCollapsed(s, findStack(s, d.id))) items.push(d); });
+  s.stacks.forEach((st) => { if (isStackCollapsed(s, st)) items.push(st); });
+  if (!items.length) return { minX: -200, minY: -200, maxX: 200, maxY: 200 };
+  let minX =  Infinity, minY =  Infinity, maxX = -Infinity, maxY = -Infinity;
+  items.forEach((it) => {
+    minX = Math.min(minX, it.x - DEVICE_W); minY = Math.min(minY, it.y - DEVICE_H);
+    maxX = Math.max(maxX, it.x + DEVICE_W); maxY = Math.max(maxY, it.y + DEVICE_H);
+  });
+  // Pad
+  const padX = (maxX - minX) * 0.1, padY = (maxY - minY) * 0.1;
+  return { minX: minX - padX, minY: minY - padY, maxX: maxX + padX, maxY: maxY + padY };
+}
+
+function renderMinimap(s) {
+  if (!s.minimapSvg) return;
+  if (s.minimapEl?.dataset.mmState === 'closed') return;
+  const bb = worldBounds(s);
+  const w = bb.maxX - bb.minX, h = bb.maxY - bb.minY;
+  if (w <= 0 || h <= 0) { s.minimapSvg.innerHTML = ''; return; }
+  s.minimapSvg.setAttribute('viewBox', `${bb.minX} ${bb.minY} ${w} ${h}`);
+
+  // Viewport rectangle in world coords
+  const svgRect = s.svg.getBoundingClientRect();
+  const tlW = clientToWorld(s, svgRect.left, svgRect.top);
+  const brW = clientToWorld(s, svgRect.right, svgRect.bottom);
+
+  let inner = '';
+  s.devices.forEach((d) => {
+    const stk = findStack(s, d.id);
+    if (stk && isStackCollapsed(s, stk)) return;
+    const t = typeOf(d.type);
+    inner += `<rect x="${d.x - 14}" y="${d.y - 8}" width="28" height="16" rx="1" fill="${t.accent}" opacity="0.85"/>`;
+  });
+  s.stacks.forEach((st) => {
+    if (!isStackCollapsed(s, st)) return;
+    const firstM = st.members.map((id) => s.devices.find((d) => d.id === id)).find(Boolean);
+    const t = typeOf(firstM?.type);
+    inner += `<rect x="${st.x - 18}" y="${st.y - 10}" width="36" height="20" rx="1" fill="${t.accent}" opacity="0.95" stroke="${t.accent}" stroke-width="1"/>`;
+  });
+  // Viewport rect
+  inner += `<rect x="${tlW.x}" y="${tlW.y}" width="${brW.x - tlW.x}" height="${brW.y - tlW.y}" fill="rgba(255,255,255,0.04)" stroke="#ff003c" stroke-width="${Math.max(w, h) * 0.005}"/>`;
+  s.minimapSvg.innerHTML = inner;
+}
+
+function centerMinimapAt(s, px, py) {
+  const bb = worldBounds(s);
+  const wx = bb.minX + (bb.maxX - bb.minX) * px;
+  const wy = bb.minY + (bb.maxY - bb.minY) * py;
+  const r = s.svg.getBoundingClientRect();
+  s.view.x = r.width  / 2 - wx * s.view.zoom;
+  s.view.y = r.height / 2 - wy * s.view.zoom;
+  applyView(s);
+  schedSave(s);
 }
 
 function recenter(s) {
@@ -479,6 +665,16 @@ function recenter(s) {
 // =============================================================================
 function bindKeyboard(s) {
   const onKey = (e) => {
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+      e.preventDefault();
+      if (e.shiftKey) redo(s); else undo(s);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+      e.preventDefault();
+      redo(s);
+      return;
+    }
     if (e.target.matches('input, textarea, select')) return;
     if (e.key === 'n' || e.key === 'N') {
       const t = DEVICE_TYPES[s.spawnIdx % DEVICE_TYPES.length];
@@ -507,6 +703,7 @@ function bindKeyboard(s) {
 // Devices
 // =============================================================================
 function spawnDevice(s, typeId) {
+  snapshot(s);
   const t = typeOf(typeId);
   // Place at center of current view, snapped
   const rect = s.svg.getBoundingClientRect();
@@ -521,6 +718,12 @@ function spawnDevice(s, typeId) {
     notes: '',
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
+  ensureLayouts(dev);
+  // Initialize all layers to the spawn position so the device is visible
+  // wherever the user navigates next.
+  dev.layouts.physical = { x: dev.x, y: dev.y };
+  dev.layouts.vlan     = { x: dev.x, y: dev.y };
+  dev.layouts.routing  = { x: dev.x, y: dev.y };
   s.devices.push(dev);
   drawDevice(s, dev);
   select(s, 'device', dev.id);
@@ -586,6 +789,7 @@ function handleLinkClick(s, deviceId) {
     setMode(s, 'LINK · pick first node');
     return;
   }
+  snapshot(s);
   const link = {
     id: rid(),
     from: s.linkPending,
@@ -606,6 +810,40 @@ function handleLinkClick(s, deviceId) {
 // =============================================================================
 // Stacks
 // =============================================================================
+// =============================================================================
+// Per-layer layouts — every device + stack stores positions per layer so
+// rearranging in VLAN doesn't disturb the Physical layout.
+// =============================================================================
+function ensureLayouts(item) {
+  if (!item.layouts) {
+    const fallback = { x: item.x ?? 0, y: item.y ?? 0 };
+    item.layouts = {
+      physical: { ...fallback },
+      vlan:     { ...fallback },
+      routing:  { ...fallback },
+    };
+  } else {
+    if (!item.layouts.physical) item.layouts.physical = { x: item.x ?? 0, y: item.y ?? 0 };
+    if (!item.layouts.vlan)    item.layouts.vlan    = { ...item.layouts.physical };
+    if (!item.layouts.routing) item.layouts.routing = { ...item.layouts.physical };
+  }
+}
+function applyLayoutForLayer(s) {
+  const L = s.activeLayer;
+  s.devices.forEach((d) => { ensureLayouts(d); d.x = d.layouts[L].x; d.y = d.layouts[L].y; });
+  s.stacks.forEach((st) => { ensureLayouts(st); st.x = st.layouts[L].x; st.y = st.layouts[L].y; });
+}
+function persistCurrentLayout(s) {
+  const L = s.activeLayer;
+  s.devices.forEach((d) => { ensureLayouts(d); d.layouts[L] = { x: d.x, y: d.y }; });
+  s.stacks.forEach((st) => { ensureLayouts(st); st.layouts[L] = { x: st.x, y: st.y }; });
+}
+function writeLayoutPos(item, layer, x, y) {
+  ensureLayouts(item);
+  item.x = x; item.y = y;
+  item.layouts[layer] = { x, y };
+}
+
 function findStack(s, deviceId) {
   return s.stacks.find((st) => st.members.includes(deviceId)) || null;
 }
@@ -616,7 +854,7 @@ function findStackById(s, stackId) {
 // the stack respects its `expanded` flag.
 function isStackCollapsed(s, stack) {
   if (!stack) return false;
-  return s.activeLayer !== 'physical' || !stack.expanded;
+  return !stack.expanded;
 }
 // Where to anchor a link on this device — the device itself, or the stack icon
 // if the device sits inside a collapsed stack.
@@ -626,6 +864,85 @@ function effectivePos(s, deviceId) {
   const stack = findStack(s, deviceId);
   if (stack && isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
   return { x: dev.x, y: dev.y };
+}
+
+// =============================================================================
+// Multi-selection (shift+click to add, drag any → drag all)
+// =============================================================================
+function selKey(kind, id) { return `${kind}:${id}`; }
+
+function toggleMultiSelect(s, kind, id) {
+  const k = selKey(kind, id);
+  if (s.multiSelected.has(k)) s.multiSelected.delete(k);
+  else s.multiSelected.add(k);
+  // If primary selection wasn't set, pivot to this
+  if (!s.selected || (s.selected.kind !== kind && s.selected.id !== id)) select(s, kind, id);
+  refreshMultiSelectClasses(s);
+}
+
+function clearMultiSelection(s) {
+  s.multiSelected.clear();
+  refreshMultiSelectClasses(s);
+}
+
+function refreshMultiSelectClasses(s) {
+  s.host.querySelectorAll('.m002-multi-selected').forEach((el) => el.classList.remove('m002-multi-selected'));
+  s.multiSelected.forEach((k) => {
+    const [kind, id] = k.split(':');
+    const el = kind === 'device'
+      ? s.gDevices.querySelector(`[data-device-id="${id}"]`)
+      : s.gDevices.querySelector(`[data-stack-id="${id}"]`);
+    el?.classList.add('m002-multi-selected');
+  });
+}
+
+// Returns the list of items to drag together when one is grabbed.
+// If the grabbed item is part of multiSelection, the whole group moves.
+// Otherwise just the grabbed item.
+function collectGroupTargets(s, primary) {
+  const k = selKey(primary.kind, primary.id);
+  const inGroup = s.multiSelected.has(k) || (s.selected && s.selected.kind === primary.kind && s.selected.id === primary.id && s.multiSelected.size > 0);
+  if (!inGroup || s.multiSelected.size === 0) return [primary];
+  const out = [primary];
+  s.multiSelected.forEach((mk) => {
+    if (mk === k) return;
+    const [kind, id] = mk.split(':');
+    out.push({ kind, id });
+  });
+  return out;
+}
+
+function moveItemBy(s, target, ddx, ddy) {
+  const L = s.activeLayer;
+  if (target.kind === 'device') {
+    const m = s.devices.find((d) => d.id === target.id);
+    if (!m) return;
+    writeLayoutPos(m, L, m.x + ddx, m.y + ddy);
+    updateDeviceTransform(s, m);
+    const stk = findStack(s, m.id);
+    if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
+  } else if (target.kind === 'stack') {
+    const st = findStackById(s, target.id);
+    if (!st) return;
+    writeLayoutPos(st, L, st.x + ddx, st.y + ddy);
+    st.members.forEach((mid) => {
+      const m = s.devices.find((d) => d.id === mid);
+      if (m) {
+        writeLayoutPos(m, L, m.x + ddx, m.y + ddy);
+        updateDeviceTransform(s, m);
+      }
+    });
+    const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
+    g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
+    if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+  }
+  // Redraw links touching this item
+  if (target.kind === 'device') {
+    s.links.forEach((l) => { if (l.from === target.id || l.to === target.id) redrawLink(s, l); });
+  } else {
+    const st = findStackById(s, target.id);
+    if (st) s.links.forEach((l) => { if (st.members.includes(l.from) || st.members.includes(l.to)) redrawLink(s, l); });
+  }
 }
 
 function toggleStackMode(s) {
@@ -688,6 +1005,7 @@ function createStack(s, deviceIds) {
     toast(s, 'Need two un-stacked devices');
     return null;
   }
+  snapshot(s);
   const devs = members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
   const cx = devs.reduce((sum, d) => sum + d.x, 0) / devs.length;
   const cy = devs.reduce((sum, d) => sum + d.y, 0) / devs.length;
@@ -700,6 +1018,10 @@ function createStack(s, deviceIds) {
     y: Math.round(cy / GRID) * GRID,
     expanded: false,
   };
+  ensureLayouts(st);
+  st.layouts.physical = { x: st.x, y: st.y };
+  st.layouts.vlan     = { x: st.x, y: st.y };
+  st.layouts.routing  = { x: st.x, y: st.y };
   s.stacks.push(st);
   render(s);
   schedSave(s);
@@ -710,7 +1032,9 @@ function addToStack(s, stackId, deviceId) {
   const st = findStackById(s, stackId);
   if (!st) return;
   if (findStack(s, deviceId)) { toast(s, 'Device is already in a stack'); return; }
+  snapshot(s);
   st.members.push(deviceId);
+  toast(s, `Added to ${st.name} (×${st.members.length})`);
   render(s);
   schedSave(s);
 }
@@ -719,6 +1043,7 @@ function mergeStacks(s, idA, idB) {
   if (idA === idB) return idA;
   const a = findStackById(s, idA), b = findStackById(s, idB);
   if (!a || !b) return null;
+  snapshot(s);
   a.members = [...a.members, ...b.members.filter((m) => !a.members.includes(m))];
   s.stacks = s.stacks.filter((st) => st.id !== idB);
   render(s);
@@ -729,6 +1054,7 @@ function mergeStacks(s, idA, idB) {
 function removeFromStack(s, stackId, deviceId) {
   const st = findStackById(s, stackId);
   if (!st) return;
+  snapshot(s);
   st.members = st.members.filter((m) => m !== deviceId);
   if (st.members.length < 2) {
     s.stacks = s.stacks.filter((x) => x.id !== stackId);
@@ -738,7 +1064,7 @@ function removeFromStack(s, stackId, deviceId) {
 }
 
 function deleteStack(s, stackId) {
-  // Members survive as standalone devices.
+  snapshot(s);
   s.stacks = s.stacks.filter((x) => x.id !== stackId);
   render(s);
   schedSave(s);
@@ -753,8 +1079,9 @@ function toggleStackExpanded(s, stackId) {
   if (!st.expanded) {
     const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
     if (devs.length) {
-      st.x = Math.round((devs.reduce((sum, d) => sum + d.x, 0) / devs.length) / GRID) * GRID;
-      st.y = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
+      const cx = Math.round((devs.reduce((sum, d) => sum + d.x, 0) / devs.length) / GRID) * GRID;
+      const cy = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
+      writeLayoutPos(st, s.activeLayer, cx, cy);
     }
   }
   render(s);
@@ -849,13 +1176,8 @@ function orthPath(a, b, off = 0) {
 }
 
 function linkVlans(s, link) {
-  const a = s.devices.find((d) => d.id === link.from);
-  const b = s.devices.find((d) => d.id === link.to);
-  if (!a || !b) return [];
-  const pa = a.ports.find((p) => String(p.n) === String(link.fromPort));
-  const pb = b.ports.find((p) => String(p.n) === String(link.toPort));
-  const va = new Set((pa?.vlans || []).map(String));
-  const vb = new Set((pb?.vlans || []).map(String));
+  const va = new Set(effectiveVlansFor(s, link.from));
+  const vb = new Set(effectiveVlansFor(s, link.to));
   return [...va].filter((v) => vb.has(v));
 }
 
@@ -933,17 +1255,23 @@ function select(s, kind, id) {
 function deselect(s) {
   s.selected = null;
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
+  clearMultiSelection(s);
   s.inspector.hidden = true;
 }
 
 function markSelected(s) {
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
+  refreshMultiSelectClasses(s);
   if (!s.selected) return;
   let sel;
   if (s.selected.kind === 'device') sel = s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`);
   else if (s.selected.kind === 'link') sel = s.gLinks.querySelector(`[data-link-id="${s.selected.id}"]`);
   else if (s.selected.kind === 'stack') sel = s.gDevices.querySelector(`[data-stack-id="${s.selected.id}"]`);
   sel?.classList.add('m002-selected');
+}
+
+function renderInspectorVlanPickers(s) {
+  s.inspector?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
 }
 
 function openInspector(s) {
@@ -965,6 +1293,10 @@ function openInspector(s) {
       <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
       <label class="m002-field"><span>PORTS</span><input data-f="ports" type="number" min="1" max="96" value="${dev.ports.length}"/></label>
       <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
+      <div class="m002-field">
+        <span>VLANS</span>
+        <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
+      </div>
       <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
         <div class="m002-ports-grid">
@@ -1005,6 +1337,7 @@ function openInspector(s) {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+    renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
     if (!link) return;
@@ -1042,8 +1375,12 @@ function openInspector(s) {
       <div class="m002-field">
         <span>VIEW</span>
         <button type="button" class="m002-action" data-stk="toggle">
-          ${stack.expanded ? '▴ COLLAPSE' : '▾ EXPAND (Physical only)'}
+          ${stack.expanded ? '▴ COLLAPSE' : '▾ EXPAND'}
         </button>
+      </div>
+      <div class="m002-field">
+        <span>VLANS</span>
+        <div class="m002-vlan-picker" data-vlan-target="stack:${escAttr(stack.id)}"></div>
       </div>
       <div class="m002-field">
         <span>MEMBERS (${stack.members.length})</span>
@@ -1062,7 +1399,7 @@ function openInspector(s) {
           }).join('')}
         </div>
       </div>
-      <p class="m002-link-hint">Double-click den Stack im Physical-Layer um ihn aus-/einzuklappen. Logische Layer (VLAN/Routing) zeigen den Stack immer als ein Element.</p>
+      <p class="m002-link-hint">Doppelklick auf den Stack zum Aus-/Einklappen. Jeder Layer kann unabhängig expandiert werden.</p>
       <button type="button" class="m002-insp-del" data-del>UNGROUP STACK</button>
     `;
     body.querySelector('[data-sf="name"]').addEventListener('input', (e) => {
@@ -1072,7 +1409,6 @@ function openInspector(s) {
       schedSave(s);
     });
     body.querySelector('[data-stk="toggle"]').addEventListener('click', () => {
-      if (s.activeLayer !== 'physical') { toast(s, 'Switch to PHYSICAL to expand'); return; }
       toggleStackExpanded(s, stack.id);
       openInspector(s);
     });
@@ -1084,6 +1420,7 @@ function openInspector(s) {
       });
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+    renderInspectorVlanPickers(s);
   }
 }
 
@@ -1124,6 +1461,7 @@ function updateLinkField(s, link, el) {
 
 function deleteSelected(s) {
   if (!s.selected) return;
+  snapshot(s);
   if (s.selected.kind === 'device') {
     const id = s.selected.id;
     // Remove from any stack first
@@ -1183,68 +1521,24 @@ function openPortModal(s, deviceId, portN) {
       <input class="m002-pmodal-name" value="${escAttr(port.name)}" placeholder="e.g. GE0/0/1"/>
     </label>
     <div class="m002-field">
-      <span>VLANS</span>
-      <div class="m002-vlan-chips"></div>
-      <div class="m002-vlan-add">
-        <input class="m002-vlan-input" placeholder="VLAN id (e.g. 10)" inputmode="numeric"/>
-        <button type="button" class="m002-vlan-add-btn">+ ADD</button>
-      </div>
-    </div>
-    <div class="m002-field">
       <span>COUNTERPART</span>
       <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '— not connected —')}</div>
     </div>
+    <p class="m002-link-hint">VLANs werden auf dem Gerät / Stack verwaltet (Inspector → VLAN-Chips). Diese Liste wird in der Legende gepflegt.</p>
     <div class="m002-port-actions">
       ${link ? `<button type="button" class="m002-action" data-pact="unlink">DISCONNECT LINK</button>` : ''}
       <button type="button" class="m002-action danger" data-pact="delete">DELETE PORT</button>
     </div>
   `;
 
-  const renderChips = () => {
-    const chipsEl = body.querySelector('.m002-vlan-chips');
-    if (!port.vlans.length) {
-      chipsEl.innerHTML = `<span class="m002-vlan-empty">no VLANs assigned</span>`;
-      return;
-    }
-    chipsEl.innerHTML = port.vlans.map((v) => `
-      <span class="m002-vlan-chip" style="--vc:${vlanColor(s, v)}">
-        <span>VLAN ${escSvg(v)}</span>
-        <button type="button" data-vrm="${escAttr(v)}" title="Remove">×</button>
-      </span>`).join('');
-    chipsEl.querySelectorAll('[data-vrm]').forEach((b) => {
-      b.addEventListener('click', () => {
-        port.vlans = port.vlans.filter((v) => String(v) !== b.dataset.vrm);
-        vlansChanged(s);
-        renderChips();
-        schedSave(s);
-      });
-    });
-  };
-  renderChips();
-
   body.querySelector('.m002-pmodal-name').addEventListener('input', (e) => {
     port.name = e.target.value;
     schedSave(s);
     s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
           .forEach((l) => redrawLink(s, l));
-    // refresh row in inspector
     const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
     if (row) row.value = port.name;
   });
-
-  const addInput = body.querySelector('.m002-vlan-input');
-  const addBtn   = body.querySelector('.m002-vlan-add-btn');
-  const addVlan = () => {
-    const v = (addInput.value || '').trim();
-    if (!v) return;
-    if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
-    addInput.value = '';
-    vlansChanged(s);
-    renderChips();
-    schedSave(s);
-  };
-  addBtn.addEventListener('click', addVlan);
-  addInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); addVlan(); } });
 
   body.querySelector('[data-pact="unlink"]')?.addEventListener('click', () => {
     if (!link) return;
@@ -1315,11 +1609,13 @@ function render(s) {
 
   markSelected(s);
   updateStatus(s);
+  renderMinimap(s);
 }
 
 function updateStatus(s) {
   s.host.querySelector('.m002-stat-devices').textContent = `${s.devices.length} NODES`;
   s.host.querySelector('.m002-stat-links').textContent = `${s.links.length} LINKS`;
+  renderMinimap(s);
 }
 function setMode(s, txt) {
   s.host.querySelector('.m002-stat-mode').textContent = txt;
@@ -1334,7 +1630,8 @@ function schedSave(s) {
 }
 function saveNow(s) {
   try {
-    const payload = { v: 1, devices: s.devices, links: s.links, stacks: s.stacks, view: s.view };
+    persistCurrentLayout(s);
+    const payload = { v: 2, devices: s.devices, links: s.links, stacks: s.stacks, vlanRegistry: s.vlanRegistry, view: s.view };
     localStorage.setItem(s.storageKey, JSON.stringify(payload));
   } catch (e) { console.warn('[m002] save failed', e); }
 }
@@ -1346,6 +1643,7 @@ function loadFromStorage(s) {
     s.devices = Array.isArray(data.devices) ? data.devices : [];
     s.links = Array.isArray(data.links) ? data.links : [];
     s.stacks = Array.isArray(data.stacks) ? data.stacks : [];
+    s.vlanRegistry = Array.isArray(data.vlanRegistry) ? data.vlanRegistry : [];
     s.view = data.view || { ...DEFAULT_VIEW };
     migrate(s);
   } catch (e) { console.warn('[m002] load failed', e); }
@@ -1353,14 +1651,22 @@ function loadFromStorage(s) {
 
 // Convert legacy schema → current. Idempotent.
 function migrate(s) {
+  if (!Array.isArray(s.vlanRegistry)) s.vlanRegistry = [];
   s.devices.forEach((d) => {
     if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
+    if (!Array.isArray(d.vlans)) d.vlans = [];
+    ensureLayouts(d);
+    // Roll any legacy per-port VLAN assignments up to device level + register.
     d.ports.forEach((p) => {
-      if (!Array.isArray(p.vlans)) {
-        p.vlans = (p.vlan != null && p.vlan !== '') ? [String(p.vlan)] : [];
-      }
-      delete p.vlan;
+      const portVlans = Array.isArray(p.vlans) ? p.vlans
+        : (p.vlan != null && p.vlan !== '') ? [String(p.vlan)] : [];
+      portVlans.forEach((v) => {
+        const id = String(v);
+        if (!d.vlans.map(String).includes(id)) d.vlans.push(id);
+        vlanRegistryAdd(s, id);
+      });
+      delete p.vlan; delete p.vlans;
     });
   });
   s.links.forEach((l) => {
@@ -1373,7 +1679,9 @@ function migrate(s) {
     s.stacks.forEach((st) => {
       if (typeof st.expanded !== 'boolean') st.expanded = false;
       if (!Array.isArray(st.members)) st.members = [];
+      if (!Array.isArray(st.vlans)) st.vlans = [];
       st.members = st.members.filter((m) => live.has(m));
+      ensureLayouts(st);
     });
     s.stacks = s.stacks.filter((st) => st.members.length >= 2);
   } else {
@@ -1386,6 +1694,49 @@ function migrate(s) {
 // Utils
 // =============================================================================
 function rid() { return 'x' + Math.random().toString(36).slice(2, 10) + Date.now().toString(36).slice(-4); }
+
+// =============================================================================
+// Undo / Redo
+// =============================================================================
+function snapshotPayload(s) {
+  return JSON.stringify({
+    devices: s.devices, links: s.links, stacks: s.stacks, vlanRegistry: s.vlanRegistry,
+  });
+}
+function snapshot(s) {
+  s.undoStack.push(snapshotPayload(s));
+  while (s.undoStack.length > s.UNDO_LIMIT) s.undoStack.shift();
+  s.redoStack.length = 0;
+}
+function applySnapshot(s, json) {
+  const data = JSON.parse(json);
+  s.devices = data.devices || [];
+  s.links = data.links || [];
+  s.stacks = data.stacks || [];
+  s.vlanRegistry = data.vlanRegistry || [];
+  applyLayoutForLayer(s);
+  vlansChanged(s);
+  render(s);
+  if (s.selected) {
+    const stillExists =
+      (s.selected.kind === 'device' && s.devices.some((d) => d.id === s.selected.id)) ||
+      (s.selected.kind === 'link'   && s.links.some((l)   => l.id === s.selected.id)) ||
+      (s.selected.kind === 'stack'  && s.stacks.some((st) => st.id === s.selected.id));
+    if (stillExists) openInspector(s); else deselect(s);
+  }
+}
+function undo(s) {
+  if (!s.undoStack.length) { toast(s, 'Nothing to undo'); return; }
+  s.redoStack.push(snapshotPayload(s));
+  applySnapshot(s, s.undoStack.pop());
+  schedSave(s);
+}
+function redo(s) {
+  if (!s.redoStack.length) { toast(s, 'Nothing to redo'); return; }
+  s.undoStack.push(snapshotPayload(s));
+  applySnapshot(s, s.redoStack.pop());
+  schedSave(s);
+}
 function truncate(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 function escSvg(s) { return String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escAttr(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
@@ -1520,6 +1871,29 @@ const MOD002_CSS = `
 .m002-action.danger:hover{background:rgba(255,0,60,0.1);}
 .m002-insp-del{margin-top:6px;background:transparent;border:1px solid #ff003c;color:#ff003c;padding:6px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;}
 .m002-insp-del:hover{background:rgba(255,0,60,0.1);}
+
+.m002-multi-selected .m002-dev-bg{stroke-width:2;stroke-dasharray:3 3;}
+.m002-multi-selected.m002-stack-collapsed .m002-dev-bg{stroke-dasharray:3 3;}
+
+.m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
+.m002-vlan-chip-btn:hover{border-color:var(--vc);color:var(--vc);}
+.m002-vlan-chip-btn.on{background:rgba(0,0,0,0.3);border-color:var(--vc);color:var(--vc);box-shadow:0 0 6px var(--vc);}
+.m002-vlan-picker{display:flex;flex-wrap:wrap;gap:4px;}
+.m002-vlan-legend-rm{background:transparent;border:none;color:var(--vc);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;opacity:.5;}
+.m002-vlan-legend-rm:hover{opacity:1;}
+.m002-vlan-legend-add{display:flex;gap:4px;flex-basis:100%;margin-top:6px;}
+.m002-vlan-legend-input{flex:1;background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
+.m002-vlan-legend-input:focus{border-color:#ff003c;}
+.m002-vlan-legend-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;}
+.m002-vlan-legend-add-btn:hover{background:rgba(255,0,60,0.1);}
+
+.m002-minimap{position:absolute;bottom:24px;right:24px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;backdrop-filter:blur(6px);width:180px;}
+.m002-minimap[data-mm-state="closed"] .m002-minimap-svg{display:none;}
+.m002-minimap-head{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;}
+.m002-minimap-title{font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:2px;}
+.m002-minimap-toggle{background:transparent;border:none;color:#7a7f8e;cursor:pointer;font-size:11px;line-height:1;padding:0 4px;}
+.m002-minimap-toggle:hover{color:#ff003c;}
+.m002-minimap-svg{width:100%;height:120px;display:block;cursor:crosshair;background:#06060a;}
 
 .m002-vlan-legend{position:absolute;bottom:60px;left:24px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px 12px;backdrop-filter:blur(6px);max-width:340px;}
 .m002-vlan-legend-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
