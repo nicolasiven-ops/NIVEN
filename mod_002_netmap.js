@@ -739,6 +739,16 @@ function bindBoard(s) {
       return;
     }
 
+    const laglinkEl = e.target.closest('[data-laglink-id]');
+    if (laglinkEl && e.button === 0) {
+      const [devId, lagId] = laglinkEl.dataset.laglinkId.split('|');
+      // Select the device first so the inspector adapts; then open the LAG modal
+      select(s, 'device', devId);
+      openLagModal(s, devId, lagId);
+      e.preventDefault();
+      return;
+    }
+
     if (linkEl && e.button === 0) {
       select(s, 'link', linkEl.dataset.linkId);
       e.preventDefault();
@@ -1557,6 +1567,37 @@ function lagRingsHTML(base, aPos, bPos) {
   `;
 }
 
+// Renders an explicit LAG-pair as a single ring-decorated link, replacing
+// the underlying port-cables in any layer. Click → opens the LAG modal so
+// the user can edit name / members / counterpart / VLANs in one place.
+function drawLagLink(s, p) {
+  const aPos = effectivePos(s, p.devA.id);
+  const bPos = effectivePos(s, p.devB.id);
+  const path = orthPath(aPos, bPos, 0);
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
+  g.setAttribute('data-laglink-id', `${p.devA.id}|${p.lagA.id}`);
+
+  const sharedVlans = (p.lagA.vlans || []).map(String).filter((v) => (p.lagB.vlans || []).map(String).includes(v));
+  let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
+  if (s.activeLayer === 'vlan' && sharedVlans.length) {
+    const gap = 6;
+    sharedVlans.forEach((v, i) => {
+      const off = (i - (sharedVlans.length - 1) / 2) * gap;
+      const op = orthPath(aPos, bPos, off);
+      const c = vlanColor(s, v);
+      inner += `<path class="m002-link-line" d="${op.d}" stroke="${c}" stroke-width="2.4"/>`;
+      inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
+    });
+  } else {
+    inner += `<path class="m002-link-line" d="${path.d}" stroke="#9aa0a8" stroke-width="2.8"/>`;
+  }
+  inner += lagRingsHTML(path, aPos, bPos);
+  inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
+  g.innerHTML = inner;
+  s.gLinks.appendChild(g);
+}
+
 function lagBundleKey(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
@@ -2309,27 +2350,55 @@ function render(s) {
   // Stack envelopes (only when expanded)
   s.stacks.forEach((st) => { if (inZone(st) && !isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
 
-  // Compute LAG bundles (only in logical layers). Per render pass we mark
-  // which links are absorbed into a bundle so we don't render them twice.
+  // Detect explicit LAG pairs (counterpart set on at least one side). Their
+  // underlying port-links are absorbed and rendered as a single LAG-link
+  // visual in every layer.
+  const lagPairs = [];
+  const lagPairSeen = new Set();
+  s.devices.forEach((d) => {
+    (d.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      const otherDev = s.devices.find((dd) => dd.id === lag.counterpart.deviceId);
+      const otherLag = otherDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+      if (!otherDev || !otherLag) return;
+      const key = [d.id + ':' + lag.id, otherDev.id + ':' + otherLag.id].sort().join('::');
+      if (lagPairSeen.has(key)) return;
+      lagPairSeen.add(key);
+      lagPairs.push({ devA: d, lagA: lag, devB: otherDev, lagB: otherLag });
+    });
+  });
+  const absorbed = new Set();
+  lagPairs.forEach((p) => {
+    s.links.forEach((l) => {
+      const ax = (l.from === p.devA.id) && p.lagA.ports.map(Number).includes(Number(l.fromPort)) && (l.to   === p.devB.id) && p.lagB.ports.map(Number).includes(Number(l.toPort));
+      const bx = (l.from === p.devB.id) && p.lagB.ports.map(Number).includes(Number(l.fromPort)) && (l.to   === p.devA.id) && p.lagA.ports.map(Number).includes(Number(l.toPort));
+      if (ax || bx) absorbed.add(l.id);
+    });
+  });
+
+  // Compute LAG bundles (only in logical layers, for non-paired LAGs). Per
+  // render pass we mark which links are absorbed into a bundle so we don't
+  // render them twice.
   const bundleByLink = new Map();
   if (s.activeLayer !== 'physical') {
-    const groups = new Map(); // key → [link...]
+    const groups = new Map();
     s.links.forEach((l) => {
+      if (absorbed.has(l.id)) return;
       const key = lagBundleKey(s, l);
       if (!key) return;
       if (!groups.has(key)) groups.set(key, []);
       groups.get(key).push(l);
     });
-    groups.forEach((linksInGroup, key) => {
+    groups.forEach((linksInGroup) => {
       if (linksInGroup.length < 1) return;
       const rep = linksInGroup[0];
-      bundleByLink.set(rep.id, { key, members: linksInGroup });
-      // Members other than rep get marked as "absorbed"
+      bundleByLink.set(rep.id, { members: linksInGroup });
       linksInGroup.slice(1).forEach((l) => bundleByLink.set(l.id, { absorbed: true }));
     });
   }
   s._bundleByLink = bundleByLink;
   s.links.forEach((l) => {
+    if (absorbed.has(l.id)) return;
     const a = s.devices.find((d) => d.id === l.from);
     const b = s.devices.find((d) => d.id === l.to);
     if (!a || !b) return;
@@ -2337,6 +2406,12 @@ function render(s) {
     drawLink(s, l);
   });
   s._bundleByLink = null;
+
+  // Explicit LAG-pair links — drawn after regular links so they sit on top.
+  lagPairs.forEach((p) => {
+    if (!inZone(p.devA) || !inZone(p.devB)) return;
+    drawLagLink(s, p);
+  });
 
   // Members of collapsed stacks are not drawn as individual devices.
   const hidden = new Set();
@@ -2979,11 +3054,10 @@ const MOD002_CSS = `
 .m002-vlan-picker{display:flex;flex-wrap:wrap;gap:4px;}
 .m002-vlan-legend-rm{background:transparent;border:none;color:var(--vc);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;opacity:.5;}
 .m002-vlan-legend-rm:hover{opacity:1;}
-.m002-vlan-legend-add{display:flex;gap:4px;flex-basis:100%;margin-top:6px;}
+.m002-vlan-legend-add{display:flex;gap:4px;margin-top:6px;flex:0 0 auto;align-items:stretch;}
 .m002-vlan-legend-input{flex:1;background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
 .m002-vlan-legend-input:focus{border-color:#ff003c;}
 .m002-vlan-legend-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;white-space:nowrap;flex:0 0 auto;align-self:stretch;}
-.m002-vlan-legend-add{align-items:stretch;}
 .m002-vlan-legend-add-btn:hover{background:rgba(255,0,60,0.1);}
 
 .m002-minimap{position:absolute;bottom:18px;right:18px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;backdrop-filter:blur(6px);width:180px;z-index:5;}
