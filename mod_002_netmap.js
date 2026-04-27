@@ -448,14 +448,12 @@ function buildDOM(s) {
         </div>
       </section>
 
-      <section class="m002-panel-section">
+      <section class="m002-panel-section m002-panel-section--legend">
         <h3 class="m002-panel-title">// LEGEND · VLANS</h3>
         <div class="m002-vlan-legend-body">
           <span class="m002-vlan-legend-empty">no VLANs declared yet</span>
         </div>
       </section>
-
-      <div class="m002-leftpanel-spacer"></div>
 
       <section class="m002-panel-hints">
         <div>DRAG NODE → CANVAS</div>
@@ -2856,8 +2854,10 @@ function toast(s, msg) {
 // =============================================================================
 const MOD002_CSS = `
 .m002-host{position:absolute;inset:0;overflow:hidden;font-family:'Rajdhani',sans-serif;color:#e8e8ee;background:radial-gradient(ellipse at 50% 0%,#0d0d14 0%,#06060a 70%);display:grid;grid-template-columns:220px 1fr 320px;grid-template-rows:1fr;}
-.m002-leftpanel{background:rgba(8,8,14,0.92);border-right:1px solid #1a1a22;padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:14px;min-height:0;}
-.m002-leftpanel-spacer{flex:1;min-height:8px;}
+.m002-leftpanel{background:rgba(8,8,14,0.92);border-right:1px solid #1a1a22;padding:14px 12px;overflow:hidden;display:flex;flex-direction:column;gap:14px;min-height:0;}
+.m002-leftpanel-spacer{flex:0 0 8px;}
+.m002-panel-section.m002-panel-section--legend{flex:1 1 auto;min-height:0;overflow:hidden;}
+.m002-panel-section.m002-panel-section--legend .m002-vlan-legend-body{flex:1 1 auto;min-height:0;overflow:hidden;}
 .m002-rightpanel{background:rgba(8,8,14,0.92);border-left:1px solid #1a1a22;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:0;}
 .m002-center{position:relative;overflow:hidden;}
 .m002-panel-section{display:flex;flex-direction:column;gap:6px;}
@@ -3071,7 +3071,7 @@ const MOD002_CSS = `
 .m002-vlan-legend{display:none;}
 .m002-vlan-legend-title{display:none;}
 .m002-vlan-legend-body{display:flex;flex-direction:column;gap:6px;}
-.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:300px;overflow-y:auto;padding-right:4px;}
+.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;}
 .m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;}
 .m002-vlan-row:hover{border-color:var(--vc);}
 .m002-vlan-row-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
