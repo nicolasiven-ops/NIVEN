@@ -309,6 +309,8 @@ function mount(stage, ctx) {
   applyLayoutForLayer(state);
   applyView(state);
   render(state);
+  refreshMapBar(state);
+  refreshZoneBar(state);
 }
 
 function unmount() {
@@ -321,7 +323,13 @@ function unmount() {
 function createState(stage, ctx) {
   return {
     stage, sb: ctx.sb, project: ctx.project, code: ctx.code, exit: ctx.exit,
-    storageKey: `niven:m002:${ctx.project?.id || ctx.code}`,
+    // Storage: meta lists all maps for the project, each map has its own key.
+    metaKey: `niven:m002:meta:${ctx.project?.id || ctx.code}`,
+    legacyKey: `niven:m002:${ctx.project?.id || ctx.code}`,
+    maps: [],          // [{id, name}]
+    activeMapId: null,
+    zones: [],         // [{id, name}] — per map
+    activeZone: null,
 
     host: null, board: null, svg: null, gWorld: null,
     gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null,
@@ -413,11 +421,23 @@ function buildDOM(s) {
       </button>
     </div>
 
-    <div class="m002-layerbar">
-      ${LAYERS.map((l, i) => `
-        <button type="button" class="m002-layer-pill ${i === 0 ? 'active' : ''}" data-layer="${l.id}">${l.label}</button>
-      `).join('')}
+    <div class="m002-topbar">
+      <div class="m002-mapbar">
+        <button type="button" class="m002-map-btn" title="Maps">
+          <span class="m002-map-label">// MAP</span>
+          <span class="m002-map-name">—</span>
+          <span class="m002-map-caret">▾</span>
+        </button>
+        <div class="m002-map-menu" hidden></div>
+      </div>
+      <div class="m002-layerbar">
+        ${LAYERS.map((l, i) => `
+          <button type="button" class="m002-layer-pill ${i === 0 ? 'active' : ''}" data-layer="${l.id}">${l.label}</button>
+        `).join('')}
+      </div>
+      <div class="m002-zonebar"></div>
     </div>
+    <input type="file" class="m002-import-input" accept="application/json" hidden/>
 
     <aside class="m002-inspector" hidden>
       <div class="m002-insp-head">
@@ -489,6 +509,32 @@ function buildDOM(s) {
   s.statusBar = host.querySelector('.m002-statusbar');
   s.toastEl = host.querySelector('.m002-toast');
   s.legendEl = host.querySelector('.m002-vlan-legend');
+  s.mapBtnEl = host.querySelector('.m002-map-btn');
+  s.mapMenuEl = host.querySelector('.m002-map-menu');
+  s.zoneBarEl = host.querySelector('.m002-zonebar');
+  s.importInputEl = host.querySelector('.m002-import-input');
+  s.mapBtnEl.addEventListener('click', () => toggleMapMenu(s));
+  s.zoneBarEl.addEventListener('click', (e) => {
+    const pill = e.target.closest('[data-zone]');
+    if (pill) { switchZone(s, pill.dataset.zone); return; }
+    if (e.target.closest('[data-act="new-zone"]')) addZone(s);
+  });
+  s.zoneBarEl.addEventListener('contextmenu', (e) => {
+    const pill = e.target.closest('[data-zone]');
+    if (!pill) return;
+    e.preventDefault();
+    zoneContextMenu(s, pill.dataset.zone);
+  });
+  document.addEventListener('click', (e) => {
+    if (!s.mapMenuEl) return;
+    if (e.target.closest('.m002-mapbar')) return;
+    if (!s.mapMenuEl.hidden) s.mapMenuEl.hidden = true;
+  });
+  s.importInputEl.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) importMapFromFile(s, file);
+    e.target.value = '';
+  });
   s.minimapEl = host.querySelector('.m002-minimap');
   s.minimapSvg = host.querySelector('.m002-minimap-svg');
   host.querySelector('.m002-minimap-toggle').addEventListener('click', () => {
@@ -919,6 +965,7 @@ function spawnDevice(s, typeId) {
     notes: '',
     vlans: [],
     lags: [],
+    zone: s.activeZone,
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
   ensureLayouts(dev);
@@ -1220,6 +1267,7 @@ function createStack(s, deviceIds) {
     x: Math.round(cx / GRID) * GRID,
     y: Math.round(cy / GRID) * GRID,
     expanded: false,
+    zone: s.activeZone,
   };
   ensureLayouts(st);
   st.layouts.physical = { x: st.x, y: st.y };
@@ -1979,8 +2027,11 @@ function render(s) {
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
 
-  // Stack envelopes (only when expanded in physical layer)
-  s.stacks.forEach((st) => { if (!isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
+  // Filter by active zone — devices/stacks/links outside the active zone hide.
+  const inZone = (entity) => !s.activeZone || !entity.zone || entity.zone === s.activeZone;
+
+  // Stack envelopes (only when expanded)
+  s.stacks.forEach((st) => { if (inZone(st) && !isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
 
   // Compute LAG bundles (only in logical layers). Per render pass we mark
   // which links are absorbed into a bundle so we don't render them twice.
@@ -2002,16 +2053,22 @@ function render(s) {
     });
   }
   s._bundleByLink = bundleByLink;
-  s.links.forEach((l) => drawLink(s, l));
+  s.links.forEach((l) => {
+    const a = s.devices.find((d) => d.id === l.from);
+    const b = s.devices.find((d) => d.id === l.to);
+    if (!a || !b) return;
+    if (!inZone(a) || !inZone(b)) return;
+    drawLink(s, l);
+  });
   s._bundleByLink = null;
 
   // Members of collapsed stacks are not drawn as individual devices.
   const hidden = new Set();
   s.stacks.forEach((st) => { if (isStackCollapsed(s, st)) st.members.forEach((m) => hidden.add(m)); });
-  s.devices.forEach((d) => { if (!hidden.has(d.id)) drawDevice(s, d); });
+  s.devices.forEach((d) => { if (!hidden.has(d.id) && inZone(d)) drawDevice(s, d); });
 
   // Collapsed stack icons drawn last so they sit on top.
-  s.stacks.forEach((st) => { if (isStackCollapsed(s, st)) drawCollapsedStack(s, st); });
+  s.stacks.forEach((st) => { if (isStackCollapsed(s, st) && inZone(st)) drawCollapsedStack(s, st); });
 
   markSelected(s);
   updateStatus(s);
@@ -2034,31 +2091,300 @@ function schedSave(s) {
   clearTimeout(s.saveTimer);
   s.saveTimer = setTimeout(() => saveNow(s), SAVE_DEBOUNCE_MS);
 }
+// Per-map storage key
+function mapKey(mapId) { return `niven:m002:map:${mapId}`; }
+
+function snapshotMapData(s) {
+  persistCurrentLayout(s);
+  return {
+    v: 3,
+    devices: s.devices, links: s.links, stacks: s.stacks,
+    vlanRegistry: s.vlanRegistry,
+    zones: s.zones, activeZone: s.activeZone,
+    view: s.view,
+  };
+}
+
 function saveNow(s) {
   try {
-    persistCurrentLayout(s);
-    const payload = { v: 2, devices: s.devices, links: s.links, stacks: s.stacks, vlanRegistry: s.vlanRegistry, view: s.view };
-    localStorage.setItem(s.storageKey, JSON.stringify(payload));
+    if (!s.activeMapId) return;
+    localStorage.setItem(mapKey(s.activeMapId), JSON.stringify(snapshotMapData(s)));
+    saveMeta(s);
   } catch (e) { console.warn('[m002] save failed', e); }
 }
+
+function saveMeta(s) {
+  localStorage.setItem(s.metaKey, JSON.stringify({
+    maps: s.maps, activeMap: s.activeMapId,
+  }));
+}
+
 function loadFromStorage(s) {
   try {
-    const raw = localStorage.getItem(s.storageKey);
-    if (!raw) return;
-    const data = JSON.parse(raw);
-    s.devices = Array.isArray(data.devices) ? data.devices : [];
-    s.links = Array.isArray(data.links) ? data.links : [];
-    s.stacks = Array.isArray(data.stacks) ? data.stacks : [];
-    s.vlanRegistry = Array.isArray(data.vlanRegistry) ? data.vlanRegistry : [];
-    s.view = data.view || { ...DEFAULT_VIEW };
-    migrate(s);
-  } catch (e) { console.warn('[m002] load failed', e); }
+    const metaRaw = localStorage.getItem(s.metaKey);
+    if (metaRaw) {
+      const meta = JSON.parse(metaRaw);
+      s.maps = Array.isArray(meta.maps) ? meta.maps : [];
+      s.activeMapId = meta.activeMap || s.maps[0]?.id || null;
+      if (s.activeMapId) loadMapData(s, s.activeMapId);
+      else initFreshMap(s);
+      return;
+    }
+    // Legacy single-map blob — migrate to new shape on the fly.
+    const legacyRaw = localStorage.getItem(s.legacyKey);
+    if (legacyRaw) {
+      const data = JSON.parse(legacyRaw);
+      const id = 'map_' + rid();
+      s.maps = [{ id, name: 'Main' }];
+      s.activeMapId = id;
+      hydrateMapData(s, data);
+      saveNow(s);
+      // Keep legacy key as backup; user can clean up later.
+      return;
+    }
+    initFreshMap(s);
+  } catch (e) { console.warn('[m002] load failed', e); initFreshMap(s); }
+}
+
+function loadMapData(s, mapId) {
+  const raw = localStorage.getItem(mapKey(mapId));
+  if (!raw) { hydrateMapData(s, {}); return; }
+  try { hydrateMapData(s, JSON.parse(raw)); }
+  catch (e) { console.warn('[m002] map load failed', e); hydrateMapData(s, {}); }
+}
+
+function hydrateMapData(s, data) {
+  s.devices = Array.isArray(data.devices) ? data.devices : [];
+  s.links = Array.isArray(data.links) ? data.links : [];
+  s.stacks = Array.isArray(data.stacks) ? data.stacks : [];
+  s.vlanRegistry = Array.isArray(data.vlanRegistry) ? data.vlanRegistry : [];
+  s.zones = Array.isArray(data.zones) && data.zones.length ? data.zones : [{ id: 'z_main', name: 'Main' }];
+  s.activeZone = data.activeZone && s.zones.find((z) => z.id === data.activeZone) ? data.activeZone : s.zones[0].id;
+  s.view = data.view || { ...DEFAULT_VIEW };
+  migrate(s);
+}
+
+function initFreshMap(s) {
+  const id = 'map_' + rid();
+  s.maps = [{ id, name: 'Main' }];
+  s.activeMapId = id;
+  hydrateMapData(s, {});
+  saveNow(s);
+}
+
+// =============================================================================
+// Maps — switch / create / delete / export / import
+// =============================================================================
+function refreshMapBar(s) {
+  if (!s.mapBtnEl) return;
+  const active = s.maps.find((m) => m.id === s.activeMapId);
+  s.mapBtnEl.querySelector('.m002-map-name').textContent = active?.name || '—';
+}
+
+function toggleMapMenu(s) {
+  if (!s.mapMenuEl) return;
+  if (!s.mapMenuEl.hidden) { s.mapMenuEl.hidden = true; return; }
+  s.mapMenuEl.innerHTML = `
+    <div class="m002-menu-section">
+      ${s.maps.map((m) => `
+        <button type="button" class="m002-menu-item ${m.id === s.activeMapId ? 'active' : ''}" data-mapsel="${escAttr(m.id)}">
+          <span>${escSvg(m.name)}</span>
+          ${m.id === s.activeMapId ? '<span class="m002-menu-dot"></span>' : ''}
+        </button>`).join('')}
+    </div>
+    <div class="m002-menu-sep"></div>
+    <div class="m002-menu-section">
+      <button type="button" class="m002-menu-item" data-mapact="new">+ NEW MAP</button>
+      <button type="button" class="m002-menu-item" data-mapact="rename">RENAME CURRENT</button>
+      <button type="button" class="m002-menu-item danger" data-mapact="delete">DELETE CURRENT</button>
+    </div>
+    <div class="m002-menu-sep"></div>
+    <div class="m002-menu-section">
+      <button type="button" class="m002-menu-item" data-mapact="export">EXPORT JSON</button>
+      <button type="button" class="m002-menu-item" data-mapact="import">IMPORT JSON</button>
+    </div>
+  `;
+  s.mapMenuEl.querySelectorAll('[data-mapsel]').forEach((b) => {
+    b.addEventListener('click', () => { switchMap(s, b.dataset.mapsel); s.mapMenuEl.hidden = true; });
+  });
+  s.mapMenuEl.querySelectorAll('[data-mapact]').forEach((b) => {
+    b.addEventListener('click', () => {
+      s.mapMenuEl.hidden = true;
+      const act = b.dataset.mapact;
+      if (act === 'new') createMap(s);
+      else if (act === 'rename') renameCurrentMap(s);
+      else if (act === 'delete') deleteCurrentMap(s);
+      else if (act === 'export') exportMap(s);
+      else if (act === 'import') s.importInputEl.click();
+    });
+  });
+  s.mapMenuEl.hidden = false;
+}
+
+function switchMap(s, mapId) {
+  if (!mapId || mapId === s.activeMapId) return;
+  saveNow(s); // persist current map before switching
+  s.activeMapId = mapId;
+  loadMapData(s, mapId);
+  applyLayoutForLayer(s);
+  applyView(s);
+  render(s);
+  refreshMapBar(s);
+  refreshZoneBar(s);
+  saveMeta(s);
+}
+
+function createMap(s) {
+  const name = (prompt('New map name:', `Map ${s.maps.length + 1}`) || '').trim();
+  if (!name) return;
+  saveNow(s); // persist the current map before swapping it out
+  const id = 'map_' + rid();
+  s.maps.push({ id, name });
+  s.activeMapId = id;
+  hydrateMapData(s, {});
+  applyLayoutForLayer(s);
+  applyView(s);
+  render(s);
+  refreshMapBar(s);
+  refreshZoneBar(s);
+  saveNow(s);
+  toast(s, `Map "${name}" created`);
+}
+
+function renameCurrentMap(s) {
+  const m = s.maps.find((mm) => mm.id === s.activeMapId);
+  if (!m) return;
+  const name = (prompt('Rename map:', m.name) || '').trim();
+  if (!name) return;
+  m.name = name;
+  saveMeta(s);
+  refreshMapBar(s);
+}
+
+function deleteCurrentMap(s) {
+  if (s.maps.length <= 1) { toast(s, 'Cannot delete the last map'); return; }
+  const m = s.maps.find((mm) => mm.id === s.activeMapId);
+  if (!m) return;
+  if (!confirm(`Delete map "${m.name}"? This cannot be undone.`)) return;
+  localStorage.removeItem(mapKey(s.activeMapId));
+  s.maps = s.maps.filter((mm) => mm.id !== s.activeMapId);
+  s.activeMapId = s.maps[0].id;
+  loadMapData(s, s.activeMapId);
+  applyLayoutForLayer(s);
+  applyView(s);
+  render(s);
+  refreshMapBar(s);
+  refreshZoneBar(s);
+  saveMeta(s);
+}
+
+function exportMap(s) {
+  const m = s.maps.find((mm) => mm.id === s.activeMapId);
+  if (!m) return;
+  const payload = { ...snapshotMapData(s), name: m.name };
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${m.name.replace(/[^a-z0-9_-]+/gi, '_')}.netforge.json`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 500);
+}
+
+function importMapFromFile(s, file) {
+  const reader = new FileReader();
+  reader.onload = () => {
+    try {
+      const data = JSON.parse(reader.result);
+      const name = (data.name || file.name.replace(/\.json$/i, '')).slice(0, 60);
+      saveNow(s); // persist current before swap
+      const id = 'map_' + rid();
+      s.maps.push({ id, name });
+      s.activeMapId = id;
+      hydrateMapData(s, data);
+      applyLayoutForLayer(s);
+      applyView(s);
+      render(s);
+      refreshMapBar(s);
+      refreshZoneBar(s);
+      saveNow(s);
+      toast(s, `Imported "${name}"`);
+    } catch (e) {
+      console.warn('[m002] import failed', e);
+      toast(s, 'Import failed — invalid JSON');
+    }
+  };
+  reader.readAsText(file);
+}
+
+// =============================================================================
+// Zones
+// =============================================================================
+function refreshZoneBar(s) {
+  if (!s.zoneBarEl) return;
+  s.zoneBarEl.innerHTML = `
+    ${(s.zones || []).map((z) => `
+      <button type="button" class="m002-zone-pill ${z.id === s.activeZone ? 'active' : ''}" data-zone="${escAttr(z.id)}">${escSvg(z.name)}</button>
+    `).join('')}
+    <button type="button" class="m002-zone-add" data-act="new-zone" title="Add zone">+</button>
+  `;
+}
+
+function switchZone(s, zoneId) {
+  if (!zoneId || zoneId === s.activeZone) return;
+  s.activeZone = zoneId;
+  refreshZoneBar(s);
+  render(s);
+  schedSave(s);
+}
+
+function addZone(s) {
+  const name = (prompt('New zone name:', `Zone ${s.zones.length + 1}`) || '').trim();
+  if (!name) return;
+  const id = 'z_' + rid();
+  s.zones.push({ id, name });
+  s.activeZone = id;
+  refreshZoneBar(s);
+  render(s);
+  schedSave(s);
+}
+
+function zoneContextMenu(s, zoneId) {
+  const z = s.zones.find((zz) => zz.id === zoneId);
+  if (!z) return;
+  const action = prompt(`Zone "${z.name}":\n  r = rename\n  d = delete\nLeave empty to cancel.`);
+  if (!action) return;
+  if (action.toLowerCase().startsWith('r')) {
+    const name = (prompt('Rename zone:', z.name) || '').trim();
+    if (!name) return;
+    z.name = name;
+    refreshZoneBar(s);
+    schedSave(s);
+  } else if (action.toLowerCase().startsWith('d')) {
+    if (s.zones.length <= 1) { toast(s, 'Cannot delete the last zone'); return; }
+    if (!confirm(`Delete zone "${z.name}" and everything in it?`)) return;
+    snapshot(s);
+    s.devices = s.devices.filter((d) => d.zone !== zoneId);
+    s.stacks  = s.stacks.filter((st) => st.zone !== zoneId);
+    const liveIds = new Set(s.devices.map((d) => d.id));
+    s.links = s.links.filter((l) => liveIds.has(l.from) && liveIds.has(l.to));
+    s.zones = s.zones.filter((zz) => zz.id !== zoneId);
+    s.activeZone = s.zones[0].id;
+    refreshZoneBar(s);
+    render(s);
+    schedSave(s);
+  }
 }
 
 // Convert legacy schema → current. Idempotent.
 function migrate(s) {
   if (!Array.isArray(s.vlanRegistry)) s.vlanRegistry = [];
+  if (!Array.isArray(s.zones) || !s.zones.length) s.zones = [{ id: 'z_main', name: 'Main' }];
+  if (!s.activeZone || !s.zones.find((z) => z.id === s.activeZone)) s.activeZone = s.zones[0].id;
+  const validZoneIds = new Set(s.zones.map((z) => z.id));
+  const fallbackZone = s.zones[0].id;
   s.devices.forEach((d) => {
+    if (!d.zone || !validZoneIds.has(d.zone)) d.zone = fallbackZone;
     if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
     if (!Array.isArray(d.vlans)) d.vlans = [];
@@ -2099,7 +2425,8 @@ function migrate(s) {
     s.stacks.forEach((st) => {
       if (typeof st.expanded !== 'boolean') st.expanded = false;
       if (!Array.isArray(st.members)) st.members = [];
-      delete st.vlans; // stack VLANs are derived from members now
+      if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
+      delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
       ensureLayouts(st);
     });
@@ -2229,7 +2556,30 @@ const MOD002_CSS = `
 .m002-pal-dot{width:10px;height:10px;background:var(--accent);box-shadow:0 0 4px var(--accent),0 0 10px var(--accent);flex:0 0 auto;margin-left:4px;}
 .m002-pal-sep{height:1px;background:#1a1a22;margin:6px 0;}
 
-.m002-layerbar{position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);}
+.m002-topbar{position:absolute;top:24px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;}
+.m002-mapbar{position:relative;}
+.m002-map-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;backdrop-filter:blur(6px);}
+.m002-map-btn:hover{border-color:#ff003c;}
+.m002-map-label{color:#5a5f6e;}
+.m002-map-name{color:#e8e8ee;font-weight:600;}
+.m002-map-caret{color:#7a7f8e;}
+.m002-map-menu{position:absolute;top:calc(100% + 4px);left:50%;transform:translateX(-50%);background:rgba(10,10,16,0.95);border:1px solid #1a1a22;min-width:220px;backdrop-filter:blur(6px);z-index:200;}
+.m002-menu-section{display:flex;flex-direction:column;}
+.m002-menu-item{display:flex;justify-content:space-between;align-items:center;background:transparent;border:none;color:#e8e8ee;padding:8px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;text-align:left;}
+.m002-menu-item:hover{background:rgba(255,0,60,0.08);color:#ff003c;}
+.m002-menu-item.active{color:#ff003c;}
+.m002-menu-item.danger{color:#ff003c;}
+.m002-menu-dot{width:6px;height:6px;background:#ff003c;border-radius:50%;}
+.m002-menu-sep{height:1px;background:#1a1a22;}
+
+.m002-zonebar{display:flex;gap:4px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:4px;backdrop-filter:blur(6px);}
+.m002-zone-pill{background:transparent;border:1px solid transparent;color:#7a7f8e;padding:4px 10px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;}
+.m002-zone-pill:hover{color:#e8e8ee;}
+.m002-zone-pill.active{background:rgba(0,212,255,0.08);border-color:#00d4ff;color:#00d4ff;}
+.m002-zone-add{background:transparent;border:1px dashed #2a2a36;color:#7a7f8e;padding:4px 8px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:11px;line-height:1;}
+.m002-zone-add:hover{border-color:#00d4ff;color:#00d4ff;}
+
+.m002-layerbar{display:flex;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);}
 .m002-layer-pill{background:transparent;border:1px solid transparent;color:#9aa0a8;padding:6px 14px;cursor:pointer;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;}
 .m002-layer-pill:hover{color:#e8e8ee;}
 .m002-layer-pill.active{background:rgba(255,0,60,0.1);border-color:#ff003c;color:#ff003c;}
