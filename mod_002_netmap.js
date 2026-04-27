@@ -248,17 +248,21 @@ function vlanSort(a, b) {
 function renderLegend(s) {
   const body = s.host?.querySelector('.m002-vlan-legend-body');
   if (!body) return;
-  const chips = (s.vlanList && s.vlanList.length)
-    ? s.vlanList.map((v) => `
-        <span class="m002-vlan-legend-chip" style="--vc:${s.vlanColors.get(v)}">
-          <span class="m002-vlan-legend-dot"></span>
-          <span>VLAN ${escSvg(v)}</span>
-          <button type="button" class="m002-vlan-legend-rm" data-vrm="${escAttr(v)}" title="Remove VLAN globally">×</button>
-        </span>`).join('')
+  const list = s.vlanList || [];
+  const rows = list.length
+    ? `<div class="m002-vlan-legend-list">${list.map((v) => {
+        const entry = s.vlanRegistry.find((r) => String(r.id) === v) || { id: v, name: '' };
+        return `<div class="m002-vlan-row" style="--vc:${s.vlanColors.get(v)}">
+          <span class="m002-vlan-row-dot"></span>
+          <span class="m002-vlan-row-id">${escSvg(v)}</span>
+          <input class="m002-vlan-row-name" value="${escAttr(entry.name || '')}" placeholder="name" data-vname="${escAttr(v)}"/>
+          <button type="button" class="m002-vlan-row-rm" data-vrm="${escAttr(v)}" title="Remove VLAN globally">×</button>
+        </div>`;
+      }).join('')}</div>`
     : `<span class="m002-vlan-legend-empty">no VLANs declared yet</span>`;
 
   body.innerHTML = `
-    ${chips}
+    ${rows}
     <form class="m002-vlan-legend-add">
       <input class="m002-vlan-legend-input" placeholder="VLAN id (e.g. 10)" inputmode="numeric"/>
       <button type="submit" class="m002-vlan-legend-add-btn">+ ADD</button>
@@ -269,6 +273,14 @@ function renderLegend(s) {
       snapshot(s);
       vlanRegistryRemove(s, b.dataset.vrm);
       vlansChanged(s);
+      schedSave(s);
+    });
+  });
+  body.querySelectorAll('[data-vname]').forEach((inp) => {
+    inp.addEventListener('input', () => {
+      const entry = s.vlanRegistry.find((r) => String(r.id) === inp.dataset.vname);
+      if (!entry) return;
+      entry.name = inp.value;
       schedSave(s);
     });
   });
@@ -308,6 +320,7 @@ function mount(stage, ctx) {
   applyLayoutForLayer(state);
   applyView(state);
   render(state);
+  refreshMapBar(state);
   refreshZoneBar(state);
   showInspectorEmpty(state);
   refreshToolHighlights(state);
@@ -470,16 +483,18 @@ function buildDOM(s) {
         <span class="m002-stat-mode">SELECT</span>
       </div>
 
-      <aside class="m002-minimap" data-mm-state="open">
-        <div class="m002-minimap-head">
-          <span class="m002-minimap-title">100%</span>
-          <button type="button" class="m002-minimap-toggle" title="Hide / show map">▾</button>
-        </div>
-        <svg class="m002-minimap-svg" viewBox="0 0 160 110" preserveAspectRatio="xMidYMid meet"></svg>
-      </aside>
     </main>
 
     <aside class="m002-rightpanel m002-inspector">
+      <div class="m002-mapbar">
+        <button type="button" class="m002-map-btn" title="Maps">
+          <span class="m002-map-label">// MAP</span>
+          <span class="m002-map-name">—</span>
+          <span class="m002-map-caret">▾</span>
+        </button>
+        <div class="m002-map-menu" hidden></div>
+      </div>
+      <input type="file" class="m002-import-input" accept="application/json" hidden/>
       <div class="m002-insp-head">
         <span class="m002-insp-id">// INSPECT</span>
       </div>
@@ -525,6 +540,20 @@ function buildDOM(s) {
   // Legend body lives in the left panel; the picker calls still target the body
   s.legendEl = host.querySelector('.m002-vlan-legend-body')?.parentElement || null;
   s.zoneBarEl = host.querySelector('.m002-zonebar');
+  s.mapBtnEl = host.querySelector('.m002-map-btn');
+  s.mapMenuEl = host.querySelector('.m002-map-menu');
+  s.importInputEl = host.querySelector('.m002-import-input');
+  s.mapBtnEl.addEventListener('click', (e) => { e.stopPropagation(); toggleMapMenu(s); });
+  document.addEventListener('click', (e) => {
+    if (!s.mapMenuEl) return;
+    if (e.target.closest('.m002-mapbar')) return;
+    if (!s.mapMenuEl.hidden) s.mapMenuEl.hidden = true;
+  });
+  s.importInputEl.addEventListener('change', (e) => {
+    const file = e.target.files?.[0];
+    if (file) importMapFromFile(s, file);
+    e.target.value = '';
+  });
   s.zoneBarEl.addEventListener('click', (e) => {
     const pill = e.target.closest('[data-zone]');
     if (pill) { switchZone(s, pill.dataset.zone); return; }
@@ -536,20 +565,6 @@ function buildDOM(s) {
     e.preventDefault();
     zoneContextMenu(s, pill.dataset.zone);
   });
-  s.minimapEl = host.querySelector('.m002-minimap');
-  s.minimapSvg = host.querySelector('.m002-minimap-svg');
-  host.querySelector('.m002-minimap-toggle').addEventListener('click', () => {
-    const open = s.minimapEl.dataset.mmState !== 'closed';
-    s.minimapEl.dataset.mmState = open ? 'closed' : 'open';
-    s.minimapEl.querySelector('.m002-minimap-toggle').textContent = open ? '▴' : '▾';
-  });
-  s.minimapSvg.addEventListener('click', (e) => {
-    const r = s.minimapSvg.getBoundingClientRect();
-    const px = (e.clientX - r.left) / r.width;
-    const py = (e.clientY - r.top) / r.height;
-    centerMinimapAt(s, px, py);
-  });
-
   s.palette.addEventListener('click', (e) => {
     const spawn = e.target.closest('[data-spawn]');
     if (spawn) { spawnDevice(s, spawn.dataset.spawn); return; }
@@ -2599,7 +2614,8 @@ const MOD002_CSS = `
 
 .m002-layerbar-wrap{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:5;}
 .m002-zonebar-wrap{position:absolute;top:18px;right:18px;z-index:5;}
-.m002-map-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;backdrop-filter:blur(6px);}
+.m002-mapbar{position:relative;display:flex;border-bottom:1px solid #1a1a22;padding-bottom:8px;}
+.m002-map-btn{flex:1;display:inline-flex;align-items:center;justify-content:space-between;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:6px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;}
 .m002-map-btn:hover{border-color:#ff003c;}
 .m002-map-label{color:#5a5f6e;}
 .m002-map-name{color:#e8e8ee;font-weight:600;}
@@ -2737,7 +2753,18 @@ const MOD002_CSS = `
 
 .m002-vlan-legend{display:none;}
 .m002-vlan-legend-title{display:none;}
-.m002-vlan-legend-body{display:flex;flex-wrap:wrap;gap:6px;}
+.m002-vlan-legend-body{display:flex;flex-direction:column;gap:6px;}
+.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:220px;overflow-y:auto;padding-right:4px;}
+.m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;}
+.m002-vlan-row:hover{border-color:var(--vc);}
+.m002-vlan-row-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
+.m002-vlan-row-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--vc);letter-spacing:1px;}
+.m002-vlan-row-name{background:transparent;border:none;color:#e8e8ee;padding:1px 4px;font-family:'Rajdhani',sans-serif;font-size:12px;outline:none;min-width:0;}
+.m002-vlan-row-name:focus{background:rgba(255,255,255,0.04);}
+.m002-vlan-row-rm{background:transparent;border:none;color:#5a5f6e;cursor:pointer;font-size:13px;line-height:1;padding:0;}
+.m002-vlan-row-rm:hover{color:#ff003c;}
+.m002-vlan-legend-list::-webkit-scrollbar{width:6px;}
+.m002-vlan-legend-list::-webkit-scrollbar-thumb{background:#1a1a22;}
 .m002-vlan-legend-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
 .m002-vlan-legend-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
 .m002-vlan-legend-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
