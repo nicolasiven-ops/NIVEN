@@ -1501,11 +1501,15 @@ function markSelected(s) {
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   refreshMultiSelectClasses(s);
   if (!s.selected) return;
-  let sel;
-  if (s.selected.kind === 'device') sel = s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`);
-  else if (s.selected.kind === 'link') sel = s.gLinks.querySelector(`[data-link-id="${s.selected.id}"]`);
-  else if (s.selected.kind === 'stack') sel = s.gDevices.querySelector(`[data-stack-id="${s.selected.id}"]`);
-  sel?.classList.add('m002-selected');
+  if (s.selected.kind === 'device') {
+    s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`)?.classList.add('m002-selected');
+  } else if (s.selected.kind === 'link') {
+    s.gLinks.querySelector(`[data-link-id="${s.selected.id}"]`)?.classList.add('m002-selected');
+  } else if (s.selected.kind === 'stack') {
+    // Could be collapsed (icon in gDevices) or expanded (envelope in gStacksBg)
+    s.gDevices.querySelector(`[data-stack-id="${s.selected.id}"]`)?.classList.add('m002-selected');
+    s.gStacksBg.querySelector(`[data-stack-id="${s.selected.id}"]`)?.classList.add('m002-selected');
+  }
 }
 
 function renderInspectorVlanPickers(s) {
@@ -2202,6 +2206,8 @@ const MOD002_CSS = `
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
 .m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:#3a3a44;stroke-width:1;stroke-dasharray:5 4;}
+.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke:#ff003c;stroke-width:1.6;filter:drop-shadow(0 0 4px #ff003c) drop-shadow(0 0 12px rgba(255,0,60,0.55));}
+.m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#ff003c;}
 .m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:2 3;fill:none;opacity:.6;}
 
