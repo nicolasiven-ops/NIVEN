@@ -2206,8 +2206,8 @@ const MOD002_CSS = `
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
 .m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:#3a3a44;stroke-width:1;stroke-dasharray:5 4;}
-.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke:#ff003c;stroke-width:1.6;filter:drop-shadow(0 0 4px #ff003c) drop-shadow(0 0 12px rgba(255,0,60,0.55));}
-.m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#ff003c;}
+.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke:#9aa0a8;stroke-width:1.4;filter:drop-shadow(0 0 3px rgba(154,160,168,0.55)) drop-shadow(0 0 9px rgba(154,160,168,0.35));}
+.m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#9aa0a8;}
 .m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:2 3;fill:none;opacity:.6;}
 
