@@ -73,18 +73,29 @@ function vlanRegistryAdd(s, id, name) {
 function vlanRegistryRemove(s, id) {
   id = String(id);
   s.vlanRegistry = s.vlanRegistry.filter((v) => String(v.id) !== id);
-  s.devices.forEach((d) => { if (Array.isArray(d.vlans)) d.vlans = d.vlans.filter((x) => String(x) !== id); });
-  s.stacks.forEach((st) => { if (Array.isArray(st.vlans)) st.vlans = st.vlans.filter((x) => String(x) !== id); });
+  s.devices.forEach((d) => {
+    if (Array.isArray(d.vlans)) d.vlans = d.vlans.filter((x) => String(x) !== id);
+    (d.ports || []).forEach((p) => { if (Array.isArray(p.vlans)) p.vlans = p.vlans.filter((x) => String(x) !== id); });
+  });
 }
 
-// VLANs effectively configured on a device — if it's a member of a collapsed
-// stack, the stack's VLANs apply. Otherwise the device's own VLANs.
-function effectiveVlansFor(s, deviceId) {
+// VLANs available on a device (subset of registry).
+function deviceVlans(s, deviceId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  return Array.isArray(dev?.vlans) ? dev.vlans.map(String) : [];
+}
+// VLANs configured on a specific port (subset of device.vlans).
+function portVlans(s, deviceId, portN) {
   const dev = s.devices.find((d) => d.id === deviceId);
   if (!dev) return [];
-  const stack = findStack(s, deviceId);
-  if (stack && isStackCollapsed(s, stack)) return Array.isArray(stack.vlans) ? stack.vlans.map(String) : [];
-  return Array.isArray(dev.vlans) ? dev.vlans.map(String) : [];
+  const port = (dev.ports || []).find((p) => String(p.n) === String(portN));
+  return Array.isArray(port?.vlans) ? port.vlans.map(String) : [];
+}
+// Stack VLANs are derived: union of member device VLANs.
+function stackUnionVlans(s, stack) {
+  const set = new Set();
+  (stack.members || []).forEach((id) => deviceVlans(s, id).forEach((v) => set.add(v)));
+  return [...set];
 }
 
 // Call after any change that might add/remove a VLAN. Recomputes the spectrum,
@@ -97,35 +108,141 @@ function vlansChanged(s) {
   s.host?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
 }
 
-// VLAN picker — chip per registered VLAN; click toggles assignment on the
-// target device / stack. The container's data-vlan-target encodes the kind+id.
+// VLAN picker — chip per available VLAN; click toggles assignment.
+//
+// Targets (data-vlan-target):
+//   device:<id>          chips show all registered VLANs; toggle add/remove
+//                        from device.vlans (cascades remove from its ports).
+//   stack:<id>           bulk control over all member devices: chip "on"
+//                        means at least one member has it; toggle adds/removes
+//                        from every member.
+//   port:<devId>:<pN>    chips show only VLANs the device supports; toggle
+//                        add/remove on port.vlans.
+//   link:<linkId>        chips show only VLANs both endpoint devices support;
+//                        toggle add/remove on both port.vlans simultaneously.
 function renderVlanPicker(s, container) {
-  const [kind, id] = (container.dataset.vlanTarget || '').split(':');
-  const target = kind === 'stack'
-    ? findStackById(s, id)
-    : s.devices.find((d) => d.id === id);
-  if (!target) { container.innerHTML = ''; return; }
-  if (!Array.isArray(target.vlans)) target.vlans = [];
+  const parts = (container.dataset.vlanTarget || '').split(':');
+  const kind = parts[0];
+
+  // Resolve picker context
+  let scope = null; // { available: [vlanId,...], isOn: (v) => bool, toggle: (v, on) => void, emptyHint: string }
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === parts[1]);
+    if (!dev) { container.innerHTML = ''; return; }
+    if (!Array.isArray(dev.vlans)) dev.vlans = [];
+    scope = {
+      available: (s.vlanList || []),
+      isOn: (v) => dev.vlans.map(String).includes(v),
+      toggle: (v, on) => {
+        if (on) {
+          if (!dev.vlans.map(String).includes(v)) dev.vlans.push(v);
+        } else {
+          dev.vlans = dev.vlans.filter((x) => String(x) !== v);
+          // Cascade: drop from all of this device's ports as well
+          (dev.ports || []).forEach((p) => { p.vlans = (p.vlans || []).filter((x) => String(x) !== v); });
+        }
+      },
+      emptyHint: 'no VLANs declared — add them in the legend',
+    };
+  } else if (kind === 'stack') {
+    const st = findStackById(s, parts[1]);
+    if (!st) { container.innerHTML = ''; return; }
+    const memberDevs = () => (st.members || []).map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+    scope = {
+      available: (s.vlanList || []),
+      isOn: (v) => memberDevs().some((m) => (m.vlans || []).map(String).includes(v)),
+      toggle: (v, on) => {
+        memberDevs().forEach((m) => {
+          if (!Array.isArray(m.vlans)) m.vlans = [];
+          if (on) {
+            if (!m.vlans.map(String).includes(v)) m.vlans.push(v);
+          } else {
+            m.vlans = m.vlans.filter((x) => String(x) !== v);
+            (m.ports || []).forEach((p) => { p.vlans = (p.vlans || []).filter((x) => String(x) !== v); });
+          }
+        });
+      },
+      emptyHint: 'no VLANs declared — add them in the legend',
+    };
+  } else if (kind === 'port') {
+    const dev = s.devices.find((d) => d.id === parts[1]);
+    if (!dev) { container.innerHTML = ''; return; }
+    const port = (dev.ports || []).find((p) => String(p.n) === String(parts[2]));
+    if (!port) { container.innerHTML = ''; return; }
+    if (!Array.isArray(port.vlans)) port.vlans = [];
+    scope = {
+      available: (dev.vlans || []).map(String).sort(vlanSort),
+      isOn: (v) => port.vlans.map(String).includes(v),
+      toggle: (v, on) => {
+        if (on) {
+          if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
+        } else {
+          port.vlans = port.vlans.filter((x) => String(x) !== v);
+        }
+      },
+      emptyHint: 'device has no VLANs — assign them on the device first',
+    };
+  } else if (kind === 'link') {
+    const link = s.links.find((l) => l.id === parts[1]);
+    if (!link) { container.innerHTML = ''; return; }
+    if (!link.fromPort || !link.toPort) {
+      container.innerHTML = `<span class="m002-vlan-empty">assign From/To ports first</span>`;
+      return;
+    }
+    const aDev = s.devices.find((d) => d.id === link.from);
+    const bDev = s.devices.find((d) => d.id === link.to);
+    if (!aDev || !bDev) { container.innerHTML = ''; return; }
+    const aPort = (aDev.ports || []).find((p) => String(p.n) === String(link.fromPort));
+    const bPort = (bDev.ports || []).find((p) => String(p.n) === String(link.toPort));
+    const intersect = (aDev.vlans || []).map(String).filter((v) => (bDev.vlans || []).map(String).includes(v));
+    scope = {
+      available: intersect.sort(vlanSort),
+      isOn: (v) => (aPort?.vlans || []).map(String).includes(v) && (bPort?.vlans || []).map(String).includes(v),
+      toggle: (v, on) => {
+        [aPort, bPort].forEach((p) => {
+          if (!p) return;
+          if (!Array.isArray(p.vlans)) p.vlans = [];
+          if (on) { if (!p.vlans.map(String).includes(v)) p.vlans.push(v); }
+          else    { p.vlans = p.vlans.filter((x) => String(x) !== v); }
+        });
+      },
+      emptyHint: 'no VLAN is supported on both ends',
+    };
+  } else {
+    container.innerHTML = '';
+    return;
+  }
+
   if (!s.vlanRegistry.length) {
     container.innerHTML = `<span class="m002-vlan-empty">no VLANs declared — add them in the legend</span>`;
     return;
   }
-  const assigned = new Set(target.vlans.map(String));
-  container.innerHTML = (s.vlanList || []).map((v) => {
+  if (!scope.available.length) {
+    container.innerHTML = `<span class="m002-vlan-empty">${escSvg(scope.emptyHint)}</span>`;
+    return;
+  }
+
+  container.innerHTML = scope.available.map((v) => {
     const c = vlanColor(s, v);
-    const on = assigned.has(v);
+    const on = scope.isOn(v);
     return `<button type="button" class="m002-vlan-chip-btn ${on ? 'on' : ''}" data-vtoggle="${escAttr(v)}" style="--vc:${c}">VLAN ${escSvg(v)}</button>`;
   }).join('');
   container.querySelectorAll('[data-vtoggle]').forEach((b) => {
     b.addEventListener('click', () => {
       const v = b.dataset.vtoggle;
-      if (assigned.has(v)) target.vlans = target.vlans.filter((x) => String(x) !== v);
-      else target.vlans.push(v);
+      const on = scope.isOn(v);
       snapshot(s);
+      scope.toggle(v, !on);
       vlansChanged(s);
       schedSave(s);
     });
   });
+}
+
+function vlanSort(a, b) {
+  const na = parseInt(a, 10), nb = parseInt(b, 10);
+  if (Number.isFinite(na) && Number.isFinite(nb) && na !== nb) return na - nb;
+  return String(a).localeCompare(String(b));
 }
 
 function renderLegend(s) {
@@ -210,9 +327,9 @@ function createState(stage, ctx) {
     gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null,
     palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
 
-    devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], ports: [{n,name}] }
+    devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], lags:[{id,name,ports}], ports: [{n,name,vlans:[]}] }
     links: [],     // { id, from, to, fromPort, toPort }
-    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded, vlans:[] }
+    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded } — VLANs are derived from members
     vlanRegistry: [],  // [{ id: string, name?: string }] — declared VLANs in this network
     portModalOpen: null, // { deviceId, portN } or null
     selected: null,// { kind: 'device'|'link'|'stack', id }
@@ -335,6 +452,16 @@ function buildDOM(s) {
       </div>
     </aside>
 
+    <div class="m002-lag-modal" hidden>
+      <div class="m002-port-panel">
+        <div class="m002-port-modal-head">
+          <span class="m002-port-modal-id">// LAG</span>
+          <button type="button" class="m002-lag-modal-close" title="Close">×</button>
+        </div>
+        <div class="m002-lag-modal-body"></div>
+      </div>
+    </div>
+
     <div class="m002-port-modal" hidden>
       <div class="m002-port-panel">
         <div class="m002-port-modal-head">
@@ -403,6 +530,10 @@ function buildDOM(s) {
   const portModal = host.querySelector('.m002-port-modal');
   portModal.querySelector('.m002-port-modal-close')?.addEventListener('click', () => closePortModal(s));
   portModal.addEventListener('click', (e) => { if (e.target === portModal) closePortModal(s); });
+
+  const lagModal = host.querySelector('.m002-lag-modal');
+  lagModal.querySelector('.m002-lag-modal-close')?.addEventListener('click', () => closeLagModal(s));
+  lagModal.addEventListener('click', (e) => { if (e.target === lagModal) closeLagModal(s); });
 
   // Click empty board area → deselect
   s.svg.addEventListener('mousedown', (e) => {
@@ -757,6 +888,8 @@ function bindKeyboard(s) {
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
       if (s.selected) deleteSelected(s);
     } else if (e.key === 'Escape') {
+      const lagModal = s.host?.querySelector('.m002-lag-modal');
+      if (lagModal && !lagModal.hidden) { closeLagModal(s); return; }
       if (s.portModalOpen) closePortModal(s);
       else if (s.linkMode) toggleLinkMode(s);
       else if (s.stackMode) toggleStackMode(s);
@@ -784,6 +917,8 @@ function spawnDevice(s, typeId) {
     name: `${t.label}-${(s.devices.filter((d) => d.type === t.id).length + 1).toString().padStart(2, '0')}`,
     ip: '',
     notes: '',
+    vlans: [],
+    lags: [],
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
   ensureLayouts(dev);
@@ -1243,9 +1378,24 @@ function orthPath(a, b, off = 0) {
   };
 }
 
+// LAG bundle key for a link — null if it's not part of any LAG-pair.
+// Two links share the same key iff they connect the same {device, LAG} on each
+// side (independent of direction).
+function lagBundleKey(s, link) {
+  const a = s.devices.find((d) => d.id === link.from);
+  const b = s.devices.find((d) => d.id === link.to);
+  if (!a || !b) return null;
+  const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
+  const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
+  if (!lagA || !lagB) return null;
+  // Direction-independent key
+  const ends = [`${a.id}:${lagA.id}`, `${b.id}:${lagB.id}`].sort();
+  return ends.join('::');
+}
+
 function linkVlans(s, link) {
-  const va = new Set(effectiveVlansFor(s, link.from));
-  const vb = new Set(effectiveVlansFor(s, link.to));
+  const va = new Set(portVlans(s, link.from, link.fromPort));
+  const vb = new Set(portVlans(s, link.to,   link.toPort));
   return [...va].filter((v) => vb.has(v));
 }
 
@@ -1263,6 +1413,10 @@ function drawLink(s, link) {
   // physical w/ stack collapsed) — they would self-loop on the stack icon.
   const stackA = findStack(s, a.id), stackB = findStack(s, b.id);
   if (stackA && stackA === stackB && isStackCollapsed(s, stackA)) return;
+  // LAG bundling — if this link is absorbed into a bundle that another link
+  // represents, skip drawing it.
+  const bundleInfo = s._bundleByLink?.get(link.id);
+  if (bundleInfo?.absorbed) return;
   const aPos = effectivePos(s, a.id);
   const bPos = effectivePos(s, b.id);
   const layer = s.activeLayer;
@@ -1270,6 +1424,7 @@ function drawLink(s, link) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
+  if (bundleInfo?.members) g.classList.add('m002-link-bundle');
 
   let inner = `<path class="m002-link-hit" d="${base.d}"/>`;
 
@@ -1283,17 +1438,32 @@ function drawLink(s, link) {
         const off = (i - (vlans.length - 1) / 2) * gap;
         const p = orthPath(aPos, bPos, off);
         const c = vlanColor(s, v);
-        inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}"/>`;
+        const w = bundleInfo?.members ? 2.4 : 1.4;
+        inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}" stroke-width="${w}"/>`;
         inner += `<text class="m002-link-label" x="${p.lx}" y="${p.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
       });
     }
+    if (bundleInfo?.members) {
+      const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
+      const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
+      const lbl = `${lagA?.name || '?'} ⇄ ${lagB?.name || '?'} · ×${bundleInfo.members.length}`;
+      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
+    }
   } else if (layer === 'routing') {
-    // L3 placeholder — drawn dimmed; structure/edits coming later.
-    inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
+    if (bundleInfo?.members) {
+      const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
+      const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
+      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
+      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${lagA?.name || '?'} ⇄ ${lagB?.name || '?'} · ×${bundleInfo.members.length}`)}</text>`;
+    } else {
+      inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
+    }
   } else {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
-    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) : '';
-    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   : '';
+    const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
+    const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
+    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) + (lagA ? ` (${lagA.name})` : '') : '';
+    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   + (lagB ? ` (${lagB.name})` : '') : '';
     if (fromTxt) inner += `<text class="m002-link-label" x="${base.from.x}" y="${base.from.y}" fill="#9aa0a8" text-anchor="${base.from.anchor}">${escSvg(fromTxt)}</text>`;
     if (toTxt)   inner += `<text class="m002-link-label" x="${base.to.x}"   y="${base.to.y}"   fill="#9aa0a8" text-anchor="${base.to.anchor}">${escSvg(toTxt)}</text>`;
   }
@@ -1365,6 +1535,18 @@ function openInspector(s) {
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
       </div>
+      <div class="m002-field">
+        <span>LAGS (${(dev.lags || []).length})</span>
+        <div class="m002-lag-list">
+          ${(dev.lags || []).map((lag) => `
+            <div class="m002-lag-row" data-lag-row="${escAttr(lag.id)}">
+              <span class="m002-lag-name">${escSvg(lag.name)}</span>
+              <span class="m002-lag-members">ports: ${lag.ports.length ? lag.ports.join(', ') : '—'}</span>
+              <button type="button" class="m002-lag-rm" data-lag-rm="${escAttr(lag.id)}" title="Delete LAG">×</button>
+            </div>`).join('') || '<span class="m002-vlan-empty">no LAGs</span>'}
+        </div>
+        <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
+      </div>
       <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
         <div class="m002-ports-grid">
@@ -1405,6 +1587,22 @@ function openInspector(s) {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+    body.querySelector('[data-newlag]')?.addEventListener('click', () => openLagModal(s, dev.id));
+    body.querySelectorAll('[data-lag-rm]').forEach((b) => {
+      b.addEventListener('click', () => {
+        snapshot(s);
+        dev.lags = dev.lags.filter((l) => l.id !== b.dataset.lagRm);
+        schedSave(s);
+        render(s);
+        openInspector(s);
+      });
+    });
+    body.querySelectorAll('[data-lag-row]').forEach((row) => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('[data-lag-rm]')) return;
+        openLagModal(s, dev.id, row.dataset.lagRow);
+      });
+    });
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
@@ -1426,7 +1624,11 @@ function openInspector(s) {
           <select data-f="toPort"><option value="">—</option>${(b?.ports || []).map((p) => `<option value="${p.n}" ${String(link.toPort) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
         </label>
       </div>
-      <p class="m002-link-hint">VLANs werden über die Ports an beiden Enden definiert. Klick im Device-Inspector auf eine Portzeile.</p>
+      <div class="m002-field">
+        <span>VLANS (port-pair)</span>
+        <div class="m002-vlan-picker" data-vlan-target="link:${escAttr(link.id)}"></div>
+      </div>
+      <p class="m002-link-hint">Aktivierte VLANs werden auf beide Ports gesetzt. Es erscheinen nur VLANs, die auf beiden Devices verfügbar sind.</p>
       <button type="button" class="m002-insp-del" data-del>DELETE LINK</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
@@ -1434,6 +1636,7 @@ function openInspector(s) {
       el.addEventListener('change', () => updateLinkField(s, link, el));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+    renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'stack') {
     const stack = findStackById(s, s.selected.id);
     if (!stack) return;
@@ -1584,6 +1787,10 @@ function openPortModal(s, deviceId, portN) {
   );
   const cp = counterpartFor(s, deviceId, portN);
 
+  // Find which LAG (if any) this port belongs to
+  const portLag = (dev.lags || []).find((lag) => lag.ports.includes(portN));
+  const otherLags = (dev.lags || []).filter((lag) => lag !== portLag && !lag.ports.includes(portN));
+
   body.innerHTML = `
     <label class="m002-field"><span>PORT NAME</span>
       <input class="m002-pmodal-name" value="${escAttr(port.name)}" placeholder="e.g. GE0/0/1"/>
@@ -1592,12 +1799,46 @@ function openPortModal(s, deviceId, portN) {
       <span>COUNTERPART</span>
       <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '— not connected —')}</div>
     </div>
-    <p class="m002-link-hint">VLANs werden auf dem Gerät / Stack verwaltet (Inspector → VLAN-Chips). Diese Liste wird in der Legende gepflegt.</p>
+    <div class="m002-field">
+      <span>VLANS (port)</span>
+      <div class="m002-vlan-picker" data-vlan-target="port:${escAttr(deviceId)}:${portN}"></div>
+    </div>
+    <div class="m002-field">
+      <span>LAG</span>
+      <div class="m002-port-lag-row">
+        ${portLag ? `<span class="m002-vlan-chip-btn on" style="--vc:#ff003c">${escSvg(portLag.name)}</span><button type="button" class="m002-action" data-pact="lag-remove">REMOVE</button>` : ''}
+        ${otherLags.length ? `<select class="m002-port-lag-select"><option value="">— assign to LAG —</option>${otherLags.map((l) => `<option value="${escAttr(l.id)}">${escSvg(l.name)}</option>`).join('')}</select>` : (!portLag ? `<span class="m002-vlan-empty">no LAGs on this device — create one in the inspector</span>` : '')}
+      </div>
+    </div>
     <div class="m002-port-actions">
       ${link ? `<button type="button" class="m002-action" data-pact="unlink">DISCONNECT LINK</button>` : ''}
       <button type="button" class="m002-action danger" data-pact="delete">DELETE PORT</button>
     </div>
   `;
+  renderInspectorVlanPickers(s); // also covers the port-modal's picker (it's a .m002-vlan-picker too — but inside the modal, not inspector). Re-call directly:
+  body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
+
+  // LAG wiring
+  body.querySelector('[data-pact="lag-remove"]')?.addEventListener('click', () => {
+    snapshot(s);
+    portLag.ports = portLag.ports.filter((n) => n !== portN);
+    if (portLag.ports.length === 0) dev.lags = dev.lags.filter((l) => l !== portLag);
+    schedSave(s);
+    render(s);
+    openPortModal(s, deviceId, portN);
+  });
+  body.querySelector('.m002-port-lag-select')?.addEventListener('change', (e) => {
+    const lagId = e.target.value;
+    if (!lagId) return;
+    const lag = (dev.lags || []).find((l) => l.id === lagId);
+    if (!lag) return;
+    snapshot(s);
+    if (portLag) portLag.ports = portLag.ports.filter((n) => n !== portN);
+    if (!lag.ports.includes(portN)) lag.ports.push(portN);
+    schedSave(s);
+    render(s);
+    openPortModal(s, deviceId, portN);
+  });
 
   body.querySelector('.m002-pmodal-name').addEventListener('input', (e) => {
     port.name = e.target.value;
@@ -1623,6 +1864,79 @@ function openPortModal(s, deviceId, portN) {
 
   modal.hidden = false;
   setTimeout(() => body.querySelector('.m002-pmodal-name')?.focus(), 30);
+}
+
+function openLagModal(s, deviceId, lagId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  if (!Array.isArray(dev.lags)) dev.lags = [];
+  const editing = lagId ? dev.lags.find((l) => l.id === lagId) : null;
+  const initialName = editing ? editing.name : `Po${dev.lags.length + 1}`;
+  const initialPorts = new Set((editing ? editing.ports : []).map(Number));
+  // Free ports = all ports not in another LAG
+  const otherLagPorts = new Set();
+  dev.lags.forEach((l) => { if (l !== editing) l.ports.forEach((n) => otherLagPorts.add(Number(n))); });
+
+  const modal = s.host.querySelector('.m002-lag-modal');
+  const idEl = modal.querySelector('.m002-port-modal-id');
+  const body = modal.querySelector('.m002-lag-modal-body');
+  idEl.textContent = `// ${dev.name} · ${editing ? 'EDIT LAG' : 'NEW LAG'}`;
+
+  body.innerHTML = `
+    <label class="m002-field"><span>NAME</span>
+      <input class="m002-lagm-name" value="${escAttr(initialName)}" placeholder="e.g. Po1, LAG-CORE"/>
+    </label>
+    <div class="m002-field">
+      <span>MEMBER PORTS (${dev.ports.length})</span>
+      <div class="m002-lagm-ports">
+        ${dev.ports.map((p) => {
+          const inUse = otherLagPorts.has(p.n);
+          const checked = initialPorts.has(p.n);
+          return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
+            <input type="checkbox" data-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
+            <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
+          </label>`;
+        }).join('')}
+      </div>
+    </div>
+    <div class="m002-port-actions">
+      ${editing ? `<button type="button" class="m002-action danger" data-lact="delete">DELETE LAG</button>` : ''}
+      <button type="button" class="m002-action" data-lact="save">${editing ? 'SAVE' : 'CREATE'}</button>
+    </div>
+  `;
+  modal.hidden = false;
+  setTimeout(() => body.querySelector('.m002-lagm-name')?.focus(), 30);
+
+  body.querySelector('[data-lact="save"]')?.addEventListener('click', () => {
+    const name = (body.querySelector('.m002-lagm-name').value || '').trim();
+    const ports = [...body.querySelectorAll('input[type=checkbox]:checked')].map((c) => Number(c.dataset.port));
+    if (!name) { toast(s, 'LAG needs a name'); return; }
+    if (ports.length < 2) { toast(s, 'LAG needs at least 2 ports'); return; }
+    snapshot(s);
+    if (editing) {
+      editing.name = name;
+      editing.ports = ports;
+    } else {
+      dev.lags.push({ id: 'lag_' + rid(), name, ports });
+    }
+    closeLagModal(s);
+    schedSave(s);
+    render(s);
+    openInspector(s);
+  });
+  body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
+    snapshot(s);
+    dev.lags = dev.lags.filter((l) => l.id !== editing.id);
+    closeLagModal(s);
+    schedSave(s);
+    render(s);
+    openInspector(s);
+  });
+}
+
+function closeLagModal(s) {
+  const modal = s.host?.querySelector('.m002-lag-modal');
+  if (modal) modal.hidden = true;
 }
 
 function closePortModal(s) {
@@ -1664,8 +1978,28 @@ function render(s) {
   // Stack envelopes (only when expanded in physical layer)
   s.stacks.forEach((st) => { if (!isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
 
-  // Links — drawLink itself filters intra-stack collapsed.
+  // Compute LAG bundles (only in logical layers). Per render pass we mark
+  // which links are absorbed into a bundle so we don't render them twice.
+  const bundleByLink = new Map();
+  if (s.activeLayer !== 'physical') {
+    const groups = new Map(); // key → [link...]
+    s.links.forEach((l) => {
+      const key = lagBundleKey(s, l);
+      if (!key) return;
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key).push(l);
+    });
+    groups.forEach((linksInGroup, key) => {
+      if (linksInGroup.length < 1) return;
+      const rep = linksInGroup[0];
+      bundleByLink.set(rep.id, { key, members: linksInGroup });
+      // Members other than rep get marked as "absorbed"
+      linksInGroup.slice(1).forEach((l) => bundleByLink.set(l.id, { absorbed: true }));
+    });
+  }
+  s._bundleByLink = bundleByLink;
   s.links.forEach((l) => drawLink(s, l));
+  s._bundleByLink = null;
 
   // Members of collapsed stacks are not drawn as individual devices.
   const hidden = new Set();
@@ -1724,18 +2058,32 @@ function migrate(s) {
     if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
     if (!Array.isArray(d.vlans)) d.vlans = [];
+    if (!Array.isArray(d.lags))  d.lags  = [];
     ensureLayouts(d);
-    // Roll any legacy per-port VLAN assignments up to device level + register.
     d.ports.forEach((p) => {
-      const portVlans = Array.isArray(p.vlans) ? p.vlans
-        : (p.vlan != null && p.vlan !== '') ? [String(p.vlan)] : [];
-      portVlans.forEach((v) => {
-        const id = String(v);
-        if (!d.vlans.map(String).includes(id)) d.vlans.push(id);
-        vlanRegistryAdd(s, id);
+      // Restore per-port VLAN list. Old shape `p.vlan` (single string) → array.
+      if (!Array.isArray(p.vlans)) {
+        p.vlans = (p.vlan != null && p.vlan !== '') ? [String(p.vlan)] : [];
+      }
+      // Make sure each port-VLAN exists at device level + registry.
+      p.vlans = p.vlans.map(String);
+      p.vlans.forEach((v) => {
+        if (!d.vlans.map(String).includes(v)) d.vlans.push(v);
+        vlanRegistryAdd(s, v);
       });
-      delete p.vlan; delete p.vlans;
+      delete p.vlan;
     });
+    // Constrain port.vlans to device.vlans, device.vlans to registry
+    const regSet = new Set(s.vlanRegistry.map((r) => String(r.id)));
+    d.vlans = d.vlans.map(String).filter((v) => regSet.has(v));
+    const devSet = new Set(d.vlans);
+    d.ports.forEach((p) => { p.vlans = p.vlans.filter((v) => devSet.has(v)); });
+    // Sanity-check lags
+    d.lags.forEach((lag) => {
+      if (!Array.isArray(lag.ports)) lag.ports = [];
+      lag.ports = lag.ports.map(Number).filter((n) => d.ports.some((p) => p.n === n));
+    });
+    d.lags = d.lags.filter((lag) => lag.ports.length > 0);
   });
   s.links.forEach((l) => {
     delete l.vlan;
@@ -1747,7 +2095,7 @@ function migrate(s) {
     s.stacks.forEach((st) => {
       if (typeof st.expanded !== 'boolean') st.expanded = false;
       if (!Array.isArray(st.members)) st.members = [];
-      if (!Array.isArray(st.vlans)) st.vlans = [];
+      delete st.vlans; // stack VLANs are derived from members now
       st.members = st.members.filter((m) => live.has(m));
       ensureLayouts(st);
     });
@@ -1949,6 +2297,26 @@ const MOD002_CSS = `
   from{filter:drop-shadow(0 0 5px #ff003c) drop-shadow(0 0 14px #ff003c);}
   to  {filter:drop-shadow(0 0 12px #ff003c) drop-shadow(0 0 30px #ff003c);}
 }
+
+.m002-lag-list{display:flex;flex-direction:column;gap:4px;}
+.m002-lag-row{display:grid;grid-template-columns:auto 1fr 24px;gap:6px;align-items:center;padding:4px 8px;background:#06060a;border:1px solid #1a1a22;cursor:pointer;}
+.m002-lag-row:hover{border-color:#ff003c;background:rgba(255,0,60,0.06);}
+.m002-lag-name{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;letter-spacing:1px;}
+.m002-lag-members{font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;}
+.m002-lag-rm{background:transparent;border:none;color:#7a7f8e;cursor:pointer;font-size:14px;line-height:1;padding:0;}
+.m002-lag-rm:hover{color:#ff003c;}
+.m002-lag-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
+.m002-lag-modal-body{display:flex;flex-direction:column;gap:10px;}
+.m002-lagm-ports{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
+.m002-lagm-port{display:flex;align-items:center;gap:8px;font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;cursor:pointer;padding:3px 6px;border:1px solid transparent;}
+.m002-lagm-port:hover{background:rgba(255,0,60,0.05);border-color:#1a1a22;}
+.m002-lagm-port.disabled{opacity:.4;cursor:not-allowed;}
+.m002-lag-modal-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
+.m002-lag-modal-close:hover{color:#ff003c;}
+.m002-port-lag-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
+.m002-port-lag-select{flex:1;background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
+.m002-link-bundle-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;font-weight:600;}
+.m002-link-bundle .m002-link-hit{stroke-width:18;}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
 .m002-vlan-chip-btn:hover{border-color:var(--vc);color:var(--vc);}
