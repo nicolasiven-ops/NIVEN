@@ -3071,7 +3071,7 @@ const MOD002_CSS = `
 .m002-vlan-legend{display:none;}
 .m002-vlan-legend-title{display:none;}
 .m002-vlan-legend-body{display:flex;flex-direction:column;gap:6px;}
-.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:440px;overflow-y:auto;padding-right:4px;}
+.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:300px;overflow-y:auto;padding-right:4px;}
 .m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;}
 .m002-vlan-row:hover{border-color:var(--vc);}
 .m002-vlan-row-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
