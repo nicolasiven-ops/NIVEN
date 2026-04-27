@@ -226,6 +226,7 @@ function createState(stage, ctx) {
     spawnIdx: 0,
 
     drag: null,
+    dragStackTarget: null, // "device:ID" or "stack:ID" — drop-target while dragging a device
     saveTimer: null,
     cleanups: [],
     undoStack: [],     // last N snapshots (JSON strings) of mutable state
@@ -524,6 +525,44 @@ function bindBoard(s) {
       updateLinksFor(s, dev.id);
       const stk = findStack(s, dev.id);
       if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
+
+      // Drag-to-stack: highlight nearest valid merge candidate.
+      // Skip when this device sits inside a stack (drag-to-merge across stacks
+      // is too ambiguous for the prototype) or when shift is held.
+      if (!e.shiftKey && !findStack(s, dev.id)) {
+        const STACK_MERGE_THRESH = 70;
+        let target = null;
+        for (const d of s.devices) {
+          if (d.id === dev.id) continue;
+          if (findStack(s, d.id)) continue;
+          if (Math.hypot(dev.x - d.x, dev.y - d.y) < STACK_MERGE_THRESH) { target = { kind: 'device', id: d.id }; break; }
+        }
+        if (!target) {
+          for (const st2 of s.stacks) {
+            if (!isStackCollapsed(s, st2)) continue;
+            if (st2.members.includes(dev.id)) continue;
+            if (Math.hypot(dev.x - st2.x, dev.y - st2.y) < STACK_MERGE_THRESH) { target = { kind: 'stack', id: st2.id }; break; }
+          }
+        }
+        const newKey = target ? `${target.kind}:${target.id}` : null;
+        if (newKey !== s.dragStackTarget) {
+          if (s.dragStackTarget) {
+            const [ok, oid] = s.dragStackTarget.split(':');
+            const oel = ok === 'stack'
+              ? s.gDevices.querySelector(`[data-stack-id="${oid}"]`)
+              : s.gDevices.querySelector(`[data-device-id="${oid}"]`);
+            oel?.classList.remove('m002-drag-stack-target');
+          }
+          s.dragStackTarget = newKey;
+          if (newKey) {
+            const [nk, nid] = newKey.split(':');
+            const nel = nk === 'stack'
+              ? s.gDevices.querySelector(`[data-stack-id="${nid}"]`)
+              : s.gDevices.querySelector(`[data-device-id="${nid}"]`);
+            nel?.classList.add('m002-drag-stack-target');
+          }
+        }
+      }
     } else if (s.drag.kind === 'stack') {
       const w = clientToWorld(s, e.clientX, e.clientY);
       const st = findStackById(s, s.drag.id);
@@ -556,6 +595,35 @@ function bindBoard(s) {
     }
   };
   const onUp = () => {
+    // Drop-to-stack: a device was dragged onto another device or stack.
+    if (s.drag?.kind === 'device' && s.dragStackTarget) {
+      const [tk, tid] = s.dragStackTarget.split(':');
+      const tel = tk === 'stack'
+        ? s.gDevices.querySelector(`[data-stack-id="${tid}"]`)
+        : s.gDevices.querySelector(`[data-device-id="${tid}"]`);
+      tel?.classList.remove('m002-drag-stack-target');
+      const dragId = s.drag.id;
+      s.dragStackTarget = null;
+      s.drag = null;
+      svg.style.cursor = '';
+      if (tk === 'stack') {
+        addToStack(s, tid, dragId);
+      } else {
+        // Two standalone devices — make a fresh stack.
+        createStack(s, [dragId, tid]);
+      }
+      return;
+    }
+    // Cleanup any lingering target highlight (e.g. drag started but didn't
+    // land on a candidate).
+    if (s.dragStackTarget) {
+      const [tk, tid] = s.dragStackTarget.split(':');
+      const tel = tk === 'stack'
+        ? s.gDevices.querySelector(`[data-stack-id="${tid}"]`)
+        : s.gDevices.querySelector(`[data-device-id="${tid}"]`);
+      tel?.classList.remove('m002-drag-stack-target');
+      s.dragStackTarget = null;
+    }
     if (s.drag) {
       svg.style.cursor = '';
       if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
@@ -1874,6 +1942,13 @@ const MOD002_CSS = `
 
 .m002-multi-selected .m002-dev-bg{stroke-width:2;stroke-dasharray:3 3;}
 .m002-multi-selected.m002-stack-collapsed .m002-dev-bg{stroke-dasharray:3 3;}
+
+/* Drag-to-stack: pulse the merge target while a device hovers over it */
+.m002-drag-stack-target{animation:m002-merge-pulse .5s ease-in-out infinite alternate!important;}
+@keyframes m002-merge-pulse{
+  from{filter:drop-shadow(0 0 5px #ff003c) drop-shadow(0 0 14px #ff003c);}
+  to  {filter:drop-shadow(0 0 12px #ff003c) drop-shadow(0 0 30px #ff003c);}
+}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
 .m002-vlan-chip-btn:hover{border-color:var(--vc);color:var(--vc);}
