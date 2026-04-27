@@ -182,6 +182,37 @@ function renderVlanPicker(s, container) {
       },
       emptyHint: 'device has no VLANs — assign them on the device first',
     };
+  } else if (kind === 'lag') {
+    const dev = s.devices.find((d) => d.id === parts[1]);
+    if (!dev) { container.innerHTML = ''; return; }
+    const lag = (dev.lags || []).find((l) => l.id === parts[2]);
+    if (!lag) { container.innerHTML = ''; return; }
+    if (!Array.isArray(lag.vlans)) lag.vlans = [];
+    scope = {
+      // LAG VLANs are constrained to the device's VLAN set
+      available: (dev.vlans || []).map(String).sort(vlanSort),
+      isOn: (v) => lag.vlans.map(String).includes(v),
+      toggle: (v, on) => {
+        if (on) {
+          if (!lag.vlans.map(String).includes(v)) lag.vlans.push(v);
+          // Push to all member ports
+          (lag.ports || []).forEach((pn) => {
+            const port = (dev.ports || []).find((p) => p.n === pn);
+            if (!port) return;
+            if (!Array.isArray(port.vlans)) port.vlans = [];
+            if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
+          });
+        } else {
+          lag.vlans = lag.vlans.filter((x) => String(x) !== v);
+          (lag.ports || []).forEach((pn) => {
+            const port = (dev.ports || []).find((p) => p.n === pn);
+            if (!port) return;
+            port.vlans = (port.vlans || []).filter((x) => String(x) !== v);
+          });
+        }
+      },
+      emptyHint: 'device has no VLANs — assign them on the device first',
+    };
   } else if (kind === 'link') {
     const link = s.links.find((l) => l.id === parts[1]);
     if (!link) { container.innerHTML = ''; return; }
@@ -1447,18 +1478,67 @@ function orthPath(a, b, off = 0) {
   };
 }
 
+// What does this LAG connect to? Walks each member port's existing link and
+// summarizes the most common destination as { device, lag?, portCount }.
+function lagCounterpart(s, deviceId, lag) {
+  const counts = new Map(); // key (otherDeviceId|otherLagId?) → { dev, lag, count }
+  for (const portN of (lag.ports || [])) {
+    const link = s.links.find((l) =>
+      (l.from === deviceId && Number(l.fromPort) === Number(portN)) ||
+      (l.to   === deviceId && Number(l.toPort)   === Number(portN))
+    );
+    if (!link) continue;
+    const otherId = link.from === deviceId ? link.to : link.from;
+    const otherPort = Number(link.from === deviceId ? link.toPort : link.fromPort);
+    const otherDev = s.devices.find((d) => d.id === otherId);
+    if (!otherDev) continue;
+    const otherLag = (otherDev.lags || []).find((ll) => (ll.ports || []).map(Number).includes(otherPort));
+    const key = otherId + (otherLag ? '|' + otherLag.id : '');
+    if (!counts.has(key)) counts.set(key, { dev: otherDev, lag: otherLag, count: 0 });
+    counts.get(key).count++;
+  }
+  if (counts.size === 0) return null;
+  const top = [...counts.values()].sort((a, b) => b.count - a.count)[0];
+  return top;
+}
+
 // LAG bundle key for a link — null if it's not part of any LAG-pair.
 // Two links share the same key iff they connect the same {device, LAG} on each
 // side (independent of direction).
+// SVG fragment that decorates a bundled LAG link with ring markers — small
+// circles at the two endpoints (just past each device edge) and at the bend.
+function lagRingsHTML(base, aPos, bPos) {
+  // Endpoint markers: take the start/end of the path's first / last segments
+  // which are ex1, ex2 in H-V-H or analog points in V-H-V.
+  // We can simply parse base.d, but easier: reuse aPos/bPos and offset toward each other.
+  const dx = bPos.x - aPos.x, dy = bPos.y - aPos.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len, uy = dy / len;
+  const r = 4;
+  // Place rings just outside each device's edge (DEVICE_W/2 from center)
+  const aRX = aPos.x + ux * (DEVICE_W / 2 + 2);
+  const aRY = aPos.y + uy * (DEVICE_H / 2 + 2);
+  const bRX = bPos.x - ux * (DEVICE_W / 2 + 2);
+  const bRY = bPos.y - uy * (DEVICE_H / 2 + 2);
+  return `
+    <circle class="m002-lag-ring" cx="${aRX}" cy="${aRY}" r="${r}"/>
+    <circle class="m002-lag-ring" cx="${bRX}" cy="${bRY}" r="${r}"/>
+    <circle class="m002-lag-ring" cx="${base.lx}" cy="${base.ly}" r="${r + 1}"/>
+  `;
+}
+
 function lagBundleKey(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return null;
   const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
   const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
-  if (!lagA || !lagB) return null;
-  // Direction-independent key
-  const ends = [`${a.id}:${lagA.id}`, `${b.id}:${lagB.id}`].sort();
+  if (!lagA && !lagB) return null;
+  // Direction-independent key. Single-sided LAG is allowed — bundles links
+  // that share the same {LAG, peer device} pairing.
+  const aSide = lagA ? `${a.id}:${lagA.id}` : `${a.id}:_`;
+  const bSide = lagB ? `${b.id}:${lagB.id}` : `${b.id}:_`;
+  const ends = [aSide, bSide].sort();
   return ends.join('::');
 }
 
@@ -1515,15 +1595,22 @@ function drawLink(s, link) {
     if (bundleInfo?.members) {
       const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
       const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
-      const lbl = `${lagA?.name || '?'} ⇄ ${lagB?.name || '?'} · ×${bundleInfo.members.length}`;
+      const aLbl = lagA?.name || '?';
+      const bLbl = lagB?.name || '?';
+      const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
+      // LAG-style rings — circles at each end + midpoint
+      inner += lagRingsHTML(base, aPos, bPos);
     }
   } else if (layer === 'routing') {
     if (bundleInfo?.members) {
       const lagA = (a.lags || []).find((l) => l.ports.map(Number).includes(Number(link.fromPort)));
       const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
-      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
-      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${lagA?.name || '?'} ⇄ ${lagB?.name || '?'} · ×${bundleInfo.members.length}`)}</text>`;
+      const aLbl = lagA?.name || '?';
+      const bLbl = lagB?.name || '?';
+      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.8"/>`;
+      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`)}</text>`;
+      inner += lagRingsHTML(base, aPos, bPos);
     } else {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
     }
@@ -1631,15 +1718,24 @@ function openInspector(s) {
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
       </div>
-      <div class="m002-field">
-        <span>LAGS (${(dev.lags || []).length})</span>
-        <div class="m002-lag-list">
-          ${(dev.lags || []).map((lag) => `
-            <div class="m002-lag-row" data-lag-row="${escAttr(lag.id)}">
-              <span class="m002-lag-name">${escSvg(lag.name)}</span>
-              <span class="m002-lag-members">ports: ${lag.ports.length ? lag.ports.join(', ') : '—'}</span>
-              <button type="button" class="m002-lag-rm" data-lag-rm="${escAttr(lag.id)}" title="Delete LAG">×</button>
-            </div>`).join('') || '<span class="m002-vlan-empty">no LAGs</span>'}
+      <div class="m002-ports-block">
+        <div class="m002-ports-head">LAGS (${(dev.lags || []).length})</div>
+        <div class="m002-ports-grid">
+          <div class="m002-lagtable-head">
+            <span>NAME</span><span>PORTS</span><span>COUNTERPART</span>
+          </div>
+          ${(dev.lags || []).map((lag) => {
+            const cp = lagCounterpart(s, dev.id, lag);
+            const cpTxt = cp
+              ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`)
+              : '—';
+            return `
+            <div class="m002-lagtable-row" data-lag-row="${escAttr(lag.id)}" tabindex="0">
+              <span class="m002-lagtable-name">${escSvg(lag.name)}</span>
+              <span class="m002-lagtable-ports">${lag.ports.join(', ') || '—'}</span>
+              <span class="m002-lagtable-cp ${cp ? '' : 'dim'}" title="${escAttr(cpTxt)}">${escSvg(cpTxt)}</span>
+            </div>`;
+          }).join('') || '<span class="m002-vlan-empty">no LAGs</span>'}
         </div>
         <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
       </div>
@@ -1978,6 +2074,9 @@ function openLagModal(s, deviceId, lagId) {
   const body = modal.querySelector('.m002-lag-modal-body');
   idEl.textContent = `// ${dev.name} · ${editing ? 'EDIT LAG' : 'NEW LAG'}`;
 
+  const cp = editing ? lagCounterpart(s, deviceId, editing) : null;
+  const cpTxt = cp ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`) : '— not connected —';
+
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span>
       <input class="m002-lagm-name" value="${escAttr(initialName)}" placeholder="e.g. Po1, LAG-CORE"/>
@@ -1995,11 +2094,23 @@ function openLagModal(s, deviceId, lagId) {
         }).join('')}
       </div>
     </div>
+    ${editing ? `
+      <div class="m002-field">
+        <span>COUNTERPART</span>
+        <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)}</div>
+      </div>
+      <div class="m002-field">
+        <span>VLANS</span>
+        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(deviceId)}:${escAttr(editing.id)}"></div>
+      </div>
+    ` : ''}
     <div class="m002-port-actions">
       ${editing ? `<button type="button" class="m002-action danger" data-lact="delete">DELETE LAG</button>` : ''}
       <button type="button" class="m002-action" data-lact="save">${editing ? 'SAVE' : 'CREATE'}</button>
     </div>
   `;
+  // VLAN picker is a `lag:<deviceId>:<lagId>` target — wire up via existing helper
+  body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
   modal.hidden = false;
   setTimeout(() => body.querySelector('.m002-lagm-name')?.focus(), 30);
 
@@ -2455,6 +2566,7 @@ function migrate(s) {
     // Sanity-check lags
     d.lags.forEach((lag) => {
       if (!Array.isArray(lag.ports)) lag.ports = [];
+      if (!Array.isArray(lag.vlans)) lag.vlans = [];
       lag.ports = lag.ports.map(Number).filter((n) => d.ports.some((p) => p.n === n));
     });
     d.lags = d.lags.filter((lag) => lag.ports.length > 0);
@@ -2711,13 +2823,16 @@ const MOD002_CSS = `
   to  {filter:drop-shadow(0 0 12px #ff003c) drop-shadow(0 0 30px #ff003c);}
 }
 
-.m002-lag-list{display:flex;flex-direction:column;gap:4px;}
-.m002-lag-row{display:grid;grid-template-columns:auto 1fr 24px;gap:6px;align-items:center;padding:4px 8px;background:#06060a;border:1px solid #1a1a22;cursor:pointer;}
-.m002-lag-row:hover{border-color:#ff003c;background:rgba(255,0,60,0.06);}
-.m002-lag-name{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;letter-spacing:1px;}
-.m002-lag-members{font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;}
-.m002-lag-rm{background:transparent;border:none;color:#7a7f8e;cursor:pointer;font-size:14px;line-height:1;padding:0;}
-.m002-lag-rm:hover{color:#ff003c;}
+.m002-lagtable-head{display:grid;grid-template-columns:60px 50px 1fr;gap:6px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 4px;}
+.m002-lagtable-row{display:grid;grid-template-columns:60px 50px 1fr;gap:6px;align-items:center;cursor:pointer;padding:3px 4px;border:1px solid transparent;border-radius:2px;}
+.m002-lagtable-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
+.m002-lagtable-name{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;letter-spacing:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.m002-lagtable-ports{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.m002-lagtable-cp{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
+.m002-lagtable-cp.dim{color:#5a5f6e;}
+
+.m002-lag-ring{fill:none;stroke:#e8e8ee;stroke-width:1.4;}
+.m002-link.m002-link-bundle:hover .m002-lag-ring{stroke:#ffffff;}
 .m002-lag-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
 .m002-lag-modal-body{display:flex;flex-direction:column;gap:10px;}
 .m002-lagm-ports{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
@@ -2754,7 +2869,7 @@ const MOD002_CSS = `
 .m002-vlan-legend{display:none;}
 .m002-vlan-legend-title{display:none;}
 .m002-vlan-legend-body{display:flex;flex-direction:column;gap:6px;}
-.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:220px;overflow-y:auto;padding-right:4px;}
+.m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;max-height:440px;overflow-y:auto;padding-right:4px;}
 .m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;}
 .m002-vlan-row:hover{border-color:var(--vc);}
 .m002-vlan-row-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
