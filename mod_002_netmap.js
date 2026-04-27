@@ -246,9 +246,8 @@ function vlanSort(a, b) {
 }
 
 function renderLegend(s) {
-  if (!s.legendEl) return;
-  s.legendEl.hidden = false;
-  const body = s.legendEl.querySelector('.m002-vlan-legend-body');
+  const body = s.host?.querySelector('.m002-vlan-legend-body');
+  if (!body) return;
   const chips = (s.vlanList && s.vlanList.length)
     ? s.vlanList.map((v) => `
         <span class="m002-vlan-legend-chip" style="--vc:${s.vlanColors.get(v)}">
@@ -309,8 +308,9 @@ function mount(stage, ctx) {
   applyLayoutForLayer(state);
   applyView(state);
   render(state);
-  refreshMapBar(state);
   refreshZoneBar(state);
+  showInspectorEmpty(state);
+  refreshToolHighlights(state);
 }
 
 function unmount() {
@@ -368,110 +368,122 @@ function buildDOM(s) {
   const host = document.createElement('div');
   host.className = 'm002-host';
   host.innerHTML = `
-    <div class="m002-tint"></div>
+    <aside class="m002-leftpanel">
+      <section class="m002-panel-section">
+        <h3 class="m002-panel-title">// FORGE</h3>
+        <div class="m002-panel-grid">
+          ${DEVICE_TYPES.map((t) => `
+            <button type="button" class="m002-pal-btn" data-spawn="${t.id}" title="Spawn ${t.label}" style="--accent:${t.accent}">
+              <span class="m002-pal-dot"></span>
+              <span>${t.label}</span>
+            </button>`).join('')}
+        </div>
+      </section>
 
-    <div class="m002-board">
-      <svg class="m002-svg" xmlns="${SVG_NS}">
-        <defs>
-          <pattern id="m002-grid" width="${GRID}" height="${GRID}" patternUnits="userSpaceOnUse">
-            <circle cx="0.5" cy="0.5" r="0.6" fill="#2a2a36"/>
-          </pattern>
-          <pattern id="m002-grid-major" width="${GRID * 5}" height="${GRID * 5}" patternUnits="userSpaceOnUse">
-            <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.6"/>
-          </pattern>
-          <filter id="m002-glow" x="-30%" y="-30%" width="160%" height="160%">
-            <feGaussianBlur stdDeviation="2.4" result="b"/>
-            <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-          </filter>
-        </defs>
-        <rect class="m002-grid-bg" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid)"/>
-        <rect class="m002-grid-bg2" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid-major)"/>
-        <g class="m002-world">
-          <g class="m002-stacks-bg"></g>
-          <g class="m002-links"></g>
-          <g class="m002-devices"></g>
-          <g class="m002-overlay"></g>
-        </g>
-      </svg>
-    </div>
+      <section class="m002-panel-section">
+        <h3 class="m002-panel-title">// TOOLS</h3>
+        <div class="m002-panel-grid">
+          <button type="button" class="m002-pal-btn m002-select-tool active" data-tool="select" title="Select / move (default)">
+            <span class="m002-pal-glyph">↖</span><span>SELECT</span>
+          </button>
+          <button type="button" class="m002-pal-btn m002-link-tool" data-tool="link" title="Link tool (L)">
+            <span class="m002-pal-glyph">⌇</span><span>LINK</span>
+          </button>
+          <button type="button" class="m002-pal-btn m002-stack-tool" data-tool="stack" title="Stack tool (S)">
+            <span class="m002-pal-glyph">⊟</span><span>STACK</span>
+          </button>
+          <button type="button" class="m002-pal-btn" data-tool="delete" title="Delete selection (Del)">
+            <span class="m002-pal-glyph">×</span><span>DELETE</span>
+          </button>
+          <button type="button" class="m002-pal-btn ghost" data-tool="undo" title="Undo (Ctrl+Z)">
+            <span class="m002-pal-glyph">↶</span><span>UNDO</span>
+          </button>
+          <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
+            <span class="m002-pal-glyph">◎</span><span>RECENTER</span>
+          </button>
+        </div>
+      </section>
 
-    <div class="m002-palette">
-      <div class="m002-palette-title">// FORGE</div>
-      ${DEVICE_TYPES.map((t) => `
-        <button type="button" class="m002-pal-btn" data-spawn="${t.id}" title="Spawn ${t.label}" style="--accent:${t.accent}">
-          <span class="m002-pal-dot"></span>
-          <span>${t.label}</span>
-        </button>`).join('')}
-      <div class="m002-pal-sep"></div>
-      <button type="button" class="m002-pal-btn m002-link-tool" data-tool="link" title="Link tool (L)">
-        <span class="m002-pal-glyph">⌇</span>
-        <span>LINK</span>
-      </button>
-      <button type="button" class="m002-pal-btn m002-stack-tool" data-tool="stack" title="Stack tool (S) — group devices into a stack">
-        <span class="m002-pal-glyph">⊟</span>
-        <span>STACK</span>
-      </button>
-      <button type="button" class="m002-pal-btn ghost" data-tool="undo" title="Undo (Ctrl+Z)">
-        <span class="m002-pal-glyph">↶</span>
-        <span>UNDO</span>
-      </button>
-      <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
-        <span class="m002-pal-glyph">◎</span>
-        <span>RECENTER</span>
-      </button>
-    </div>
+      <section class="m002-panel-section">
+        <h3 class="m002-panel-title">// LEGEND · VLANS</h3>
+        <div class="m002-vlan-legend-body">
+          <span class="m002-vlan-legend-empty">no VLANs declared yet</span>
+        </div>
+      </section>
 
-    <div class="m002-zonebar-wrap">
-      <div class="m002-zonebar"></div>
-    </div>
-    <div class="m002-righttop">
-      <div class="m002-mapbar">
-        <button type="button" class="m002-map-btn" title="Maps">
-          <span class="m002-map-label">// MAP</span>
-          <span class="m002-map-name">—</span>
-          <span class="m002-map-caret">▾</span>
-        </button>
-        <div class="m002-map-menu" hidden></div>
+      <div class="m002-leftpanel-spacer"></div>
+
+      <section class="m002-panel-hints">
+        <div>DRAG NODE → CANVAS</div>
+        <div>DRAG NODE → NODE = GROUP</div>
+        <div>DBL-CLICK GROUP = EXPAND</div>
+      </section>
+    </aside>
+
+    <main class="m002-center">
+      <div class="m002-tint"></div>
+
+      <div class="m002-board">
+        <svg class="m002-svg" xmlns="${SVG_NS}">
+          <defs>
+            <pattern id="m002-grid" width="${GRID}" height="${GRID}" patternUnits="userSpaceOnUse">
+              <circle cx="0.5" cy="0.5" r="0.6" fill="#2a2a36"/>
+            </pattern>
+            <pattern id="m002-grid-major" width="${GRID * 5}" height="${GRID * 5}" patternUnits="userSpaceOnUse">
+              <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.6"/>
+            </pattern>
+            <filter id="m002-glow" x="-30%" y="-30%" width="160%" height="160%">
+              <feGaussianBlur stdDeviation="2.4" result="b"/>
+              <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
+            </filter>
+          </defs>
+          <rect class="m002-grid-bg" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid)"/>
+          <rect class="m002-grid-bg2" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid-major)"/>
+          <g class="m002-world">
+            <g class="m002-stacks-bg"></g>
+            <g class="m002-links"></g>
+            <g class="m002-devices"></g>
+            <g class="m002-overlay"></g>
+          </g>
+        </svg>
       </div>
-      <div class="m002-layerbar">
-        ${LAYERS.map((l, i) => `
-          <button type="button" class="m002-layer-pill ${i === 0 ? 'active' : ''}" data-layer="${l.id}">${l.label}</button>
-        `).join('')}
-      </div>
-    </div>
-    <input type="file" class="m002-import-input" accept="application/json" hidden/>
 
-    <aside class="m002-inspector" hidden>
+      <div class="m002-layerbar-wrap">
+        <div class="m002-layerbar">
+          ${LAYERS.map((l, i) => `
+            <button type="button" class="m002-layer-pill ${i === 0 ? 'active' : ''}" data-layer="${l.id}">${l.label}</button>
+          `).join('')}
+        </div>
+      </div>
+
+      <div class="m002-zonebar-wrap">
+        <div class="m002-zonebar"></div>
+      </div>
+
+      <div class="m002-statusbar">
+        <span class="m002-stat-tag">// NET_FORGE</span>
+        <span class="m002-stat-sep">·</span>
+        <span class="m002-stat-devices">0 NODES</span>
+        <span class="m002-stat-sep">·</span>
+        <span class="m002-stat-links">0 LINKS</span>
+        <span class="m002-stat-sep">·</span>
+        <span class="m002-stat-mode">SELECT</span>
+      </div>
+
+      <aside class="m002-minimap" data-mm-state="open">
+        <div class="m002-minimap-head">
+          <span class="m002-minimap-title">100%</span>
+          <button type="button" class="m002-minimap-toggle" title="Hide / show map">▾</button>
+        </div>
+        <svg class="m002-minimap-svg" viewBox="0 0 160 110" preserveAspectRatio="xMidYMid meet"></svg>
+      </aside>
+    </main>
+
+    <aside class="m002-rightpanel m002-inspector">
       <div class="m002-insp-head">
         <span class="m002-insp-id">// INSPECT</span>
-        <button type="button" class="m002-insp-close" title="Close (Esc)">×</button>
       </div>
       <div class="m002-insp-body"></div>
-    </aside>
-
-    <div class="m002-statusbar">
-      <span class="m002-stat-tag">// NET_FORGE</span>
-      <span class="m002-stat-sep">·</span>
-      <span class="m002-stat-devices">0 NODES</span>
-      <span class="m002-stat-sep">·</span>
-      <span class="m002-stat-links">0 LINKS</span>
-      <span class="m002-stat-sep">·</span>
-      <span class="m002-stat-mode">SELECT</span>
-    </div>
-
-    <aside class="m002-minimap" data-mm-state="open">
-      <div class="m002-minimap-head">
-        <span class="m002-minimap-title">// MAP</span>
-        <button type="button" class="m002-minimap-toggle" title="Hide / show map">▾</button>
-      </div>
-      <svg class="m002-minimap-svg" viewBox="0 0 160 110" preserveAspectRatio="xMidYMid meet"></svg>
-    </aside>
-
-    <aside class="m002-vlan-legend" hidden>
-      <div class="m002-vlan-legend-title">// VLAN INDEX</div>
-      <div class="m002-vlan-legend-body">
-        <span class="m002-vlan-legend-empty">no VLANs assigned yet</span>
-      </div>
     </aside>
 
     <div class="m002-lag-modal" hidden>
@@ -505,17 +517,14 @@ function buildDOM(s) {
   s.gLinks = host.querySelector('.m002-links');
   s.gDevices = host.querySelector('.m002-devices');
   s.gOverlay = host.querySelector('.m002-overlay');
-  s.palette = host.querySelector('.m002-palette');
+  s.palette = host.querySelector('.m002-leftpanel');
   s.inspector = host.querySelector('.m002-inspector');
   s.layerBar = host.querySelector('.m002-layerbar');
   s.statusBar = host.querySelector('.m002-statusbar');
   s.toastEl = host.querySelector('.m002-toast');
-  s.legendEl = host.querySelector('.m002-vlan-legend');
-  s.mapBtnEl = host.querySelector('.m002-map-btn');
-  s.mapMenuEl = host.querySelector('.m002-map-menu');
+  // Legend body lives in the left panel; the picker calls still target the body
+  s.legendEl = host.querySelector('.m002-vlan-legend-body')?.parentElement || null;
   s.zoneBarEl = host.querySelector('.m002-zonebar');
-  s.importInputEl = host.querySelector('.m002-import-input');
-  s.mapBtnEl.addEventListener('click', () => toggleMapMenu(s));
   s.zoneBarEl.addEventListener('click', (e) => {
     const pill = e.target.closest('[data-zone]');
     if (pill) { switchZone(s, pill.dataset.zone); return; }
@@ -526,16 +535,6 @@ function buildDOM(s) {
     if (!pill) return;
     e.preventDefault();
     zoneContextMenu(s, pill.dataset.zone);
-  });
-  document.addEventListener('click', (e) => {
-    if (!s.mapMenuEl) return;
-    if (e.target.closest('.m002-mapbar')) return;
-    if (!s.mapMenuEl.hidden) s.mapMenuEl.hidden = true;
-  });
-  s.importInputEl.addEventListener('change', (e) => {
-    const file = e.target.files?.[0];
-    if (file) importMapFromFile(s, file);
-    e.target.value = '';
   });
   s.minimapEl = host.querySelector('.m002-minimap');
   s.minimapSvg = host.querySelector('.m002-minimap-svg');
@@ -556,10 +555,16 @@ function buildDOM(s) {
     if (spawn) { spawnDevice(s, spawn.dataset.spawn); return; }
     const tool = e.target.closest('[data-tool]');
     if (!tool) return;
+    if (tool.dataset.tool === 'select') {
+      if (s.linkMode) toggleLinkMode(s);
+      if (s.stackMode) toggleStackMode(s);
+    }
     if (tool.dataset.tool === 'link') toggleLinkMode(s);
     if (tool.dataset.tool === 'stack') toggleStackMode(s);
+    if (tool.dataset.tool === 'delete') deleteSelected(s);
     if (tool.dataset.tool === 'undo') undo(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
+    refreshToolHighlights(s);
   });
 
   s.layerBar.addEventListener('click', (e) => {
@@ -573,7 +578,6 @@ function buildDOM(s) {
   });
   s.activeLayer = 'physical';
 
-  host.querySelector('.m002-insp-close')?.addEventListener('click', () => deselect(s));
 
   const portModal = host.querySelector('.m002-port-modal');
   portModal.querySelector('.m002-port-modal-close')?.addEventListener('click', () => closePortModal(s));
@@ -1023,8 +1027,8 @@ function toggleLinkMode(s) {
   s.linkMode = !s.linkMode;
   s.linkPending = null;
   s.host.classList.toggle('m002-linking', s.linkMode);
-  s.palette.querySelector('.m002-link-tool')?.classList.toggle('active', s.linkMode);
   setMode(s, s.linkMode ? 'LINK · pick first node' : 'SELECT');
+  refreshToolHighlights(s);
 }
 
 function handleLinkClick(s, deviceId) {
@@ -1202,9 +1206,9 @@ function toggleStackMode(s) {
   s.stackPending = null;
   if (s.stackMode && s.linkMode) toggleLinkMode(s);
   s.host.classList.toggle('m002-stacking', s.stackMode);
-  s.palette.querySelector('.m002-stack-tool')?.classList.toggle('active', s.stackMode);
   s.gDevices.querySelectorAll('.m002-stack-pending').forEach((el) => el.classList.remove('m002-stack-pending'));
   setMode(s, s.stackMode ? 'STACK · pick first node/stack' : 'SELECT');
+  refreshToolHighlights(s);
 }
 
 // In stack mode the user clicks two targets. A target is either a regular
@@ -1544,7 +1548,7 @@ function deselect(s) {
   s.selected = null;
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   clearMultiSelection(s);
-  s.inspector.hidden = true;
+  showInspectorEmpty(s);
 }
 
 function markSelected(s) {
@@ -1566,9 +1570,32 @@ function renderInspectorVlanPickers(s) {
   s.inspector?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
 }
 
+function refreshToolHighlights(s) {
+  const setActive = (sel, on) => s.host.querySelector(sel)?.classList.toggle('active', !!on);
+  setActive('[data-tool="link"]',  s.linkMode);
+  setActive('[data-tool="stack"]', s.stackMode);
+  setActive('[data-tool="select"]', !s.linkMode && !s.stackMode);
+}
+
+function showInspectorEmpty(s) {
+  const body = s.inspector.querySelector('.m002-insp-body');
+  const idEl = s.inspector.querySelector('.m002-insp-id');
+  idEl.textContent = '// INSPECT';
+  body.innerHTML = `
+    <div class="m002-insp-empty">
+      <div class="m002-insp-empty-title">SELECT A NODE</div>
+      <ul class="m002-insp-empty-hints">
+        <li>CLICK to select</li>
+        <li>DRAG to move</li>
+        <li>SHIFT+CLICK = multi-select</li>
+        <li>DRAG ONTO NODE = group</li>
+      </ul>
+    </div>
+  `;
+}
+
 function openInspector(s) {
-  if (!s.selected) { s.inspector.hidden = true; return; }
-  s.inspector.hidden = false;
+  if (!s.selected) { showInspectorEmpty(s); return; }
   const body = s.inspector.querySelector('.m002-insp-body');
   const idEl = s.inspector.querySelector('.m002-insp-id');
 
@@ -2501,7 +2528,19 @@ function toast(s, msg) {
 // CSS
 // =============================================================================
 const MOD002_CSS = `
-.m002-host{position:absolute;inset:0;overflow:hidden;font-family:'Rajdhani',sans-serif;color:#e8e8ee;background:radial-gradient(ellipse at 50% 0%,#0d0d14 0%,#06060a 70%);}
+.m002-host{position:absolute;inset:0;overflow:hidden;font-family:'Rajdhani',sans-serif;color:#e8e8ee;background:radial-gradient(ellipse at 50% 0%,#0d0d14 0%,#06060a 70%);display:grid;grid-template-columns:220px 1fr 320px;grid-template-rows:1fr;}
+.m002-leftpanel{background:rgba(8,8,14,0.92);border-right:1px solid #1a1a22;padding:14px 12px;overflow-y:auto;display:flex;flex-direction:column;gap:14px;min-height:0;}
+.m002-leftpanel-spacer{flex:1;min-height:8px;}
+.m002-rightpanel{background:rgba(8,8,14,0.92);border-left:1px solid #1a1a22;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:0;}
+.m002-center{position:relative;overflow:hidden;}
+.m002-panel-section{display:flex;flex-direction:column;gap:6px;}
+.m002-panel-title{margin:0 0 4px 0;font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;font-weight:400;text-transform:uppercase;}
+.m002-panel-grid{display:flex;flex-direction:column;gap:3px;}
+.m002-panel-hints{display:flex;flex-direction:column;gap:2px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding-top:6px;border-top:1px solid #1a1a22;}
+.m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
+.m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
+.m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
+.m002-rightpanel .m002-insp-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a1a22;padding-bottom:8px;}
 .m002-host *{box-sizing:border-box}
 .m002-host [hidden]{display:none!important;}
 .m002-tint{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 50%,rgba(255,0,60,0.04) 100%);pointer-events:none;}
@@ -2548,7 +2587,7 @@ const MOD002_CSS = `
 .m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
 .m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
 
-.m002-palette{position:absolute;top:24px;left:24px;display:flex;flex-direction:column;gap:4px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px;backdrop-filter:blur(6px);min-width:160px;}
+.m002-palette{display:none;}
 .m002-palette-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
 .m002-pal-btn{display:flex;align-items:center;gap:10px;background:transparent;border:1px solid transparent;color:#e8e8ee;padding:6px 10px;cursor:pointer;font-family:'Rajdhani',sans-serif;font-size:13px;letter-spacing:1.2px;text-align:left;transition:.15s;}
 .m002-pal-btn:hover{border-color:#ff003c;background:rgba(255,0,60,0.06);}
@@ -2558,9 +2597,8 @@ const MOD002_CSS = `
 .m002-pal-dot{width:10px;height:10px;background:var(--accent);box-shadow:0 0 4px var(--accent),0 0 10px var(--accent);flex:0 0 auto;margin-left:4px;}
 .m002-pal-sep{height:1px;background:#1a1a22;margin:6px 0;}
 
-.m002-zonebar-wrap{position:absolute;top:24px;left:50%;transform:translateX(-50%);}
-.m002-righttop{position:absolute;top:24px;right:24px;display:flex;gap:8px;align-items:stretch;}
-.m002-mapbar{position:relative;}
+.m002-layerbar-wrap{position:absolute;top:18px;left:50%;transform:translateX(-50%);z-index:5;}
+.m002-zonebar-wrap{position:absolute;top:18px;right:18px;z-index:5;}
 .m002-map-btn{display:inline-flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;backdrop-filter:blur(6px);}
 .m002-map-btn:hover{border-color:#ff003c;}
 .m002-map-label{color:#5a5f6e;}
@@ -2587,7 +2625,7 @@ const MOD002_CSS = `
 .m002-layer-pill:hover{color:#e8e8ee;}
 .m002-layer-pill.active{background:rgba(255,0,60,0.1);border-color:#ff003c;color:#ff003c;}
 
-.m002-inspector{position:absolute;top:84px;right:24px;width:300px;max-height:calc(100% - 108px);overflow-y:auto;background:rgba(8,8,14,0.92);border:1px solid #1a1a22;padding:14px;backdrop-filter:blur(6px);display:flex;flex-direction:column;gap:10px;}
+.m002-inspector.m002-rightpanel{padding:14px;display:flex;flex-direction:column;gap:10px;}
 .m002-insp-head{display:flex;justify-content:space-between;align-items:center;}
 .m002-insp-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:#ff003c;letter-spacing:2px;}
 .m002-insp-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
@@ -2689,7 +2727,7 @@ const MOD002_CSS = `
 .m002-vlan-legend-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;}
 .m002-vlan-legend-add-btn:hover{background:rgba(255,0,60,0.1);}
 
-.m002-minimap{position:absolute;bottom:24px;right:24px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;backdrop-filter:blur(6px);width:180px;}
+.m002-minimap{position:absolute;bottom:18px;right:18px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;backdrop-filter:blur(6px);width:180px;z-index:5;}
 .m002-minimap[data-mm-state="closed"] .m002-minimap-svg{display:none;}
 .m002-minimap-head{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;}
 .m002-minimap-title{font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:2px;}
@@ -2697,14 +2735,14 @@ const MOD002_CSS = `
 .m002-minimap-toggle:hover{color:#ff003c;}
 .m002-minimap-svg{width:100%;height:120px;display:block;cursor:crosshair;background:#06060a;}
 
-.m002-vlan-legend{position:absolute;bottom:60px;left:24px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:10px 12px;backdrop-filter:blur(6px);max-width:340px;}
-.m002-vlan-legend-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
+.m002-vlan-legend{display:none;}
+.m002-vlan-legend-title{display:none;}
 .m002-vlan-legend-body{display:flex;flex-wrap:wrap;gap:6px;}
 .m002-vlan-legend-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
 .m002-vlan-legend-chip{display:inline-flex;align-items:center;gap:6px;padding:3px 8px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
 .m002-vlan-legend-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
 
-.m002-statusbar{position:absolute;bottom:16px;left:24px;display:flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#9aa0a8;}
+.m002-statusbar{position:absolute;bottom:16px;left:18px;z-index:5;display:flex;align-items:center;gap:8px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;color:#9aa0a8;}
 .m002-stat-tag{color:#ff003c;}
 .m002-stat-sep{color:#2a2a36;}
 .m002-stat-mode{color:#e8e8ee;}
