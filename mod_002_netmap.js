@@ -411,14 +411,19 @@ function bindBoard(s) {
       }
       const ddx = nx - st.x, ddy = ny - st.y;
       st.x = nx; st.y = ny;
-      // Shift members so they keep their formation when expanded later
       st.members.forEach((mid) => {
         const m = s.devices.find((d) => d.id === mid);
-        if (m) { m.x += ddx; m.y += ddy; }
+        if (m) {
+          m.x += ddx; m.y += ddy;
+          updateDeviceTransform(s, m);
+        }
       });
+      // Move the collapsed icon if present
       const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
       g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
-      // Redraw any links touching members (they anchor on stack pos when collapsed)
+      // Move envelope + cables if expanded
+      if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+      // Redraw links touching the stack
       s.links.forEach((l) => { if (st.members.includes(l.from) || st.members.includes(l.to)) redrawLink(s, l); });
     }
   };
