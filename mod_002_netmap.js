@@ -1556,25 +1556,18 @@ function lagCounterpart(s, deviceId, lag) {
 // LAG bundle key for a link — null if it's not part of any LAG-pair.
 // Two links share the same key iff they connect the same {device, LAG} on each
 // side (independent of direction).
-// SVG fragment that decorates a bundled LAG link with ring markers — small
-// circles at the two endpoints (just past each device edge) and at the bend.
-function lagRingsHTML(base, aPos, bPos) {
-  // Endpoint markers: take the start/end of the path's first / last segments
-  // which are ex1, ex2 in H-V-H or analog points in V-H-V.
-  // We can simply parse base.d, but easier: reuse aPos/bPos and offset toward each other.
-  const dx = bPos.x - aPos.x, dy = bPos.y - aPos.y;
-  const len = Math.hypot(dx, dy) || 1;
-  const ux = dx / len, uy = dy / len;
-  const r = 4;
-  // Place rings just outside each device's edge (DEVICE_W/2 from center)
-  const aRX = aPos.x + ux * (DEVICE_W / 2 + 2);
-  const aRY = aPos.y + uy * (DEVICE_H / 2 + 2);
-  const bRX = bPos.x - ux * (DEVICE_W / 2 + 2);
-  const bRY = bPos.y - uy * (DEVICE_H / 2 + 2);
+// SVG fragment that decorates a bundled LAG link with a parallel double-line
+// — railroad-style. Two thin orthogonal paths offset ±gap/2 from the centerline.
+// Used in place of the previous ring decorations.
+function lagDoubleLineHTML(aPos, bPos, opts = {}) {
+  const stroke = opts.stroke || '#9aa0a8';
+  const width  = opts.width  || 1.8;
+  const gap    = opts.gap    || 3;
+  const a = orthPath(aPos, bPos, +gap);
+  const b = orthPath(aPos, bPos, -gap);
   return `
-    <circle class="m002-lag-ring" cx="${aRX}" cy="${aRY}" r="${r}"/>
-    <circle class="m002-lag-ring" cx="${bRX}" cy="${bRY}" r="${r}"/>
-    <circle class="m002-lag-ring" cx="${base.lx}" cy="${base.ly}" r="${r + 1}"/>
+    <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
+    <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
   `;
 }
 
@@ -1592,6 +1585,8 @@ function drawLagLink(s, p) {
   const sharedVlans = (p.lagA.vlans || []).map(String).filter((v) => (p.lagB.vlans || []).map(String).includes(v));
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   if (s.activeLayer === 'vlan' && sharedVlans.length) {
+    // Per-VLAN colored stripes plus the double-line accent so the bundle
+    // is still readable as a LAG.
     const gap = 6;
     sharedVlans.forEach((v, i) => {
       const off = (i - (sharedVlans.length - 1) / 2) * gap;
@@ -1601,9 +1596,9 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += `<path class="m002-link-line" d="${path.d}" stroke="#9aa0a8" stroke-width="2.8"/>`;
+    // Default representation: a neutral double-line between the two devices.
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2 });
   }
-  inner += lagRingsHTML(path, aPos, bPos);
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
   g.innerHTML = inner;
   s.gLinks.appendChild(g);
@@ -1681,8 +1676,8 @@ function drawLink(s, link) {
       const bLbl = lagB?.name || '?';
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
-      // LAG-style rings — circles at each end + midpoint
-      inner += lagRingsHTML(base, aPos, bPos);
+      // LAG accent — parallel double-line on top of the VLAN stripes
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5 });
     }
   } else if (layer === 'routing') {
     if (bundleInfo?.members) {
@@ -1690,9 +1685,8 @@ function drawLink(s, link) {
       const lagB = (b.lags || []).find((l) => l.ports.map(Number).includes(Number(link.toPort)));
       const aLbl = lagA?.name || '?';
       const bLbl = lagB?.name || '?';
-      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.8"/>`;
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2 });
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`)}</text>`;
-      inner += lagRingsHTML(base, aPos, bPos);
     } else {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
     }
@@ -3352,8 +3346,9 @@ const MOD002_CSS = `
 .m002-lagtable-cp{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
 .m002-lagtable-cp.dim{color:#5a5f6e;}
 
-.m002-lag-ring{fill:none;stroke:#e8e8ee;stroke-width:1.4;}
-.m002-link.m002-link-bundle:hover .m002-lag-ring{stroke:#ffffff;}
+.m002-lag-line{stroke-linecap:square;}
+.m002-link.m002-link-bundle:hover .m002-lag-line{stroke:#e8e8ee;}
+.m002-link.m002-selected .m002-lag-line{stroke:#ff003c;}
 .m002-lag-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
 .m002-lag-modal-body{display:flex;flex-direction:column;gap:10px;}
 .m002-lagm-ports{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
