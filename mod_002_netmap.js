@@ -2562,13 +2562,18 @@ function render(s) {
       lagPairs.push({ devA: d, lagA: lag, devB: otherDev, lagB: otherLag });
     });
   });
+  // Absorb every link between two devices that have a paired LAG between
+  // them. Links here are the abstract "these belong together" markers — once
+  // the LAG-pair exists, the LAG visual *is* the connection. Earlier this
+  // matched only port-by-port, which left untouched all links without port
+  // assignments (the common case) and produced ghost lines next to the LAG.
   const absorbed = new Set();
-  lagPairs.forEach((p) => {
-    s.links.forEach((l) => {
-      const ax = (l.from === p.devA.id) && p.lagA.ports.map(Number).includes(Number(l.fromPort)) && (l.to   === p.devB.id) && p.lagB.ports.map(Number).includes(Number(l.toPort));
-      const bx = (l.from === p.devB.id) && p.lagB.ports.map(Number).includes(Number(l.fromPort)) && (l.to   === p.devA.id) && p.lagA.ports.map(Number).includes(Number(l.toPort));
-      if (ax || bx) absorbed.add(l.id);
-    });
+  const pairedDevPairs = new Set(
+    lagPairs.map((p) => [p.devA.id, p.devB.id].sort().join('::'))
+  );
+  s.links.forEach((l) => {
+    const key = [l.from, l.to].sort().join('::');
+    if (pairedDevPairs.has(key)) absorbed.add(l.id);
   });
 
   // Compute LAG bundles (only in logical layers, for non-paired LAGs). Per
