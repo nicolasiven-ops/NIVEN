@@ -1970,23 +1970,24 @@ function openInspector(s) {
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'lag') {
-    // LAG editor — was previously a modal, now lives in the inspector.
+    // LAG editor — link-style layout: header showing both endpoints,
+    // FROM LAG / TO LAG selectors, VLANs, then secondary fields below.
     const [devId, lagId] = String(s.selected.id).split('|');
     const dev = s.devices.find((d) => d.id === devId);
     const lag = dev?.lags?.find((l) => l.id === lagId);
     if (!dev || !lag) {
-      // Underlying LAG vanished (delete elsewhere) — fall back gracefully.
       if (dev) { select(s, 'device', dev.id); return; }
       deselect(s); return;
     }
 
     const cp = lagCounterpart(s, devId, lag);
-    const cpTxt = cp
-      ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`)
-      : '— not connected —';
+    const peerDev = cp?.dev || null;
+    const peerLag = cp?.lag || null;
 
-    // Counterpart options: every LAG on every device that has at least one
-    // link to this device.
+    // FROM-LAG options: every LAG on this device (lets you switch sibling LAGs).
+    const fromOpts = (dev.lags || []).map((l) => ({ id: l.id, label: l.name }));
+
+    // TO-LAG options: every LAG on every device this device has a link to.
     const linkedDevs = new Map();
     s.links.forEach((l) => {
       let other = null;
@@ -1994,10 +1995,10 @@ function openInspector(s) {
       else if (l.to === devId) other = s.devices.find((d) => d.id === l.from);
       if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
     });
-    const cpOptions = [...linkedDevs.values()].flatMap((d) =>
+    const toOpts = [...linkedDevs.values()].flatMap((d) =>
       (d.lags || []).map((l) => ({ devId: d.id, devName: d.name, lagId: l.id, lagName: l.name }))
     );
-    const cpKey = lag.counterpart?.lagId
+    const toKey = lag.counterpart?.lagId
       ? `${lag.counterpart.deviceId}|${lag.counterpart.lagId}`
       : '';
 
@@ -2008,39 +2009,50 @@ function openInspector(s) {
     idEl.textContent = `// ${dev.name} · ${lag.name}`;
     body.innerHTML = `
       <button type="button" class="m002-insp-back" data-back>← BACK TO ${escSvg(dev.name.toUpperCase())}</button>
-      <label class="m002-field"><span>NAME</span>
-        <input class="m002-lagm-name" value="${escAttr(lag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
-      </label>
-      <div class="m002-field">
-        <span>MEMBER PORTS (${dev.ports.length})</span>
-        <div class="m002-lagm-ports">
-          ${dev.ports.map((p) => {
-            const inUse = otherLagPorts.has(p.n);
-            const checked = lagPortSet.has(p.n);
-            return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
-              <input type="checkbox" data-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
-              <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
-            </label>`;
-          }).join('')}
-        </div>
+      <div class="m002-link-summary">
+        <span class="m002-link-end">${escSvg(dev.name)}</span>
+        <span class="m002-link-arrow">⇄</span>
+        <span class="m002-link-end ${peerDev ? '' : 'dim'}">${escSvg(peerDev?.name || '—')}</span>
+      </div>
+      <div class="m002-row2">
+        <label class="m002-field"><span>FROM LAG</span>
+          <select data-lf="from">
+            ${fromOpts.map((o) => `<option value="${escAttr(o.id)}" ${o.id === lag.id ? 'selected' : ''}>${escSvg(o.label)}</option>`).join('')}
+          </select>
+        </label>
+        <label class="m002-field"><span>TO LAG</span>
+          <select data-lf="to">
+            <option value="">— auto / none —</option>
+            ${toOpts.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${toKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
+          </select>
+        </label>
       </div>
       <div class="m002-field">
-        <span>COUNTERPART</span>
-        <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)} ${lag.counterpart ? '· (manual)' : '· (auto)'}</div>
-        <select class="m002-lagm-cp">
-          <option value="">— auto-derive from links —</option>
-          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${cpKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
-        </select>
-        <p class="m002-link-hint">${cpOptions.length ? 'Pick the matching LAG on the peer side. The other LAG will be paired automatically.' : 'No LAGs found on linked devices — create one over there first.'}</p>
-      </div>
-      <div class="m002-field">
-        <span>VLANS</span>
+        <span>VLANS (lag-pair)</span>
         <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(devId)}:${escAttr(lag.id)}"></div>
       </div>
-      <div class="m002-port-actions">
-        <button type="button" class="m002-action danger" data-lact="delete">DELETE LAG</button>
-        <button type="button" class="m002-action" data-lact="save">SAVE</button>
+      ${!toOpts.length ? `<p class="m002-link-hint">No LAGs found on linked devices — create one over there first to pair.</p>` : (lag.counterpart ? '' : (peerLag ? `<p class="m002-link-hint">Auto-derived from port links. Pick "TO LAG" to lock it manually.</p>` : ''))}
+
+      <div class="m002-lag-props">
+        <label class="m002-field"><span>NAME</span>
+          <input class="m002-lagm-name" value="${escAttr(lag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
+        </label>
+        <div class="m002-field">
+          <span>MEMBER PORTS (${dev.ports.length})</span>
+          <div class="m002-lagm-ports">
+            ${dev.ports.map((p) => {
+              const inUse = otherLagPorts.has(p.n);
+              const checked = lagPortSet.has(p.n);
+              return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
+                <input type="checkbox" data-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
+                <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
+              </label>`;
+            }).join('')}
+          </div>
+        </div>
       </div>
+
+      <button type="button" class="m002-insp-del" data-lact="delete">DELETE LAG</button>
     `;
     renderInspectorVlanPickers(s);
 
@@ -2048,9 +2060,17 @@ function openInspector(s) {
       select(s, 'device', devId);
     });
 
-    body.querySelector('.m002-lagm-cp')?.addEventListener('change', (e) => {
+    // FROM LAG: switch which sibling LAG is being edited.
+    body.querySelector('[data-lf="from"]')?.addEventListener('change', (e) => {
+      const newId = e.target.value;
+      if (newId && newId !== lag.id) select(s, 'lag', `${devId}|${newId}`);
+    });
+
+    // TO LAG: pick / unpick the counterpart. Mirrors what the old COUNTERPART
+    // select did, with reciprocal pairing on the peer LAG.
+    body.querySelector('[data-lf="to"]')?.addEventListener('change', (e) => {
       snapshot(s);
-      // Drop the reciprocal pointer the previous counterpart held back
+      // Detach previous reciprocal pointer
       if (lag.counterpart?.lagId) {
         const oldDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
         const oldLag = oldDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
@@ -2070,24 +2090,45 @@ function openInspector(s) {
       openInspector(s);
     });
 
-    body.querySelector('[data-lact="save"]')?.addEventListener('click', () => {
-      const name = (body.querySelector('.m002-lagm-name').value || '').trim();
-      const ports = [...body.querySelectorAll('.m002-lagm-ports input[type=checkbox]:checked')]
-        .map((c) => Number(c.dataset.port));
-      if (!name) { toast(s, 'LAG needs a name'); return; }
-      if (ports.length < 2) { toast(s, 'LAG needs at least 2 ports'); return; }
-      snapshot(s);
-      lag.name = name;
-      lag.ports = ports;
+    // NAME — live edit. Empty name is rejected on blur (revert).
+    const nameEl = body.querySelector('.m002-lagm-name');
+    nameEl?.addEventListener('input', () => {
+      const v = nameEl.value.trim();
+      if (!v) return; // wait for blur to validate
+      lag.name = v;
+      idEl.textContent = `// ${dev.name} · ${lag.name}`;
       schedSave(s);
-      render(s);
-      openInspector(s);
-      toast(s, 'LAG saved');
+    });
+    nameEl?.addEventListener('blur', () => {
+      if (!nameEl.value.trim()) {
+        nameEl.value = lag.name;
+        toast(s, 'LAG name cannot be empty');
+      } else {
+        // Redraw canvas labels referencing LAG name
+        render(s);
+      }
+    });
+
+    // PORT checkboxes — live edit with the 2-port minimum guard.
+    body.querySelectorAll('.m002-lagm-ports input[type=checkbox]').forEach((cb) => {
+      cb.addEventListener('change', () => {
+        const ports = [...body.querySelectorAll('.m002-lagm-ports input[type=checkbox]:checked')]
+          .map((c) => Number(c.dataset.port));
+        if (ports.length < 2) {
+          // Revert and warn
+          cb.checked = !cb.checked;
+          toast(s, 'LAG needs at least 2 ports');
+          return;
+        }
+        snapshot(s);
+        lag.ports = ports;
+        schedSave(s);
+        render(s);
+      });
     });
 
     body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
       snapshot(s);
-      // Unhook reciprocal counterpart pointers before removing
       if (lag.counterpart?.lagId) {
         const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
         const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
@@ -3255,6 +3296,8 @@ const MOD002_CSS = `
 .m002-port-counter{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
 .m002-port-counter.dim{color:#5a5f6e;}
 .m002-link-hint{font-size:11px;color:#7a7f8e;line-height:1.4;margin:0;font-style:italic;}
+.m002-link-end.dim{color:#5a5f6e;font-weight:400;}
+.m002-lag-props{margin-top:4px;padding-top:10px;border-top:1px dashed #1a1a22;display:flex;flex-direction:column;gap:8px;}
 
 .m002-stack-members{display:flex;flex-direction:column;gap:4px;}
 .m002-stack-member{display:grid;grid-template-columns:14px 1fr auto 22px;gap:6px;align-items:center;background:#06060a;border:1px solid #1a1a22;padding:4px 8px;}
