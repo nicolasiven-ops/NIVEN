@@ -104,6 +104,29 @@ function stackUnionVlans(s, stack) {
   return [...set];
 }
 
+// Type of a stack = type of its members. Stacks are uniform-type only, so any
+// member is authoritative; pick the first existing one.
+function stackTypeOf(s, stack) {
+  if (!stack) return null;
+  for (const mid of (stack.members || [])) {
+    const d = s.devices.find((dv) => dv.id === mid);
+    if (d) return d.type;
+  }
+  return null;
+}
+
+// Type id of a stack-merge target ({kind:'device'|'stack', id}).
+function targetTypeOf(s, target) {
+  if (!target) return null;
+  if (target.kind === 'device') {
+    return s.devices.find((d) => d.id === target.id)?.type ?? null;
+  }
+  if (target.kind === 'stack') {
+    return stackTypeOf(s, findStackById(s, target.id));
+  }
+  return null;
+}
+
 // Call after any change that might add/remove a VLAN. Recomputes the spectrum,
 // redraws all links (their colors depend on it) and refreshes the legend.
 function vlansChanged(s) {
@@ -427,6 +450,7 @@ function createState(stage, ctx) {
 
     drag: null,
     dragStackTarget: null, // "device:ID" or "stack:ID" — drop-target while dragging a device
+    dragStackTargetCompat: null, // 'ok' | 'bad' — green/red glow state for current target
     saveTimer: null,
     cleanups: [],
     undoStack: [],     // last N snapshots (JSON strings) of mutable state
@@ -825,22 +849,25 @@ function bindBoard(s) {
             if (Math.hypot(dev.x - st2.x, dev.y - st2.y) < STACK_MERGE_THRESH) { target = { kind: 'stack', id: st2.id }; break; }
           }
         }
+        const compat = target ? (targetTypeOf(s, target) === dev.type) : false;
         const newKey = target ? `${target.kind}:${target.id}` : null;
-        if (newKey !== s.dragStackTarget) {
+        const newCompat = compat ? 'ok' : 'bad';
+        if (newKey !== s.dragStackTarget || (target && s.dragStackTargetCompat !== newCompat)) {
           if (s.dragStackTarget) {
             const [ok, oid] = s.dragStackTarget.split(':');
             const oel = ok === 'stack'
               ? s.gDevices.querySelector(`[data-stack-id="${oid}"]`)
               : s.gDevices.querySelector(`[data-device-id="${oid}"]`);
-            oel?.classList.remove('m002-drag-stack-target');
+            oel?.classList.remove('m002-drag-stack-target', 'm002-merge-ok', 'm002-merge-bad');
           }
           s.dragStackTarget = newKey;
+          s.dragStackTargetCompat = target ? newCompat : null;
           if (newKey) {
             const [nk, nid] = newKey.split(':');
             const nel = nk === 'stack'
               ? s.gDevices.querySelector(`[data-stack-id="${nid}"]`)
               : s.gDevices.querySelector(`[data-device-id="${nid}"]`);
-            nel?.classList.add('m002-drag-stack-target');
+            nel?.classList.add('m002-drag-stack-target', compat ? 'm002-merge-ok' : 'm002-merge-bad');
           }
         }
       }
@@ -893,11 +920,17 @@ function bindBoard(s) {
       const tel = tk === 'stack'
         ? s.gDevices.querySelector(`[data-stack-id="${tid}"]`)
         : s.gDevices.querySelector(`[data-device-id="${tid}"]`);
-      tel?.classList.remove('m002-drag-stack-target');
+      tel?.classList.remove('m002-drag-stack-target', 'm002-merge-ok', 'm002-merge-bad');
       const dragId = s.drag.id;
+      const compat = s.dragStackTargetCompat === 'ok';
       s.dragStackTarget = null;
+      s.dragStackTargetCompat = null;
       s.drag = null;
       svg.style.cursor = '';
+      if (!compat) {
+        toast(s, 'Stack only allowed between same device types');
+        return;
+      }
       if (tk === 'stack') {
         addToStack(s, tid, dragId);
       } else {
@@ -913,8 +946,9 @@ function bindBoard(s) {
       const tel = tk === 'stack'
         ? s.gDevices.querySelector(`[data-stack-id="${tid}"]`)
         : s.gDevices.querySelector(`[data-device-id="${tid}"]`);
-      tel?.classList.remove('m002-drag-stack-target');
+      tel?.classList.remove('m002-drag-stack-target', 'm002-merge-ok', 'm002-merge-bad');
       s.dragStackTarget = null;
+      s.dragStackTargetCompat = null;
     }
     if (s.drag) {
       svg.style.cursor = '';
@@ -1349,6 +1383,12 @@ function handleStackPick(s, target) {
   const a = s.stackPending, b = target;
   markStackPending(s, a, false);
   s.stackPending = null;
+  const ta = targetTypeOf(s, a), tb = targetTypeOf(s, b);
+  if (ta && tb && ta !== tb) {
+    toast(s, 'Stack only allowed between same device types');
+    setMode(s, 'STACK · pick first node/stack');
+    return;
+  }
   let createdId = null;
   if (a.kind === 'device' && b.kind === 'device') {
     createdId = createStack(s, [a.id, b.id]);
@@ -1376,6 +1416,11 @@ function createStack(s, deviceIds) {
     toast(s, 'Need two un-stacked devices');
     return null;
   }
+  const types = new Set(members.map((id) => s.devices.find((d) => d.id === id)?.type).filter(Boolean));
+  if (types.size > 1) {
+    toast(s, 'Stack only allowed between same device types');
+    return null;
+  }
   snapshot(s);
   const devs = members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
   const cx = devs.reduce((sum, d) => sum + d.x, 0) / devs.length;
@@ -1400,6 +1445,12 @@ function addToStack(s, stackId, deviceId) {
   const st = findStackById(s, stackId);
   if (!st) return;
   if (findStack(s, deviceId)) { toast(s, 'Device is already in a stack'); return; }
+  const stType = stackTypeOf(s, st);
+  const devType = s.devices.find((d) => d.id === deviceId)?.type;
+  if (stType && devType && stType !== devType) {
+    toast(s, 'Stack only allowed between same device types');
+    return;
+  }
   snapshot(s);
   st.members.push(deviceId);
   toast(s, `Added to ${st.name} (×${st.members.length})`);
@@ -1411,6 +1462,11 @@ function mergeStacks(s, idA, idB) {
   if (idA === idB) return idA;
   const a = findStackById(s, idA), b = findStackById(s, idB);
   if (!a || !b) return null;
+  const ta = stackTypeOf(s, a), tb = stackTypeOf(s, b);
+  if (ta && tb && ta !== tb) {
+    toast(s, 'Stack only allowed between same device types');
+    return null;
+  }
   snapshot(s);
   a.members = [...a.members, ...b.members.filter((m) => !a.members.includes(m))];
   s.stacks = s.stacks.filter((st) => st.id !== idB);
@@ -3548,9 +3604,15 @@ const MOD002_CSS = `
 .m002-multi-selected .m002-dev-bg{stroke-width:2;stroke-dasharray:3 3;}
 .m002-multi-selected.m002-stack-collapsed .m002-dev-bg{stroke-dasharray:3 3;}
 
-/* Drag-to-stack: pulse the merge target while a device hovers over it */
-.m002-drag-stack-target{animation:m002-merge-pulse .5s ease-in-out infinite alternate!important;}
-@keyframes m002-merge-pulse{
+/* Drag-to-stack: pulse the merge target while a device hovers over it.
+   Green = same device type (valid stack), red = mismatched type (invalid). */
+.m002-drag-stack-target.m002-merge-ok{animation:m002-merge-pulse-ok .5s ease-in-out infinite alternate!important;}
+.m002-drag-stack-target.m002-merge-bad{animation:m002-merge-pulse-bad .5s ease-in-out infinite alternate!important;}
+@keyframes m002-merge-pulse-ok{
+  from{filter:drop-shadow(0 0 5px #35ff7a) drop-shadow(0 0 14px #35ff7a);}
+  to  {filter:drop-shadow(0 0 12px #35ff7a) drop-shadow(0 0 30px #35ff7a);}
+}
+@keyframes m002-merge-pulse-bad{
   from{filter:drop-shadow(0 0 5px #ff003c) drop-shadow(0 0 14px #ff003c);}
   to  {filter:drop-shadow(0 0 12px #ff003c) drop-shadow(0 0 30px #ff003c);}
 }
