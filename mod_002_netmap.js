@@ -651,15 +651,9 @@ function buildDOM(s) {
   lagModal.querySelector('.m002-lag-modal-close')?.addEventListener('click', () => closeLagModal(s));
   lagModal.addEventListener('click', (e) => { if (e.target === lagModal) closeLagModal(s); });
 
-  // Click empty board area → deselect
-  s.svg.addEventListener('mousedown', (e) => {
-    if (e.target === s.svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2')) {
-      if (s.linkMode && e.button === 0) {
-        // ignore — link mode requires clicking devices
-      }
-      deselect(s);
-    }
-  });
+  // Background click → deselect, but only on a true click (not a pan-drag).
+  // Actual deselect call lives in the pan onUp handler below — it checks
+  // whether the pointer moved beyond a small threshold before deciding.
 }
 
 function ensureStyles() {
@@ -762,6 +756,8 @@ function bindBoard(s) {
   const onMove = (e) => {
     if (!s.drag) return;
     if (s.drag.kind === 'pan') {
+      s.drag.lastX = e.clientX;
+      s.drag.lastY = e.clientY;
       s.view.x = s.drag.vx + (e.clientX - s.drag.startX);
       s.view.y = s.drag.vy + (e.clientY - s.drag.startY);
       applyView(s);
@@ -883,6 +879,13 @@ function bindBoard(s) {
     }
     if (s.drag) {
       svg.style.cursor = '';
+      // True background click (mousedown→mouseup with no real pan) → deselect.
+      // Threshold filters out tiny tremors so pan-drags never clear the inspector.
+      if (s.drag.kind === 'pan' && !s.linkMode) {
+        const dx = (s.drag.lastX ?? s.drag.startX) - s.drag.startX;
+        const dy = (s.drag.lastY ?? s.drag.startY) - s.drag.startY;
+        if (Math.hypot(dx, dy) < 4) deselect(s);
+      }
       if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
     }
     s.drag = null;
