@@ -334,10 +334,17 @@ function renderLegend(s) {
   const body = s.host?.querySelector('.m002-vlan-legend-body');
   if (!body) return;
   const list = s.vlanList || [];
+  const filterSet = new Set((s.view?.vlanFilter || []).map(String));
+  const isFiltered = filterSet.size > 0;
   const rows = list.length
     ? `<div class="m002-vlan-legend-list">${list.map((v) => {
         const entry = s.vlanRegistry.find((r) => String(r.id) === v) || { id: v, name: '' };
-        return `<div class="m002-vlan-row" style="--vc:${s.vlanColors.get(v)}">
+        const solo = filterSet.has(String(v));
+        const cls = 'm002-vlan-row'
+          + (solo ? ' is-solo' : '')
+          + (isFiltered && !solo ? ' is-dimmed' : '');
+        const title = solo ? 'Click to remove from solo filter' : 'Click to solo this VLAN';
+        return `<div class="${cls}" style="--vc:${s.vlanColors.get(v)}" data-vsolo="${escAttr(v)}" title="${title}">
           <span class="m002-vlan-row-dot"></span>
           <span class="m002-vlan-row-id">${escSvg(v)}</span>
           <input class="m002-vlan-row-name" value="${escAttr(entry.name || '')}" placeholder="name" data-vname="${escAttr(v)}"/>
@@ -346,7 +353,15 @@ function renderLegend(s) {
       }).join('')}</div>`
     : `<span class="m002-vlan-legend-empty">no VLANs declared yet</span>`;
 
+  const filterBar = isFiltered
+    ? `<div class="m002-vlan-legend-filter">
+        <span class="m002-vlan-legend-filter-label">SOLO · ${filterSet.size}</span>
+        <button type="button" class="m002-vlan-legend-clear" data-vclear>CLEAR</button>
+      </div>`
+    : '';
+
   body.innerHTML = `
+    ${filterBar}
     ${rows}
     <form class="m002-vlan-legend-add">
       <input class="m002-vlan-legend-input" placeholder="VLAN id (e.g. 10)" inputmode="numeric"/>
@@ -354,7 +369,8 @@ function renderLegend(s) {
     </form>
   `;
   body.querySelectorAll('[data-vrm]').forEach((b) => {
-    b.addEventListener('click', () => {
+    b.addEventListener('click', (e) => {
+      e.stopPropagation();
       snapshot(s);
       vlanRegistryRemove(s, b.dataset.vrm);
       vlansChanged(s);
@@ -362,6 +378,8 @@ function renderLegend(s) {
     });
   });
   body.querySelectorAll('[data-vname]').forEach((inp) => {
+    // Don't let a click on the name field bubble into the solo-toggle.
+    inp.addEventListener('click', (e) => e.stopPropagation());
     inp.addEventListener('input', () => {
       const entry = s.vlanRegistry.find((r) => String(r.id) === inp.dataset.vname);
       if (!entry) return;
@@ -369,6 +387,26 @@ function renderLegend(s) {
       schedSave(s);
     });
   });
+  body.querySelectorAll('[data-vsolo]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const v = String(row.dataset.vsolo);
+      if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
+      const idx = s.view.vlanFilter.findIndex((x) => String(x) === v);
+      if (idx >= 0) s.view.vlanFilter.splice(idx, 1);
+      else s.view.vlanFilter.push(v);
+      render(s);
+      schedSave(s);
+    });
+  });
+  const clearBtn = body.querySelector('[data-vclear]');
+  if (clearBtn) {
+    clearBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      s.view.vlanFilter = [];
+      render(s);
+      schedSave(s);
+    });
+  }
   const form = body.querySelector('.m002-vlan-legend-add');
   const input = form.querySelector('input');
   form.addEventListener('submit', (e) => {
@@ -386,10 +424,14 @@ function renderLegend(s) {
   });
 }
 
-const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1 };
+const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [] };
 const DEVICE_W = 120;
 const DEVICE_H = 72;
 const GRID = 24;
+// Spacing between parallel lanes when multiple distinct links share the same
+// pair of visual endpoints (multi-link UX). Within a single lane VLAN stripes
+// keep their own narrower 6 px gap.
+const LANE_GAP = 14;
 
 // =============================================================================
 // Lifecycle
@@ -1308,6 +1350,75 @@ function effectivePos(s, deviceId) {
 }
 
 // =============================================================================
+// Edge slots — when several distinct links share the same pair of *visual*
+// endpoints (collapsed-stack icon, or device), they get parallel lanes so they
+// don't overlap. Stable, deterministic order keeps lane assignments from
+// jumping across save/reload. LAG-pair lines participate in the same slot
+// pool to avoid colliding with regular links between the same stacks.
+// =============================================================================
+function visualEndpointKey(s, devIdA, devIdB) {
+  const stA = findStack(s, devIdA);
+  const stB = findStack(s, devIdB);
+  const epA = stA && isStackCollapsed(s, stA) ? `stack:${stA.id}` : `device:${devIdA}`;
+  const epB = stB && isStackCollapsed(s, stB) ? `stack:${stB.id}` : `device:${devIdB}`;
+  return [epA, epB].sort().join('|');
+}
+
+function invalidateEdgeSlots(s) {
+  s._edgeSlots = null;
+}
+
+function ensureEdgeSlots(s) {
+  if (s._edgeSlots) return s._edgeSlots;
+  const absorbed = computeAbsorbedLinkIds(s);
+  const bundle = s._bundleByLink || null;
+  const groups = new Map();
+  // Regular links — skip those absorbed into a LAG-pair line or a logical-layer
+  // bundle (those are not drawn as their own edge).
+  s.links.forEach((l) => {
+    if (absorbed.has(l.id)) return;
+    if (bundle?.get(l.id)?.absorbed) return;
+    const key = visualEndpointKey(s, l.from, l.to);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({ kind: 'link', id: l.id, sortKey: 'link:' + l.id });
+  });
+  // Explicit LAG-pair lines — only counted when both stacks collapsed (that's
+  // when drawLagLink actually runs and a stack-to-stack double-line appears).
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      const selfKey = stA.id + ':' + lag.id;
+      const peerKey = peer.stack.id + ':' + peer.lag.id;
+      if (selfKey > peerKey) return; // dedupe pair
+      if (!isStackCollapsed(s, stA) || !isStackCollapsed(s, peer.stack)) return;
+      const ep = [`stack:${stA.id}`, `stack:${peer.stack.id}`].sort().join('|');
+      if (!groups.has(ep)) groups.set(ep, []);
+      groups.get(ep).push({ kind: 'lag', id: `${stA.id}|${lag.id}`, sortKey: 'lag:' + selfKey });
+    });
+  });
+  const out = new Map();
+  groups.forEach((items) => {
+    items.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
+    const n = items.length;
+    items.forEach((item, i) => {
+      const lane = (i - (n - 1) / 2) * LANE_GAP;
+      out.set(`${item.kind}:${item.id}`, { slot: i, count: n, lane });
+    });
+  });
+  s._edgeSlots = out;
+  return out;
+}
+
+function laneForLink(s, linkId) {
+  return ensureEdgeSlots(s).get(`link:${linkId}`)?.lane || 0;
+}
+function laneForLag(s, stackAId, lagAId) {
+  return ensureEdgeSlots(s).get(`lag:${stackAId}|${lagAId}`)?.lane || 0;
+}
+
+// =============================================================================
 // LAG model — LAGs live on stacks (`stack.lags`). A stack is the only entity
 // that aggregates links, so port-refs `{ deviceId, portN }` must always point
 // at one of the stack's own members. Counterparts cross from one stack's LAG
@@ -1735,8 +1846,9 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
   const stroke = opts.stroke || '#9aa0a8';
   const width  = opts.width  || 1.8;
   const gap    = opts.gap    || 3;
-  const a = orthPath(aPos, bPos, +gap);
-  const b = orthPath(aPos, bPos, -gap);
+  const lane   = opts.lane   || 0;
+  const a = orthPath(aPos, bPos, lane + gap);
+  const b = orthPath(aPos, bPos, lane - gap);
   return `
     <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
     <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
@@ -1752,24 +1864,31 @@ function drawLagLink(s, p) {
   // links instead (the LAG is implicit, marked at each port).
   const aPos = { x: p.stackA.x, y: p.stackA.y };
   const bPos = { x: p.stackB.x, y: p.stackB.y };
-  const path = orthPath(aPos, bPos, 0);
+  const lane = laneForLag(s, p.stackA.id, p.lagA.id);
+  const path = orthPath(aPos, bPos, lane);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
   g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
 
   const sharedVlans = (p.lagA.vlans || []).map(String).filter((v) => (p.lagB.vlans || []).map(String).includes(v));
+  const filter = (s.view?.vlanFilter || []).map(String);
+  const isFiltered = filter.length > 0;
+  const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : sharedVlans;
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
-  if (s.activeLayer === 'vlan' && sharedVlans.length) {
+  if (s.activeLayer === 'vlan' && drawnVlans.length) {
     const gap = 6;
-    sharedVlans.forEach((v, i) => {
-      const off = (i - (sharedVlans.length - 1) / 2) * gap;
+    drawnVlans.forEach((v, i) => {
+      const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
       const op = orthPath(aPos, bPos, off);
       const c = vlanColor(s, v);
       inner += `<path class="m002-link-line" d="${op.d}" stroke="${c}" stroke-width="2.4"/>`;
       inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2 });
+    if (s.activeLayer === 'vlan' && isFiltered && sharedVlans.length && !drawnVlans.length) {
+      g.classList.add('m002-link-faded');
+    }
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
   }
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
   g.innerHTML = inner;
@@ -1823,7 +1942,8 @@ function drawLink(s, link) {
   const aPos = effectivePos(s, a.id);
   const bPos = effectivePos(s, b.id);
   const layer = s.activeLayer;
-  const base = orthPath(aPos, bPos, 0);
+  const lane = laneForLink(s, link.id);
+  const base = orthPath(aPos, bPos, lane);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
@@ -1833,12 +1953,19 @@ function drawLink(s, link) {
 
   if (layer === 'vlan') {
     const vlans = linkVlans(s, link);
+    const filter = (s.view?.vlanFilter || []).map(String);
+    const isFiltered = filter.length > 0;
+    const drawn = isFiltered ? vlans.filter((v) => filter.includes(String(v))) : vlans;
     if (vlans.length === 0) {
+      inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+    } else if (drawn.length === 0) {
+      // Filter active but link carries no soloed VLAN — fade out
+      g.classList.add('m002-link-faded');
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
     } else {
       const gap = 6;
-      vlans.forEach((v, i) => {
-        const off = (i - (vlans.length - 1) / 2) * gap;
+      drawn.forEach((v, i) => {
+        const off = lane + (i - (drawn.length - 1) / 2) * gap;
         const p = orthPath(aPos, bPos, off);
         const c = vlanColor(s, v);
         const w = bundleInfo?.members ? 2.4 : 1.4;
@@ -1854,7 +1981,7 @@ function drawLink(s, link) {
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
       // LAG accent — parallel double-line on top of the VLAN stripes
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5 });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
     }
   } else if (layer === 'routing') {
     if (bundleInfo?.members) {
@@ -1862,7 +1989,7 @@ function drawLink(s, link) {
       const lagB = findPortLag(s, b.id, link.toPort)?.lag;
       const aLbl = lagA?.name || '?';
       const bLbl = lagB?.name || '?';
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2 });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`)}</text>`;
     } else {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44" stroke-dasharray="4 3"/>`;
@@ -1935,6 +2062,7 @@ function redrawLink(s, link) {
   // into the LAG visual — don't redraw the bare line.
   const absorbed = computeAbsorbedLinkIds(s);
   if (absorbed.has(link.id)) return;
+  invalidateEdgeSlots(s);
   drawLink(s, link);
   if (s.selected?.kind === 'link' && s.selected.id === link.id) markSelected(s);
 }
@@ -2943,6 +3071,7 @@ function deletePort(s, deviceId, portN) {
 function render(s) {
   recomputeVlanIndex(s);
   renderLegend(s);
+  invalidateEdgeSlots(s);
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
@@ -3132,7 +3261,8 @@ function hydrateMapData(s, data) {
   s.vlanRegistry = Array.isArray(data.vlanRegistry) ? data.vlanRegistry : [];
   s.zones = Array.isArray(data.zones) && data.zones.length ? data.zones : [{ id: 'z_main', name: 'Main' }];
   s.activeZone = data.activeZone && s.zones.find((z) => z.id === data.activeZone) ? data.activeZone : s.zones[0].id;
-  s.view = data.view || { ...DEFAULT_VIEW };
+  s.view = { ...DEFAULT_VIEW, ...(data.view || {}) };
+  if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
   migrate(s);
 }
 
@@ -3641,6 +3771,7 @@ const MOD002_CSS = `
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
 .m002-link.m002-selected .m002-link-line{stroke:#ffffff!important;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
 .m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
+.m002-link.m002-link-faded{opacity:.25;}
 .m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
 
 .m002-palette{display:none;}
@@ -3817,9 +3948,17 @@ const MOD002_CSS = `
 .m002-vlan-legend-title{display:none;}
 .m002-vlan-legend-body{display:flex;flex-direction:column;gap:6px;}
 .m002-vlan-legend-list{display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;}
-.m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;}
+.m002-vlan-row{display:grid;grid-template-columns:8px 28px 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;cursor:pointer;transition:.12s;}
 .m002-vlan-row:hover{border-color:var(--vc);}
+.m002-vlan-row.is-solo{background:rgba(255,255,255,0.04);border-color:var(--vc);box-shadow:0 0 6px rgba(255,255,255,0.06),inset 0 0 6px var(--vc);}
+.m002-vlan-row.is-solo .m002-vlan-row-dot{box-shadow:0 0 6px var(--vc),0 0 14px var(--vc);}
+.m002-vlan-row.is-dimmed{opacity:.4;}
+.m002-vlan-row.is-dimmed:hover{opacity:.85;}
 .m002-vlan-row-dot{width:8px;height:8px;background:var(--vc);box-shadow:0 0 4px var(--vc),0 0 8px var(--vc);}
+.m002-vlan-legend-filter{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px;background:rgba(255,0,60,0.06);border:1px solid rgba(255,0,60,0.4);flex:0 0 auto;}
+.m002-vlan-legend-filter-label{font-family:'Share Tech Mono',monospace;font-size:10px;color:#ff5c7a;letter-spacing:1.5px;}
+.m002-vlan-legend-clear{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:2px 8px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;}
+.m002-vlan-legend-clear:hover{background:rgba(255,0,60,0.15);}
 .m002-vlan-row-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--vc);letter-spacing:1px;}
 .m002-vlan-row-name{background:transparent;border:none;color:#e8e8ee;padding:1px 4px;font-family:'Rajdhani',sans-serif;font-size:12px;outline:none;min-width:0;}
 .m002-vlan-row-name:focus{background:rgba(255,255,255,0.04);}
