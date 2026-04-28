@@ -1705,7 +1705,25 @@ function drawLink(s, link) {
 }
 
 function updateLinksFor(s, deviceId) {
-  s.links.filter((l) => l.from === deviceId || l.to === deviceId).forEach((l) => redrawLink(s, l));
+  // Mirror render()'s absorption: links between LAG-paired device pairs are
+  // owned by the LAG-pair visual, not drawn as bare lines. Skipping them here
+  // (and removing any leftover element) keeps drag from leaking a third line
+  // beneath the LAG double-line.
+  const pairedDevPairs = new Set();
+  s.devices.forEach((d) => {
+    (d.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      pairedDevPairs.add([d.id, lag.counterpart.deviceId].sort().join('::'));
+    });
+  });
+  s.links.filter((l) => l.from === deviceId || l.to === deviceId).forEach((l) => {
+    const key = [l.from, l.to].sort().join('::');
+    if (pairedDevPairs.has(key)) {
+      s.gLinks.querySelector(`[data-link-id="${l.id}"]`)?.remove();
+      return;
+    }
+    redrawLink(s, l);
+  });
   updateLagPairsFor(s, deviceId);
 }
 function redrawLink(s, link) {
