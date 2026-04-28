@@ -194,9 +194,17 @@ function renderVlanPicker(s, container) {
     const lag = (stack.lags || []).find((l) => l.id === parts[2]);
     if (!lag) { container.innerHTML = ''; return; }
     if (!Array.isArray(lag.vlans)) lag.vlans = [];
-    // Available VLANs = intersection across every stackmate's VLAN set
-    // (otherwise you couldn't tag a LAG-VLAN that one member can't carry).
-    const memberDevs = stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+    // For a paired LAG, edits must apply to both sides — collect both LAGs
+    // (and the union of their stack members for the availability check).
+    const peerInfo = lag.counterpart
+      ? findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId)
+      : null;
+    const lagSides = [{ stack, lag }];
+    if (peerInfo) lagSides.push({ stack: peerInfo.stack, lag: peerInfo.lag });
+    // Available VLANs = intersection across every stackmate's VLAN set on
+    // every involved stack (otherwise a member couldn't carry the LAG-VLAN).
+    const memberDevs = lagSides.flatMap(({ stack: st }) =>
+      st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean));
     const intersect = memberDevs.length
       ? memberDevs.reduce((acc, m, i) => i === 0
           ? new Set((m.vlans || []).map(String))
@@ -206,26 +214,31 @@ function renderVlanPicker(s, container) {
       available: [...intersect].sort(vlanSort),
       isOn: (v) => lag.vlans.map(String).includes(v),
       toggle: (v, on) => {
-        if (on) {
-          if (!lag.vlans.map(String).includes(v)) lag.vlans.push(v);
-          (lag.ports || []).forEach((ref) => {
-            const host = s.devices.find((dd) => dd.id === ref.deviceId);
-            const port = (host?.ports || []).find((p) => p.n === Number(ref.portN));
-            if (!port) return;
-            if (!Array.isArray(port.vlans)) port.vlans = [];
-            if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
-          });
-        } else {
-          lag.vlans = lag.vlans.filter((x) => String(x) !== v);
-          (lag.ports || []).forEach((ref) => {
-            const host = s.devices.find((dd) => dd.id === ref.deviceId);
-            const port = (host?.ports || []).find((p) => p.n === Number(ref.portN));
-            if (!port) return;
-            port.vlans = (port.vlans || []).filter((x) => String(x) !== v);
-          });
-        }
+        lagSides.forEach(({ lag: lg }) => {
+          if (!Array.isArray(lg.vlans)) lg.vlans = [];
+          if (on) {
+            if (!lg.vlans.map(String).includes(v)) lg.vlans.push(v);
+            (lg.ports || []).forEach((ref) => {
+              const host = s.devices.find((dd) => dd.id === ref.deviceId);
+              const port = (host?.ports || []).find((p) => p.n === Number(ref.portN));
+              if (!port) return;
+              if (!Array.isArray(port.vlans)) port.vlans = [];
+              if (!port.vlans.map(String).includes(v)) port.vlans.push(v);
+            });
+          } else {
+            lg.vlans = lg.vlans.filter((x) => String(x) !== v);
+            (lg.ports || []).forEach((ref) => {
+              const host = s.devices.find((dd) => dd.id === ref.deviceId);
+              const port = (host?.ports || []).find((p) => p.n === Number(ref.portN));
+              if (!port) return;
+              port.vlans = (port.vlans || []).filter((x) => String(x) !== v);
+            });
+          }
+        });
       },
-      emptyHint: 'no VLANs available across all stack members',
+      emptyHint: peerInfo
+        ? 'no VLANs available across all members of both stacks'
+        : 'no VLANs available across all stack members',
     };
   } else if (kind === 'link') {
     const link = s.links.find((l) => l.id === parts[1]);
