@@ -189,19 +189,25 @@ function renderVlanPicker(s, container) {
       emptyHint: 'device has no VLANs — assign them on the device first',
     };
   } else if (kind === 'lag') {
-    const dev = s.devices.find((d) => d.id === parts[1]);
-    if (!dev) { container.innerHTML = ''; return; }
-    const lag = (dev.lags || []).find((l) => l.id === parts[2]);
+    const stack = findStackById(s, parts[1]);
+    if (!stack) { container.innerHTML = ''; return; }
+    const lag = (stack.lags || []).find((l) => l.id === parts[2]);
     if (!lag) { container.innerHTML = ''; return; }
     if (!Array.isArray(lag.vlans)) lag.vlans = [];
+    // Available VLANs = intersection across every stackmate's VLAN set
+    // (otherwise you couldn't tag a LAG-VLAN that one member can't carry).
+    const memberDevs = stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+    const intersect = memberDevs.length
+      ? memberDevs.reduce((acc, m, i) => i === 0
+          ? new Set((m.vlans || []).map(String))
+          : new Set([...acc].filter((v) => (m.vlans || []).map(String).includes(v))), new Set())
+      : new Set();
     scope = {
-      // LAG VLANs are constrained to the device's VLAN set
-      available: (dev.vlans || []).map(String).sort(vlanSort),
+      available: [...intersect].sort(vlanSort),
       isOn: (v) => lag.vlans.map(String).includes(v),
       toggle: (v, on) => {
         if (on) {
           if (!lag.vlans.map(String).includes(v)) lag.vlans.push(v);
-          // Push the VLAN onto whichever stackmate hosts each member port.
           (lag.ports || []).forEach((ref) => {
             const host = s.devices.find((dd) => dd.id === ref.deviceId);
             const port = (host?.ports || []).find((p) => p.n === Number(ref.portN));
@@ -219,7 +225,7 @@ function renderVlanPicker(s, container) {
           });
         }
       },
-      emptyHint: 'device has no VLANs — assign them on the device first',
+      emptyHint: 'no VLANs available across all stack members',
     };
   } else if (kind === 'link') {
     const link = s.links.find((l) => l.id === parts[1]);
@@ -1227,11 +1233,10 @@ function effectivePos(s, deviceId) {
 }
 
 // =============================================================================
-// LAG model — `lag.ports` is a list of `{ deviceId, portN }` so a stack-wide
-// LAG can bundle ports across every member of the stack. The LAG object lives
-// on its owner device (`dev.lags`), but `deviceId` inside each port-ref points
-// to whichever stackmate physically hosts that port. For standalone devices,
-// every port-ref's deviceId equals the owner device's id.
+// LAG model — LAGs live on stacks (`stack.lags`). A stack is the only entity
+// that aggregates links, so port-refs `{ deviceId, portN }` must always point
+// at one of the stack's own members. Counterparts cross from one stack's LAG
+// to another: `lag.counterpart = { stackId, lagId }`.
 // =============================================================================
 function lagHasPort(lag, deviceId, portN) {
   return (lag?.ports || []).some((p) => p.deviceId === deviceId && Number(p.portN) === Number(portN));
@@ -1239,48 +1244,25 @@ function lagHasPort(lag, deviceId, portN) {
 function lagPortsOnDevice(lag, deviceId) {
   return (lag?.ports || []).filter((p) => p.deviceId === deviceId).map((p) => Number(p.portN));
 }
-function lagOwnerDevice(s, lag) {
-  return s.devices.find((d) => (d.lags || []).includes(lag)) || null;
+// Locate the stack a LAG record lives on (or null if it's an orphan).
+function lagOwnerStack(s, lag) {
+  return s.stacks.find((st) => (st.lags || []).includes(lag)) || null;
 }
-// Devices whose ports a given LAG (owned by `ownerDev`) is allowed to address:
-// the owner itself plus any stackmate (when the owner sits inside a stack).
-function lagAvailableDevices(s, ownerDev) {
-  if (!ownerDev) return [];
-  const stack = findStack(s, ownerDev.id);
-  if (!stack) return [ownerDev];
-  return stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+function findStackLag(s, stackId, lagId) {
+  const st = findStackById(s, stackId);
+  if (!st) return null;
+  const lag = (st.lags || []).find((l) => l.id === lagId);
+  return lag ? { stack: st, lag } : null;
 }
-// Look up the LAG that owns a specific (deviceId, portN). Searches the device
-// itself plus every stackmate when the device is in a stack.
+// Look up the LAG that owns a specific (deviceId, portN). Walks the device's
+// stack, if any.
 function findPortLag(s, deviceId, portN) {
-  const dev = s.devices.find((d) => d.id === deviceId);
-  if (!dev) return null;
   const stack = findStack(s, deviceId);
-  const candidates = stack
-    ? stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean)
-    : [dev];
-  for (const d of candidates) {
-    for (const lag of (d.lags || [])) {
-      if (lagHasPort(lag, deviceId, portN)) return { dev: d, lag };
-    }
+  if (!stack) return null;
+  for (const lag of (stack.lags || [])) {
+    if (lagHasPort(lag, deviceId, portN)) return { stack, lag };
   }
   return null;
-}
-// Visual anchor for a LAG-pair endpoint. Collapsed stack → stack icon. Expanded
-// stack with multi-member ports → centroid of all port-host devices, so the
-// MLAG line visually represents the whole bundle. Otherwise → owner device.
-function lagAnchorPos(s, lag, ownerDev) {
-  const stack = findStack(s, ownerDev.id);
-  if (stack && isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
-  const hostIds = [...new Set((lag?.ports || []).map((p) => p.deviceId))];
-  const positions = hostIds
-    .map((id) => s.devices.find((d) => d.id === id))
-    .filter(Boolean)
-    .map((d) => ({ x: d.x, y: d.y }));
-  if (positions.length <= 1) return { x: ownerDev.x, y: ownerDev.y };
-  const cx = positions.reduce((acc, p) => acc + p.x, 0) / positions.length;
-  const cy = positions.reduce((acc, p) => acc + p.y, 0) / positions.length;
-  return { x: cx, y: cy };
 }
 
 // =============================================================================
@@ -1473,17 +1455,17 @@ function removeFromStack(s, stackId, deviceId) {
   const st = findStackById(s, stackId);
   if (!st) return;
   snapshot(s);
-  const formerMembers = [...st.members];
   st.members = st.members.filter((m) => m !== deviceId);
   if (st.members.length < 2) {
-    // Stack collapses entirely — every former member becomes standalone.
-    s.stacks = s.stacks.filter((x) => x.id !== stackId);
-    formerMembers.forEach((mid) => pruneLagPortsToOwnDevice(s, mid));
+    // Stack collapses entirely → every LAG dies with it (LAGs only exist on
+    // stacks). Reciprocal counterpart pointers on peer LAGs get cleaned up.
+    dropStackAndItsLags(s, st);
   } else {
-    // Leaving device returns to standalone; remaining members lose any port
-    // references to the leaving device (and vice versa).
-    pruneLagPortsToOwnDevice(s, deviceId);
-    st.members.forEach((mid) => pruneLagPortsToStack(s, mid, st.members));
+    // Surviving stack just loses port-refs that pointed at the leaving member.
+    (st.lags || []).forEach((lag) => {
+      lag.ports = (lag.ports || []).filter((p) => p.deviceId !== deviceId);
+    });
+    st.lags = (st.lags || []).filter((lag) => lag.ports.length > 0);
   }
   render(s);
   schedSave(s);
@@ -1491,34 +1473,26 @@ function removeFromStack(s, stackId, deviceId) {
 
 function deleteStack(s, stackId) {
   const st = findStackById(s, stackId);
-  const members = st ? [...st.members] : [];
+  if (!st) return;
   snapshot(s);
-  s.stacks = s.stacks.filter((x) => x.id !== stackId);
-  // Ungrouping: every former member's LAGs collapse to ports the device itself hosts.
-  members.forEach((mid) => pruneLagPortsToOwnDevice(s, mid));
+  dropStackAndItsLags(s, st);
   render(s);
   schedSave(s);
 }
 
-// Restrict every LAG owned by `deviceId` to ports physically on that device.
-// Used when a device leaves a stack or a stack is dissolved.
-function pruneLagPortsToOwnDevice(s, deviceId) {
-  const dev = s.devices.find((d) => d.id === deviceId);
-  if (!dev) return;
-  (dev.lags || []).forEach((lag) => {
-    lag.ports = (lag.ports || []).filter((p) => p.deviceId === deviceId);
+// Drop a stack and every LAG it owned. Also break any peer-LAG counterpart
+// pointer that referenced one of those LAGs.
+function dropStackAndItsLags(s, st) {
+  const droppedLagIds = new Set((st.lags || []).map((l) => l.id));
+  s.stacks.forEach((other) => {
+    if (other.id === st.id) return;
+    (other.lags || []).forEach((lag) => {
+      if (lag.counterpart?.stackId === st.id && droppedLagIds.has(lag.counterpart.lagId)) {
+        delete lag.counterpart;
+      }
+    });
   });
-  dev.lags = (dev.lags || []).filter((lag) => lag.ports.length > 0);
-}
-// Restrict every LAG owned by `deviceId` to ports on devices in `allowedIds`.
-function pruneLagPortsToStack(s, deviceId, allowedIds) {
-  const dev = s.devices.find((d) => d.id === deviceId);
-  if (!dev) return;
-  const allow = new Set(allowedIds);
-  (dev.lags || []).forEach((lag) => {
-    lag.ports = (lag.ports || []).filter((p) => allow.has(p.deviceId));
-  });
-  dev.lags = (dev.lags || []).filter((lag) => lag.ports.length > 0);
+  s.stacks = s.stacks.filter((x) => x.id !== st.id);
 }
 
 function toggleStackExpanded(s, stackId) {
@@ -1628,16 +1602,15 @@ function orthPath(a, b, off = 0) {
 
 // What does this LAG connect to? Walks each member port's existing link and
 // summarizes the most common destination as { device, lag?, portCount }.
-function lagCounterpart(s, deviceId, lag) {
+function lagCounterpart(s, stackId, lag) {
   // Manual override beats inference
-  if (lag?.counterpart?.deviceId && lag?.counterpart?.lagId) {
-    const dev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
-    const otherLag = dev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-    if (dev && otherLag) return { dev, lag: otherLag, count: otherLag.ports?.length || 0, manual: true };
+  if (lag?.counterpart?.stackId && lag?.counterpart?.lagId) {
+    const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+    if (peer) return { stack: peer.stack, lag: peer.lag, count: peer.lag.ports?.length || 0, manual: true };
   }
-  // Auto-derive from port-links. Iterate every (host, portN) the LAG owns, then
-  // tally which peer LAG (or peer device) the matching links resolve to.
-  const counts = new Map(); // key (otherOwnerId|otherLagId?) → { dev, lag, count }
+  // Auto-derive from port-links. Iterate every (host, portN) the LAG owns,
+  // then tally which peer stack-LAG the matching links resolve to.
+  const counts = new Map(); // key (peerStackId|peerLagId?) → { stack, lag, count }
   for (const portRef of (lag.ports || [])) {
     const hostId = portRef.deviceId;
     const portN = Number(portRef.portN);
@@ -1648,18 +1621,16 @@ function lagCounterpart(s, deviceId, lag) {
     if (!link) continue;
     const otherId = link.from === hostId ? link.to : link.from;
     const otherPort = Number(link.from === hostId ? link.toPort : link.fromPort);
-    const otherDev = s.devices.find((d) => d.id === otherId);
-    if (!otherDev) continue;
+    const peerStack = findStack(s, otherId);
+    if (!peerStack) continue;
     const peerLagInfo = findPortLag(s, otherId, otherPort);
-    const otherLag = peerLagInfo?.lag || null;
-    const otherOwnerId = peerLagInfo?.dev?.id || otherId;
-    const key = otherOwnerId + (otherLag ? '|' + otherLag.id : '');
-    if (!counts.has(key)) counts.set(key, { dev: peerLagInfo?.dev || otherDev, lag: otherLag, count: 0 });
+    const peerLag = peerLagInfo?.lag || null;
+    const key = peerStack.id + (peerLag ? '|' + peerLag.id : '');
+    if (!counts.has(key)) counts.set(key, { stack: peerStack, lag: peerLag, count: 0 });
     counts.get(key).count++;
   }
   if (counts.size === 0) return null;
-  const top = [...counts.values()].sort((a, b) => b.count - a.count)[0];
-  return top;
+  return [...counts.values()].sort((a, b) => b.count - a.count)[0];
 }
 
 // LAG bundle key for a link — null if it's not part of any LAG-pair.
@@ -1684,18 +1655,19 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
 // the underlying port-cables in any layer. Click → opens the LAG modal so
 // the user can edit name / members / counterpart / VLANs in one place.
 function drawLagLink(s, p) {
-  const aPos = lagAnchorPos(s, p.lagA, p.devA);
-  const bPos = lagAnchorPos(s, p.lagB, p.devB);
+  // Only invoked when both stacks are collapsed — endpoints anchor at stack
+  // icons. When either side is expanded, render() draws the underlying port-
+  // links instead (the LAG is implicit, marked at each port).
+  const aPos = { x: p.stackA.x, y: p.stackA.y };
+  const bPos = { x: p.stackB.x, y: p.stackB.y };
   const path = orthPath(aPos, bPos, 0);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
-  g.setAttribute('data-laglink-id', `${p.devA.id}|${p.lagA.id}`);
+  g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
 
   const sharedVlans = (p.lagA.vlans || []).map(String).filter((v) => (p.lagB.vlans || []).map(String).includes(v));
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   if (s.activeLayer === 'vlan' && sharedVlans.length) {
-    // Per-VLAN colored stripes plus the double-line accent so the bundle
-    // is still readable as a LAG.
     const gap = 6;
     sharedVlans.forEach((v, i) => {
       const off = (i - (sharedVlans.length - 1) / 2) * gap;
@@ -1705,7 +1677,6 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    // Default representation: a neutral double-line between the two devices.
     inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2 });
   }
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
@@ -1714,19 +1685,15 @@ function drawLagLink(s, p) {
 }
 
 function lagBundleKey(s, link) {
-  const a = s.devices.find((d) => d.id === link.from);
-  const b = s.devices.find((d) => d.id === link.to);
-  if (!a || !b) return null;
-  const infoA = findPortLag(s, a.id, link.fromPort);
-  const infoB = findPortLag(s, b.id, link.toPort);
+  const infoA = findPortLag(s, link.from, link.fromPort);
+  const infoB = findPortLag(s, link.to,   link.toPort);
   if (!infoA && !infoB) return null;
-  // Direction-independent key. Single-sided LAG is allowed — bundles links
-  // that share the same {LAG, peer device} pairing. Uses the LAG owner id so
-  // stack-LAGs key the same regardless of which member hosts the port.
-  const aSide = infoA ? `${infoA.dev.id}:${infoA.lag.id}` : `${a.id}:_`;
-  const bSide = infoB ? `${infoB.dev.id}:${infoB.lag.id}` : `${b.id}:_`;
-  const ends = [aSide, bSide].sort();
-  return ends.join('::');
+  // Direction-independent key. Keyed on the owning stack so a stack-LAG
+  // bundles every member-port link regardless of which member hosts a given
+  // port.
+  const aSide = infoA ? `${infoA.stack.id}:${infoA.lag.id}` : `${link.from}:_`;
+  const bSide = infoB ? `${infoB.stack.id}:${infoB.lag.id}` : `${link.to}:_`;
+  return [aSide, bSide].sort().join('::');
 }
 
 function linkVlans(s, link) {
@@ -1828,30 +1795,33 @@ function updateLinksFor(s, deviceId) {
   updateLagPairsFor(s, deviceId);
 }
 
-// Shared absorption set so render() and partial redraws agree.
+// Shared absorption set so render() and partial redraws agree. Absorb a link
+// only when both sides of the LAG-pair are collapsed — once a stack expands,
+// the user sees the actual physical port-links and the LAG itself is implicit.
 function computeAbsorbedLinkIds(s) {
   const absorbed = new Set();
-  s.devices.forEach((d) => {
-    (d.lags || []).forEach((lag) => {
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
       if (!lag.counterpart?.lagId) return;
-      const otherDev = s.devices.find((dd) => dd.id === lag.counterpart.deviceId);
-      const otherLag = otherDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-      if (!otherDev || !otherLag) return;
-      // Only count each pair once — process when this side is the lex-smaller end.
-      const selfKey = d.id + ':' + lag.id;
-      const peerKey = otherDev.id + ':' + otherLag.id;
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      // Only count each pair once.
+      const selfKey = stA.id + ':' + lag.id;
+      const peerKey = peer.stack.id + ':' + peer.lag.id;
       if (selfKey > peerKey) return;
+      // Expanded → no absorption: physical port-links draw as themselves.
+      if (!isStackCollapsed(s, stA) || !isStackCollapsed(s, peer.stack)) return;
       const portsA = new Set(lag.ports.map((pp) => pp.deviceId + ':' + Number(pp.portN)));
-      const portsB = new Set(otherLag.ports.map((pp) => pp.deviceId + ':' + Number(pp.portN)));
-      const devsA = new Set([...new Set(lag.ports.map((pp) => pp.deviceId)), d.id]);
-      const devsB = new Set([...new Set(otherLag.ports.map((pp) => pp.deviceId)), otherDev.id]);
+      const portsB = new Set(peer.lag.ports.map((pp) => pp.deviceId + ':' + Number(pp.portN)));
+      const membersA = new Set(stA.members);
+      const membersB = new Set(peer.stack.members);
       s.links.forEach((l) => {
         if (l.fromPort && l.toPort) {
           const fk = l.from + ':' + Number(l.fromPort);
           const tk = l.to   + ':' + Number(l.toPort);
           if ((portsA.has(fk) && portsB.has(tk)) || (portsB.has(fk) && portsA.has(tk))) absorbed.add(l.id);
         } else {
-          if ((devsA.has(l.from) && devsB.has(l.to)) || (devsB.has(l.from) && devsA.has(l.to))) absorbed.add(l.id);
+          if ((membersA.has(l.from) && membersB.has(l.to)) || (membersB.has(l.from) && membersA.has(l.to))) absorbed.add(l.id);
         }
       });
     });
@@ -1861,36 +1831,36 @@ function computeAbsorbedLinkIds(s) {
 function redrawLink(s, link) {
   const g = s.gLinks.querySelector(`[data-link-id="${link.id}"]`);
   if (g) g.remove();
+  // If both stacks of this link's LAG-pair are collapsed, the link is absorbed
+  // into the LAG visual — don't redraw the bare line.
+  const absorbed = computeAbsorbedLinkIds(s);
+  if (absorbed.has(link.id)) return;
   drawLink(s, link);
   if (s.selected?.kind === 'link' && s.selected.id === link.id) markSelected(s);
 }
 
-// Redraw any LAG-pair line that touches this device — either as one of the
-// owner devices, or as a port-host on either LAG (relevant for stack-LAGs
-// where the line's anchor is the centroid of all port-host devices).
-// Iteration order matches render() so the resulting data-laglink-id stays
-// stable across drags and the selection highlight survives.
+// Redraw any LAG-pair line that this device participates in. Only drawn when
+// both sides are collapsed; expanded-mode renders just port-links so we make
+// sure any stale lag-pair element is removed.
 function updateLagPairsFor(s, deviceId) {
+  const stack = findStack(s, deviceId);
+  if (!stack) return;
   const seen = new Set();
-  const touches = (lag, devId) =>
-    (lag.ports || []).some((p) => p.deviceId === devId);
-  s.devices.forEach((d) => {
-    (d.lags || []).forEach((lag) => {
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
       if (!lag.counterpart?.lagId) return;
-      const otherDev = s.devices.find((dd) => dd.id === lag.counterpart.deviceId);
-      const otherLag = otherDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-      if (!otherDev || !otherLag) return;
-      const involves = d.id === deviceId
-        || otherDev.id === deviceId
-        || touches(lag, deviceId)
-        || touches(otherLag, deviceId);
-      if (!involves) return;
-      const key = [d.id + ':' + lag.id, otherDev.id + ':' + otherLag.id].sort().join('::');
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      // Only handle pairs that involve the dragged device's stack.
+      if (stA.id !== stack.id && peer.stack.id !== stack.id) return;
+      const key = [stA.id + ':' + lag.id, peer.stack.id + ':' + peer.lag.id].sort().join('::');
       if (seen.has(key)) return;
       seen.add(key);
-      s.gLinks.querySelector(`[data-laglink-id="${d.id}|${lag.id}"]`)?.remove();
-      s.gLinks.querySelector(`[data-laglink-id="${otherDev.id}|${otherLag.id}"]`)?.remove();
-      drawLagLink(s, { devA: d, lagA: lag, devB: otherDev, lagB: otherLag });
+      s.gLinks.querySelector(`[data-laglink-id="${stA.id}|${lag.id}"]`)?.remove();
+      s.gLinks.querySelector(`[data-laglink-id="${peer.stack.id}|${peer.lag.id}"]`)?.remove();
+      if (isStackCollapsed(s, stA) && isStackCollapsed(s, peer.stack)) {
+        drawLagLink(s, { stackA: stA, lagA: lag, stackB: peer.stack, lagB: peer.lag });
+      }
     });
   });
   if (s.selected?.kind === 'lag') markSelected(s);
@@ -1981,52 +1951,6 @@ function openInspector(s) {
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
       </div>
       <div class="m002-ports-block">
-        ${(() => {
-          // Show every LAG visible from this device — for stacked devices that
-          // means the union across every stackmate, since a stack is one
-          // logical switch and its LAGs belong to the whole stack regardless
-          // of which member nominally owns the record.
-          const visibleLags = lagAvailableDevices(s, dev).flatMap((host) =>
-            (host.lags || []).map((lag) => ({ owner: host, lag }))
-          );
-          const headLabel = visibleLags.length === 1 ? '1' : visibleLags.length;
-          const rows = visibleLags.map(({ owner, lag }) => {
-            const cp = lagCounterpart(s, owner.id, lag);
-            const cpTxt = cp
-              ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`)
-              : '—';
-            // Stack-aware port summary: group port numbers by host device, so a
-            // LAG that spans multiple stackmates reads as "SW11: 1, 2 · SW13: 1".
-            const byHost = new Map();
-            (lag.ports || []).forEach((p) => {
-              if (!byHost.has(p.deviceId)) byHost.set(p.deviceId, []);
-              byHost.get(p.deviceId).push(Number(p.portN));
-            });
-            const portTxt = [...byHost.entries()].map(([hid, ns]) => {
-              const host = s.devices.find((d) => d.id === hid);
-              const label = (byHost.size > 1 && host) ? `${host.name}: ` : '';
-              return label + ns.sort((a, b) => a - b).join(', ');
-            }).join(' · ') || '—';
-            return `
-            <div class="m002-lagtable-row" data-lag-row="${escAttr(lag.id)}" data-lag-owner="${escAttr(owner.id)}" tabindex="0">
-              <span class="m002-lagtable-name">${escSvg(lag.name)}</span>
-              <span class="m002-lagtable-ports" title="${escAttr(portTxt)}">${escSvg(portTxt)}</span>
-              <span class="m002-lagtable-cp ${cp ? '' : 'dim'}" title="${escAttr(cpTxt)}">${escSvg(cpTxt)}</span>
-            </div>`;
-          }).join('') || '<span class="m002-vlan-empty">no LAGs</span>';
-          return `
-            <div class="m002-ports-head">LAGS (${headLabel})</div>
-            <div class="m002-ports-grid">
-              <div class="m002-lagtable-head">
-                <span>NAME</span><span>PORTS</span><span>COUNTERPART</span>
-              </div>
-              ${rows}
-            </div>
-            <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
-          `;
-        })()}
-      </div>
-      <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
         <div class="m002-ports-grid">
           <div class="m002-port-head-row">
@@ -2034,11 +1958,13 @@ function openInspector(s) {
           </div>
           ${dev.ports.map((p) => {
             const cp = counterpartFor(s, dev.id, p.n);
+            const lagInfo = findPortLag(s, dev.id, p.n);
+            const lagBadge = lagInfo ? ` <span class="m002-port-lagtag" title="part of ${escAttr(lagInfo.lag.name)} (${escAttr(lagInfo.stack.name)})">→ ${escSvg(lagInfo.lag.name)}</span>` : '';
             return `
             <div class="m002-port-row" data-port-open="${p.n}" tabindex="0">
               <span class="m002-port-num">${p.n}</span>
               <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="port name"/>
-              <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}</span>
+              <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}${lagBadge}</span>
             </div>`;
           }).join('')}
         </div>
@@ -2066,23 +1992,6 @@ function openInspector(s) {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
-    body.querySelector('[data-newlag]')?.addEventListener('click', () => openLagModal(s, dev.id));
-    body.querySelectorAll('[data-lag-rm]').forEach((b) => {
-      b.addEventListener('click', () => {
-        snapshot(s);
-        dev.lags = dev.lags.filter((l) => l.id !== b.dataset.lagRm);
-        schedSave(s);
-        render(s);
-        openInspector(s);
-      });
-    });
-    body.querySelectorAll('[data-lag-row]').forEach((row) => {
-      row.addEventListener('click', (e) => {
-        if (e.target.closest('[data-lag-rm]')) return;
-        const ownerId = row.dataset.lagOwner || dev.id;
-        select(s, 'lag', `${ownerId}|${row.dataset.lagRow}`);
-      });
-    });
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
@@ -2121,6 +2030,46 @@ function openInspector(s) {
     const stack = findStackById(s, s.selected.id);
     if (!stack) return;
     idEl.textContent = `// STACK · ×${stack.members.length}`;
+
+    // LAGS section: lives on the stack now. Each row links into the symmetric
+    // LAG editor and shows the per-stackmate port distribution.
+    const lagsHTML = (() => {
+      const rows = (stack.lags || []).map((lag) => {
+        const cp = lagCounterpart(s, stack.id, lag);
+        const cpTxt = cp
+          ? (cp.lag ? `${cp.stack.name} · ${cp.lag.name}` : `${cp.stack.name} · ${cp.count}p`)
+          : '—';
+        const byHost = new Map();
+        (lag.ports || []).forEach((p) => {
+          if (!byHost.has(p.deviceId)) byHost.set(p.deviceId, []);
+          byHost.get(p.deviceId).push(Number(p.portN));
+        });
+        const portTxt = [...byHost.entries()].map(([hid, ns]) => {
+          const host = s.devices.find((d) => d.id === hid);
+          const label = (byHost.size > 1 && host) ? `${host.name}: ` : '';
+          return label + ns.sort((a, b) => a - b).join(', ');
+        }).join(' · ') || '—';
+        return `
+          <div class="m002-lagtable-row" data-lag-row="${escAttr(lag.id)}" tabindex="0">
+            <span class="m002-lagtable-name">${escSvg(lag.name)}</span>
+            <span class="m002-lagtable-ports" title="${escAttr(portTxt)}">${escSvg(portTxt)}</span>
+            <span class="m002-lagtable-cp ${cp ? '' : 'dim'}" title="${escAttr(cpTxt)}">${escSvg(cpTxt)}</span>
+          </div>`;
+      }).join('') || '<span class="m002-vlan-empty">no LAGs</span>';
+      return `
+        <div class="m002-ports-block">
+          <div class="m002-ports-head">LAGS (${(stack.lags || []).length})</div>
+          <div class="m002-ports-grid">
+            <div class="m002-lagtable-head">
+              <span>NAME</span><span>PORTS</span><span>COUNTERPART</span>
+            </div>
+            ${rows}
+          </div>
+          <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
+        </div>
+      `;
+    })();
+
     body.innerHTML = `
       <label class="m002-field"><span>NAME</span><input data-sf="name" value="${escAttr(stack.name)}"/></label>
       <div class="m002-field">
@@ -2133,6 +2082,7 @@ function openInspector(s) {
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="stack:${escAttr(stack.id)}"></div>
       </div>
+      ${lagsHTML}
       <div class="m002-field">
         <span>MEMBERS (${stack.members.length})</span>
         <div class="m002-stack-members">
@@ -2170,62 +2120,64 @@ function openInspector(s) {
         else { deselect(s); }
       });
     });
+    body.querySelector('[data-newlag]')?.addEventListener('click', () => openLagModal(s, stack.id));
+    body.querySelectorAll('[data-lag-row]').forEach((row) => {
+      row.addEventListener('click', () => select(s, 'lag', `${stack.id}|${row.dataset.lagRow}`));
+    });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'lag') {
-    // LAG editor — link-style layout: header showing both endpoints,
-    // FROM LAG / TO LAG selectors, VLANs, then secondary fields below.
-    const [devId, lagId] = String(s.selected.id).split('|');
-    const dev = s.devices.find((d) => d.id === devId);
-    const lag = dev?.lags?.find((l) => l.id === lagId);
-    if (!dev || !lag) {
-      if (dev) { select(s, 'device', dev.id); return; }
+    // LAG editor — symmetric, both sides are stacks. FROM LAG / TO LAG pick
+    // sibling and peer LAGs; per-side blocks edit each stack's own NAME and
+    // MEMBER PORTS (grouped per stackmate).
+    const [stackId, lagId] = String(s.selected.id).split('|');
+    const stack = findStackById(s, stackId);
+    const lag = stack?.lags?.find((l) => l.id === lagId);
+    if (!stack || !lag) {
+      if (stack) { select(s, 'stack', stack.id); return; }
       deselect(s); return;
     }
 
-    const cp = lagCounterpart(s, devId, lag);
-    const peerDev = cp?.dev || null;
+    const cp = lagCounterpart(s, stack.id, lag);
+    const peerStack = cp?.stack || null;
     const peerLag = cp?.lag || null;
 
-    // FROM-LAG options: every LAG on this device (lets you switch sibling LAGs).
-    const fromOpts = (dev.lags || []).map((l) => ({ id: l.id, label: l.name }));
+    // FROM-LAG options: every LAG on this stack.
+    const fromOpts = (stack.lags || []).map((l) => ({ id: l.id, label: l.name }));
 
-    // TO-LAG options: every LAG on every device this device has a link to.
-    const linkedDevs = new Map();
+    // TO-LAG options: every LAG on every stack that this stack has a link to
+    // (any member-to-member edge counts as a candidate pairing).
+    const linkedStacks = new Map();
     s.links.forEach((l) => {
+      const fromStack = findStack(s, l.from);
+      const toStack = findStack(s, l.to);
+      if (!fromStack || !toStack) return;
       let other = null;
-      if (l.from === devId) other = s.devices.find((d) => d.id === l.to);
-      else if (l.to === devId) other = s.devices.find((d) => d.id === l.from);
-      if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
+      if (fromStack.id === stack.id && toStack.id !== stack.id) other = toStack;
+      else if (toStack.id === stack.id && fromStack.id !== stack.id) other = fromStack;
+      if (other && !linkedStacks.has(other.id)) linkedStacks.set(other.id, other);
     });
-    const toOpts = [...linkedDevs.values()].flatMap((d) =>
-      (d.lags || []).map((l) => ({ devId: d.id, devName: d.name, lagId: l.id, lagName: l.name }))
+    const toOpts = [...linkedStacks.values()].flatMap((st) =>
+      (st.lags || []).map((l) => ({ stackId: st.id, stackName: st.name, lagId: l.id, lagName: l.name }))
     );
     const toKey = lag.counterpart?.lagId
-      ? `${lag.counterpart.deviceId}|${lag.counterpart.lagId}`
+      ? `${lag.counterpart.stackId}|${lag.counterpart.lagId}`
       : '';
 
-    const isPaired = !!(peerDev && peerLag && lag.counterpart?.lagId);
+    const isPaired = !!(peerStack && peerLag && lag.counterpart?.lagId);
 
-    // Per-side block — symmetric layout when the LAG is paired so neither
-    // device "owns" the editor. Both sides edit their own NAME / PORTS;
-    // VLANs (intersection) and counterpart pointer are shared above. When the
-    // owner device sits in a stack, MEMBER PORTS is grouped per-stackmate so a
-    // single LAG can bundle ports across the whole stack.
-    const sideHTML = (sideDev, sideLag) => {
-      const memberDevs = lagAvailableDevices(s, sideDev);
-      const isStackLag = memberDevs.length > 1;
-      // Ports already claimed by another sibling LAG anywhere in the stack
+    // Per-side block — both stacks editable. MEMBER PORTS is grouped per
+    // stackmate so a single LAG can bundle ports across the whole stack.
+    const sideHTML = (sideStack, sideLag) => {
+      const memberDevs = sideStack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
       const otherLagPorts = new Set();
-      memberDevs.forEach((md) => {
-        (md.lags || []).forEach((l) => {
-          if (l === sideLag) return;
-          (l.ports || []).forEach((p) => otherLagPorts.add(p.deviceId + ':' + Number(p.portN)));
-        });
+      (sideStack.lags || []).forEach((l) => {
+        if (l === sideLag) return;
+        (l.ports || []).forEach((p) => otherLagPorts.add(p.deviceId + ':' + Number(p.portN)));
       });
       return `
-        <div class="m002-lag-side" data-side-dev="${escAttr(sideDev.id)}" data-side-lag="${escAttr(sideLag.id)}">
-          <div class="m002-lag-side-head">${escSvg(sideDev.name.toUpperCase())}${isStackLag ? ' · STACK' : ''}</div>
+        <div class="m002-lag-side" data-side-stack="${escAttr(sideStack.id)}" data-side-lag="${escAttr(sideLag.id)}">
+          <div class="m002-lag-side-head">${escSvg(sideStack.name.toUpperCase())}</div>
           <label class="m002-field"><span>NAME</span>
             <input data-side-name value="${escAttr(sideLag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
           </label>
@@ -2233,7 +2185,7 @@ function openInspector(s) {
             const memberPorts = new Set(lagPortsOnDevice(sideLag, memberDev.id));
             return `
               <div class="m002-field">
-                <span>${isStackLag ? `MEMBER PORTS · ${escSvg(memberDev.name)}` : 'MEMBER PORTS'} (${memberDev.ports.length})</span>
+                <span>MEMBER PORTS · ${escSvg(memberDev.name)} (${memberDev.ports.length})</span>
                 <div class="m002-lagm-ports">
                   ${memberDev.ports.map((p) => {
                     const k = memberDev.id + ':' + p.n;
@@ -2253,15 +2205,15 @@ function openInspector(s) {
     };
 
     idEl.textContent = isPaired
-      ? `// ${dev.name} ⇄ ${peerDev.name} · LAG-PAIR`
-      : `// ${dev.name} · ${lag.name}`;
+      ? `// ${stack.name} ⇄ ${peerStack.name} · LAG-PAIR`
+      : `// ${stack.name} · ${lag.name}`;
 
     body.innerHTML = `
-      <button type="button" class="m002-insp-back" data-back>← BACK TO ${escSvg(dev.name.toUpperCase())}</button>
+      <button type="button" class="m002-insp-back" data-back>← BACK TO ${escSvg(stack.name.toUpperCase())}</button>
       <div class="m002-link-summary">
-        <span class="m002-link-end">${escSvg(dev.name)}</span>
+        <span class="m002-link-end">${escSvg(stack.name)}</span>
         <span class="m002-link-arrow">⇄</span>
-        <span class="m002-link-end ${peerDev ? '' : 'dim'}">${escSvg(peerDev?.name || '—')}</span>
+        <span class="m002-link-end ${peerStack ? '' : 'dim'}">${escSvg(peerStack?.name || '—')}</span>
       </div>
       <div class="m002-row2">
         <label class="m002-field"><span>FROM LAG</span>
@@ -2272,19 +2224,19 @@ function openInspector(s) {
         <label class="m002-field"><span>TO LAG</span>
           <select data-lf="to">
             <option value="">— auto / none —</option>
-            ${toOpts.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${toKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
+            ${toOpts.map((o) => `<option value="${escAttr(o.stackId + '|' + o.lagId)}" ${toKey === (o.stackId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.stackName)} · ${escSvg(o.lagName)}</option>`).join('')}
           </select>
         </label>
       </div>
       <div class="m002-field">
         <span>VLANS (lag-pair)</span>
-        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(devId)}:${escAttr(lag.id)}"></div>
+        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(stack.id)}:${escAttr(lag.id)}"></div>
       </div>
-      ${!toOpts.length ? `<p class="m002-link-hint">No LAGs found on linked devices — create one over there first to pair.</p>` : (lag.counterpart ? '' : (peerLag ? `<p class="m002-link-hint">Auto-derived from port links. Pick "TO LAG" to lock it manually.</p>` : ''))}
+      ${!toOpts.length ? `<p class="m002-link-hint">No LAGs found on linked stacks — create one over there first to pair.</p>` : (lag.counterpart ? '' : (peerLag ? `<p class="m002-link-hint">Auto-derived from port links. Pick "TO LAG" to lock it manually.</p>` : ''))}
 
       <div class="m002-lag-sides">
-        ${sideHTML(dev, lag)}
-        ${isPaired ? sideHTML(peerDev, peerLag) : ''}
+        ${sideHTML(stack, lag)}
+        ${isPaired ? sideHTML(peerStack, peerLag) : ''}
       </div>
 
       <button type="button" class="m002-insp-del" data-lact="delete">${isPaired ? 'DELETE LAG-PAIR' : 'DELETE LAG'}</button>
@@ -2292,50 +2244,45 @@ function openInspector(s) {
     renderInspectorVlanPickers(s);
 
     body.querySelector('[data-back]')?.addEventListener('click', () => {
-      select(s, 'device', devId);
+      select(s, 'stack', stack.id);
     });
 
-    // FROM LAG: switch which sibling LAG is being edited.
     body.querySelector('[data-lf="from"]')?.addEventListener('change', (e) => {
       const newId = e.target.value;
-      if (newId && newId !== lag.id) select(s, 'lag', `${devId}|${newId}`);
+      if (newId && newId !== lag.id) select(s, 'lag', `${stack.id}|${newId}`);
     });
 
-    // TO LAG: pick / unpick the counterpart, with reciprocal pairing.
     body.querySelector('[data-lf="to"]')?.addEventListener('change', (e) => {
       snapshot(s);
       if (lag.counterpart?.lagId) {
-        const oldDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
-        const oldLag = oldDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-        if (oldLag?.counterpart?.lagId === lag.id) delete oldLag.counterpart;
+        const oldPeer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+        if (oldPeer?.lag.counterpart?.lagId === lag.id) delete oldPeer.lag.counterpart;
       }
       const v = e.target.value;
       if (!v) { delete lag.counterpart; }
       else {
-        const [oDevId, oLagId] = v.split('|');
-        lag.counterpart = { deviceId: oDevId, lagId: oLagId };
-        const otherDev = s.devices.find((d) => d.id === oDevId);
-        const otherLag = otherDev?.lags?.find((ll) => ll.id === oLagId);
-        if (otherLag) otherLag.counterpart = { deviceId: devId, lagId: lag.id };
+        const [oStackId, oLagId] = v.split('|');
+        lag.counterpart = { stackId: oStackId, lagId: oLagId };
+        const peerInfo = findStackLag(s, oStackId, oLagId);
+        if (peerInfo) peerInfo.lag.counterpart = { stackId: stack.id, lagId: lag.id };
       }
       schedSave(s);
       render(s);
       openInspector(s);
     });
 
-    // Wire NAME + PORT edits per side. Symmetric: both sides editable.
     body.querySelectorAll('.m002-lag-side').forEach((sideEl) => {
-      const sideDev = s.devices.find((d) => d.id === sideEl.dataset.sideDev);
-      const sideLag = sideDev?.lags?.find((l) => l.id === sideEl.dataset.sideLag);
-      if (!sideDev || !sideLag) return;
+      const sideStack = findStackById(s, sideEl.dataset.sideStack);
+      const sideLag = sideStack?.lags?.find((l) => l.id === sideEl.dataset.sideLag);
+      if (!sideStack || !sideLag) return;
 
       const nameEl = sideEl.querySelector('[data-side-name]');
       nameEl?.addEventListener('input', () => {
         const v = nameEl.value.trim();
         if (!v) return;
         sideLag.name = v;
-        if (!isPaired && sideDev.id === devId && sideLag.id === lag.id) {
-          idEl.textContent = `// ${dev.name} · ${lag.name}`;
+        if (!isPaired && sideStack.id === stack.id && sideLag.id === lag.id) {
+          idEl.textContent = `// ${stack.name} · ${lag.name}`;
         }
         schedSave(s);
       });
@@ -2365,20 +2312,19 @@ function openInspector(s) {
       });
     });
 
-    // DELETE — when paired, removes both LAGs (the pair *is* the connection).
-    // Standalone, removes just this side.
     body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
       snapshot(s);
       if (lag.counterpart?.lagId) {
-        const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
-        const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-        if (oLag?.counterpart?.lagId === lag.id) delete oLag.counterpart;
-        if (oDev && oLag) oDev.lags = oDev.lags.filter((l) => l.id !== oLag.id);
+        const peerInfo = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+        if (peerInfo) {
+          if (peerInfo.lag.counterpart?.lagId === lag.id) delete peerInfo.lag.counterpart;
+          peerInfo.stack.lags = peerInfo.stack.lags.filter((l) => l.id !== peerInfo.lag.id);
+        }
       }
-      dev.lags = dev.lags.filter((l) => l.id !== lag.id);
+      stack.lags = stack.lags.filter((l) => l.id !== lag.id);
       schedSave(s);
       render(s);
-      select(s, 'device', dev.id);
+      select(s, 'stack', stack.id);
     });
   }
 }
@@ -2396,12 +2342,12 @@ function updateDeviceField(s, dev, el) {
         if (l.from === dev.id && Number(l.fromPort) > n) l.fromPort = '';
         if (l.to === dev.id && Number(l.toPort) > n) l.toPort = '';
       });
-      // Drop LAG port-refs to ports that no longer exist on this device.
-      s.devices.forEach((d) => {
-        (d.lags || []).forEach((lag) => {
+      // Drop stack-LAG port-refs to ports that no longer exist on this device.
+      s.stacks.forEach((stk) => {
+        (stk.lags || []).forEach((lag) => {
           lag.ports = (lag.ports || []).filter((p) => !(p.deviceId === dev.id && Number(p.portN) > n));
         });
-        d.lags = (d.lags || []).filter((lag) => lag.ports.length > 0);
+        stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
       });
     }
     redrawDevice(s, dev);
@@ -2430,38 +2376,36 @@ function deleteSelected(s) {
   snapshot(s);
   if (s.selected.kind === 'device') {
     const id = s.selected.id;
-    // Remove from any stack first
+    // Remove from any stack first (which may dissolve it and drop its LAGs)
     const st = findStack(s, id);
     if (st) removeFromStack(s, st.id, id);
     s.devices = s.devices.filter((d) => d.id !== id);
     s.links = s.links.filter((l) => l.from !== id && l.to !== id);
-    // Drop port-refs in any remaining LAG that pointed at the deleted device.
-    s.devices.forEach((d) => {
-      (d.lags || []).forEach((lag) => {
+    // Drop port-refs in any remaining stack-LAG that pointed at the deleted device.
+    s.stacks.forEach((stk) => {
+      (stk.lags || []).forEach((lag) => {
         lag.ports = (lag.ports || []).filter((p) => p.deviceId !== id);
       });
-      d.lags = (d.lags || []).filter((lag) => lag.ports.length > 0);
+      stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
     });
   } else if (s.selected.kind === 'stack') {
     deleteStack(s, s.selected.id);
     deselect(s);
     return;
   } else if (s.selected.kind === 'lag') {
-    const [devId, lagId] = String(s.selected.id).split('|');
-    const dev = s.devices.find((d) => d.id === devId);
-    const lag = dev?.lags?.find((l) => l.id === lagId);
-    if (dev && lag) {
-      // Drop reciprocal counterpart pointer first
+    const [stackId, lagId] = String(s.selected.id).split('|');
+    const stack = findStackById(s, stackId);
+    const lag = stack?.lags?.find((l) => l.id === lagId);
+    if (stack && lag) {
       if (lag.counterpart?.lagId) {
-        const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
-        const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-        if (oLag?.counterpart?.lagId === lag.id) delete oLag.counterpart;
+        const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+        if (peer?.lag.counterpart?.lagId === lag.id) delete peer.lag.counterpart;
       }
-      dev.lags = dev.lags.filter((l) => l.id !== lag.id);
+      stack.lags = stack.lags.filter((l) => l.id !== lag.id);
     }
     render(s);
     schedSave(s);
-    if (dev) select(s, 'device', dev.id); else deselect(s);
+    if (stack) select(s, 'stack', stack.id); else deselect(s);
     return;
   } else {
     s.links = s.links.filter((l) => l.id !== s.selected.id);
@@ -2506,17 +2450,16 @@ function openPortModal(s, deviceId, portN) {
   );
   const cp = counterpartFor(s, deviceId, portN);
 
-  // Find which LAG (if any) this port belongs to. Stack-aware: LAGs may live
-  // on the device itself or on any stackmate.
+  // Find which LAG (if any) this port belongs to. LAGs only exist on stacks,
+  // so a standalone device's ports cannot be in a LAG.
+  const portStack = findStack(s, deviceId);
   const portLagInfo = findPortLag(s, deviceId, portN);
   const portLag = portLagInfo?.lag || null;
-  const portLagOwner = portLagInfo?.dev || null;
-  // Sibling LAGs the user could move this port into — every LAG owned by any
-  // device in the same stack-or-self that doesn't already include this port.
-  const lagHosts = lagAvailableDevices(s, dev);
-  const otherLags = lagHosts.flatMap((host) => (host.lags || [])
-    .filter((lag) => lag !== portLag && !lagHasPort(lag, deviceId, portN))
-    .map((lag) => ({ lag, owner: host })));
+  // Sibling LAGs the user could move this port into — every LAG on the same
+  // stack (if any) that doesn't already include this port.
+  const otherLags = portStack
+    ? (portStack.lags || []).filter((lag) => lag !== portLag && !lagHasPort(lag, deviceId, portN))
+    : [];
 
   body.innerHTML = `
     <label class="m002-field"><span>PORT NAME</span>
@@ -2557,8 +2500,8 @@ function openPortModal(s, deviceId, portN) {
     <div class="m002-field">
       <span>LAG</span>
       <div class="m002-port-lag-row">
-        ${portLag ? `<span class="m002-vlan-chip-btn on" style="--vc:#ff003c" title="owned by ${escAttr(portLagOwner?.name || '')}">${escSvg(portLag.name)}</span><button type="button" class="m002-action" data-pact="lag-remove">REMOVE</button>` : ''}
-        ${otherLags.length ? `<select class="m002-port-lag-select"><option value="">— assign to LAG —</option>${otherLags.map((o) => `<option value="${escAttr(o.owner.id + '|' + o.lag.id)}">${escSvg(o.lag.name)}${lagHosts.length > 1 ? ' · ' + escSvg(o.owner.name) : ''}</option>`).join('')}</select>` : (!portLag ? `<span class="m002-vlan-empty">no LAGs available — create one in the inspector</span>` : '')}
+        ${portLag ? `<span class="m002-vlan-chip-btn on" style="--vc:#ff003c" title="part of ${escAttr(portStack?.name || '')}">${escSvg(portLag.name)}</span><button type="button" class="m002-action" data-pact="lag-remove">REMOVE</button>` : ''}
+        ${otherLags.length ? `<select class="m002-port-lag-select"><option value="">— assign to LAG —</option>${otherLags.map((lag) => `<option value="${escAttr(lag.id)}">${escSvg(lag.name)}</option>`).join('')}</select>` : (!portLag ? `<span class="m002-vlan-empty">${portStack ? 'no LAGs on this stack — create one in the stack inspector' : 'standalone device — LAGs require a stack'}</span>` : '')}
       </div>
     </div>
     <div class="m002-port-actions">
@@ -2594,25 +2537,23 @@ function openPortModal(s, deviceId, portN) {
     openPortModal(s, deviceId, portN);
   });
 
-  // LAG wiring — stack-aware: ports can be moved between any LAG owned by the
-  // device or one of its stackmates.
+  // LAG wiring — LAGs live on the device's stack. A standalone device has no
+  // LAGs at all.
   body.querySelector('[data-pact="lag-remove"]')?.addEventListener('click', () => {
-    if (!portLag || !portLagOwner) return;
+    if (!portLag || !portStack) return;
     snapshot(s);
     portLag.ports = (portLag.ports || []).filter((p) => !(p.deviceId === deviceId && Number(p.portN) === portN));
     if (portLag.ports.length === 0) {
-      portLagOwner.lags = portLagOwner.lags.filter((l) => l !== portLag);
+      portStack.lags = portStack.lags.filter((l) => l !== portLag);
     }
     schedSave(s);
     render(s);
     openPortModal(s, deviceId, portN);
   });
   body.querySelector('.m002-port-lag-select')?.addEventListener('change', (e) => {
-    const v = e.target.value;
-    if (!v) return;
-    const [ownerId, lagId] = v.split('|');
-    const owner = s.devices.find((d) => d.id === ownerId);
-    const lag = owner?.lags?.find((l) => l.id === lagId);
+    const lagId = e.target.value;
+    if (!lagId || !portStack) return;
+    const lag = (portStack.lags || []).find((l) => l.id === lagId);
     if (!lag) return;
     snapshot(s);
     if (portLag) portLag.ports = (portLag.ports || []).filter((p) => !(p.deviceId === deviceId && Number(p.portN) === portN));
@@ -2648,47 +2589,45 @@ function openPortModal(s, deviceId, portN) {
   setTimeout(() => body.querySelector('.m002-pmodal-name')?.focus(), 30);
 }
 
-function openLagModal(s, deviceId, lagId) {
-  const dev = s.devices.find((d) => d.id === deviceId);
-  if (!dev) return;
-  if (!Array.isArray(dev.lags)) dev.lags = [];
-  const editing = lagId ? dev.lags.find((l) => l.id === lagId) : null;
-  const initialName = editing ? editing.name : `Po${dev.lags.length + 1}`;
-  // Devices whose ports this LAG can bundle: owner + stackmates.
-  const memberDevs = lagAvailableDevices(s, dev);
-  const isStackLag = memberDevs.length > 1;
+function openLagModal(s, stackId, lagId) {
+  const stack = findStackById(s, stackId);
+  if (!stack) return;
+  if (!Array.isArray(stack.lags)) stack.lags = [];
+  const editing = lagId ? stack.lags.find((l) => l.id === lagId) : null;
+  const initialName = editing ? editing.name : `Po${stack.lags.length + 1}`;
+  const memberDevs = stack.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
   const initialPortKeys = new Set(((editing && editing.ports) || []).map((p) => p.deviceId + ':' + Number(p.portN)));
-  // Free ports = ports not claimed by any other sibling LAG anywhere in the stack
+  // Free ports = ports not claimed by any other sibling LAG on this stack.
   const otherLagPorts = new Set();
-  memberDevs.forEach((md) => {
-    (md.lags || []).forEach((l) => {
-      if (l === editing) return;
-      (l.ports || []).forEach((p) => otherLagPorts.add(p.deviceId + ':' + Number(p.portN)));
-    });
+  (stack.lags || []).forEach((l) => {
+    if (l === editing) return;
+    (l.ports || []).forEach((p) => otherLagPorts.add(p.deviceId + ':' + Number(p.portN)));
   });
 
   const modal = s.host.querySelector('.m002-lag-modal');
   const idEl = modal.querySelector('.m002-port-modal-id');
   const body = modal.querySelector('.m002-lag-modal-body');
-  idEl.textContent = `// ${dev.name} · ${editing ? 'EDIT LAG' : 'NEW LAG'}`;
+  idEl.textContent = `// ${stack.name} · ${editing ? 'EDIT LAG' : 'NEW LAG'}`;
 
-  const cp = editing ? lagCounterpart(s, deviceId, editing) : null;
-  const cpTxt = cp ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`) : '— not connected —';
+  const cp = editing ? lagCounterpart(s, stack.id, editing) : null;
+  const cpTxt = cp ? (cp.lag ? `${cp.stack.name} · ${cp.lag.name}` : `${cp.stack.name} · ${cp.count}p`) : '— not connected —';
 
-  // Counterpart options: every LAG on every device that has at least one
-  // link to this device. Picking one stores `lag.counterpart = { deviceId,
-  // lagId }` and reciprocally pairs the peer LAG.
-  const linkedDevs = new Map();
+  // Counterpart options: every LAG on every other stack that has at least
+  // one member-to-member link with this stack.
+  const linkedStacks = new Map();
   s.links.forEach((l) => {
+    const fromStack = findStack(s, l.from);
+    const toStack = findStack(s, l.to);
+    if (!fromStack || !toStack) return;
     let other = null;
-    if (l.from === deviceId) other = s.devices.find((d) => d.id === l.to);
-    else if (l.to === deviceId) other = s.devices.find((d) => d.id === l.from);
-    if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
+    if (fromStack.id === stack.id && toStack.id !== stack.id) other = toStack;
+    else if (toStack.id === stack.id && fromStack.id !== stack.id) other = fromStack;
+    if (other && !linkedStacks.has(other.id)) linkedStacks.set(other.id, other);
   });
-  const cpOptions = [...linkedDevs.values()].flatMap((d) =>
-    (d.lags || []).map((l) => ({ devId: d.id, devName: d.name, lagId: l.id, lagName: l.name }))
+  const cpOptions = [...linkedStacks.values()].flatMap((st) =>
+    (st.lags || []).map((l) => ({ stackId: st.id, stackName: st.name, lagId: l.id, lagName: l.name }))
   );
-  const cpKey = editing?.counterpart?.lagId ? `${editing.counterpart.deviceId}|${editing.counterpart.lagId}` : '';
+  const cpKey = editing?.counterpart?.lagId ? `${editing.counterpart.stackId}|${editing.counterpart.lagId}` : '';
 
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span>
@@ -2696,7 +2635,7 @@ function openLagModal(s, deviceId, lagId) {
     </label>
     ${memberDevs.map((md) => `
       <div class="m002-field">
-        <span>${isStackLag ? `MEMBER PORTS · ${escSvg(md.name)}` : 'MEMBER PORTS'} (${md.ports.length})</span>
+        <span>MEMBER PORTS · ${escSvg(md.name)} (${md.ports.length})</span>
         <div class="m002-lagm-ports">
           ${md.ports.map((p) => {
             const k = md.id + ':' + p.n;
@@ -2716,13 +2655,13 @@ function openLagModal(s, deviceId, lagId) {
         <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)} ${editing.counterpart ? '· (manual)' : '· (auto)'}</div>
         <select class="m002-lagm-cp">
           <option value="">— auto-derive from links —</option>
-          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${cpKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
+          ${cpOptions.map((o) => `<option value="${escAttr(o.stackId + '|' + o.lagId)}" ${cpKey === (o.stackId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.stackName)} · ${escSvg(o.lagName)}</option>`).join('')}
         </select>
-        <p class="m002-link-hint">${cpOptions.length ? 'Pick the matching LAG on the peer side. The other LAG will be paired automatically.' : 'No LAGs found on linked devices — create one over there first.'}</p>
+        <p class="m002-link-hint">${cpOptions.length ? 'Pick the matching LAG on the peer stack. The other LAG will be paired automatically.' : 'No LAGs found on linked stacks — create one over there first.'}</p>
       </div>
       <div class="m002-field">
         <span>VLANS</span>
-        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(deviceId)}:${escAttr(editing.id)}"></div>
+        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(stack.id)}:${escAttr(editing.id)}"></div>
       </div>
     ` : ''}
     <div class="m002-port-actions">
@@ -2730,26 +2669,21 @@ function openLagModal(s, deviceId, lagId) {
       <button type="button" class="m002-action" data-lact="save">${editing ? 'SAVE' : 'CREATE'}</button>
     </div>
   `;
-  // VLAN picker is a `lag:<deviceId>:<lagId>` target — wire up via existing helper
   body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
   body.querySelector('.m002-lagm-cp')?.addEventListener('change', (e) => {
     if (!editing) return;
     snapshot(s);
-    // Drop any reciprocal pointer the previous counterpart held back
     if (editing.counterpart?.lagId) {
-      const oldDev = s.devices.find((d) => d.id === editing.counterpart.deviceId);
-      const oldLag = oldDev?.lags?.find((ll) => ll.id === editing.counterpart.lagId);
-      if (oldLag?.counterpart?.lagId === editing.id) delete oldLag.counterpart;
+      const oldPeer = findStackLag(s, editing.counterpart.stackId, editing.counterpart.lagId);
+      if (oldPeer?.lag.counterpart?.lagId === editing.id) delete oldPeer.lag.counterpart;
     }
     const v = e.target.value;
     if (!v) { delete editing.counterpart; }
     else {
-      const [devId, lagId] = v.split('|');
-      editing.counterpart = { deviceId: devId, lagId };
-      // Reciprocal pairing
-      const otherDev = s.devices.find((d) => d.id === devId);
-      const otherLag = otherDev?.lags?.find((ll) => ll.id === lagId);
-      if (otherLag) otherLag.counterpart = { deviceId, lagId: editing.id };
+      const [oStackId, oLagId] = v.split('|');
+      editing.counterpart = { stackId: oStackId, lagId: oLagId };
+      const peer = findStackLag(s, oStackId, oLagId);
+      if (peer) peer.lag.counterpart = { stackId: stack.id, lagId: editing.id };
     }
     schedSave(s);
     render(s);
@@ -2768,7 +2702,7 @@ function openLagModal(s, deviceId, lagId) {
       editing.name = name;
       editing.ports = ports;
     } else {
-      dev.lags.push({ id: 'lag_' + rid(), name, ports });
+      stack.lags.push({ id: 'lag_' + rid(), name, ports, vlans: [] });
     }
     closeLagModal(s);
     schedSave(s);
@@ -2777,7 +2711,7 @@ function openLagModal(s, deviceId, lagId) {
   });
   body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
     snapshot(s);
-    dev.lags = dev.lags.filter((l) => l.id !== editing.id);
+    stack.lags = stack.lags.filter((l) => l.id !== editing.id);
     closeLagModal(s);
     schedSave(s);
     render(s);
@@ -2810,18 +2744,17 @@ function deletePort(s, deviceId, portN) {
     if (l.from === deviceId && Number(l.fromPort) > portN) l.fromPort = String(Number(l.fromPort) - 1);
     if (l.to   === deviceId && Number(l.toPort)   > portN) l.toPort   = String(Number(l.toPort)   - 1);
   });
-  // Re-map LAG port-refs the same way: drop refs to the deleted port, shift
-  // later port numbers down. A stack-LAG owned by a stackmate may still
-  // reference this device's ports, so iterate every device's lags.
-  s.devices.forEach((d) => {
-    (d.lags || []).forEach((lag) => {
+  // Re-map stack-LAG port-refs: drop refs to the deleted port, shift later
+  // port numbers down.
+  s.stacks.forEach((stk) => {
+    (stk.lags || []).forEach((lag) => {
       lag.ports = (lag.ports || [])
         .filter((p) => !(p.deviceId === deviceId && Number(p.portN) === portN))
         .map((p) => (p.deviceId === deviceId && Number(p.portN) > portN)
           ? { deviceId: p.deviceId, portN: Number(p.portN) - 1 }
           : p);
     });
-    d.lags = (d.lags || []).filter((lag) => lag.ports.length > 0);
+    stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
   });
   if (s.selected?.kind === 'device' && s.selected.id === deviceId) openInspector(s);
   recomputeVlanIndex(s);
@@ -2845,21 +2778,23 @@ function render(s) {
   // Stack envelopes (only when expanded)
   s.stacks.forEach((st) => { if (inZone(st) && !isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
 
-  // Detect explicit LAG pairs (counterpart set on at least one side). Their
-  // underlying port-links are absorbed and rendered as a single LAG-link
-  // visual in every layer.
+  // Detect explicit LAG pairs (counterpart set on at least one side). When
+  // BOTH stacks are collapsed the underlying port-links are absorbed and
+  // rendered as a single LAG-pair double-line. When at least one side is
+  // expanded, we draw nothing for the LAG itself — the user sees the actual
+  // physical port-links between the members, with a port-side badge marking
+  // their LAG membership.
   const lagPairs = [];
   const lagPairSeen = new Set();
-  s.devices.forEach((d) => {
-    (d.lags || []).forEach((lag) => {
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
       if (!lag.counterpart?.lagId) return;
-      const otherDev = s.devices.find((dd) => dd.id === lag.counterpart.deviceId);
-      const otherLag = otherDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
-      if (!otherDev || !otherLag) return;
-      const key = [d.id + ':' + lag.id, otherDev.id + ':' + otherLag.id].sort().join('::');
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      const key = [stA.id + ':' + lag.id, peer.stack.id + ':' + peer.lag.id].sort().join('::');
       if (lagPairSeen.has(key)) return;
       lagPairSeen.add(key);
-      lagPairs.push({ devA: d, lagA: lag, devB: otherDev, lagB: otherLag });
+      lagPairs.push({ stackA: stA, lagA: lag, stackB: peer.stack, lagB: peer.lag });
     });
   });
   const absorbed = computeAbsorbedLinkIds(s);
@@ -2896,8 +2831,11 @@ function render(s) {
   s._bundleByLink = null;
 
   // Explicit LAG-pair links — drawn after regular links so they sit on top.
+  // Skip when either side is expanded, so the user sees the underlying member
+  // port-links instead of a synthetic stack-to-stack double-line.
   lagPairs.forEach((p) => {
-    if (!inZone(p.devA) || !inZone(p.devB)) return;
+    if (!inZone(p.stackA) || !inZone(p.stackB)) return;
+    if (!isStackCollapsed(s, p.stackA) || !isStackCollapsed(s, p.stackB)) return;
     drawLagLink(s, p);
   });
 
@@ -3339,7 +3277,9 @@ function migrate(s) {
     if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
     if (!Array.isArray(d.vlans)) d.vlans = [];
-    if (!Array.isArray(d.lags))  d.lags  = [];
+    // LAGs no longer hang on devices — they belong to stacks. Drop any legacy
+    // device-owned LAG record on hydrate.
+    delete d.lags;
     ensureLayouts(d);
     d.ports.forEach((p) => {
       // Restore per-port VLAN list. Old shape `p.vlan` (single string) → array.
@@ -3359,21 +3299,6 @@ function migrate(s) {
     d.vlans = d.vlans.map(String).filter((v) => regSet.has(v));
     const devSet = new Set(d.vlans);
     d.ports.forEach((p) => { p.vlans = p.vlans.filter((v) => devSet.has(v)); });
-    // Sanity-check lags. Migrate the legacy `lag.ports = [portN]` shape
-    // (numbers, single device) to the stack-aware `[{ deviceId, portN }]`
-    // shape so a LAG can bundle ports across every stackmate.
-    d.lags.forEach((lag) => {
-      if (!Array.isArray(lag.ports)) lag.ports = [];
-      if (!Array.isArray(lag.vlans)) lag.vlans = [];
-      lag.ports = lag.ports.map((p) => {
-        if (p && typeof p === 'object') return { deviceId: p.deviceId || d.id, portN: Number(p.portN) };
-        return { deviceId: d.id, portN: Number(p) };
-      });
-      // Drop legacy port-based counterparts — only LAG-level pairings supported.
-      if (lag.counterpart && (!lag.counterpart.lagId || !lag.counterpart.deviceId)) {
-        delete lag.counterpart;
-      }
-    });
   });
   s.links.forEach((l) => {
     delete l.vlan;
@@ -3385,6 +3310,7 @@ function migrate(s) {
     s.stacks.forEach((st) => {
       if (typeof st.expanded !== 'boolean') st.expanded = false;
       if (!Array.isArray(st.members)) st.members = [];
+      if (!Array.isArray(st.lags))    st.lags    = [];
       if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
       delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
@@ -3394,19 +3320,25 @@ function migrate(s) {
   } else {
     s.stacks = [];
   }
-  // Now that stacks are settled, prune LAG port-refs that target devices the
-  // owner can't legally address (must be the owner itself or one of its
-  // stackmates). Drop empty LAGs.
-  s.devices.forEach((d) => {
-    const allowed = new Set(lagAvailableDevices(s, d).map((dd) => dd.id));
-    (d.lags || []).forEach((lag) => {
-      lag.ports = (lag.ports || []).filter((p) => {
-        if (!allowed.has(p.deviceId)) return false;
-        const host = s.devices.find((dd) => dd.id === p.deviceId);
-        return host && host.ports.some((pp) => pp.n === Number(p.portN));
-      });
+  // Sanity-check stack-owned LAGs: port-refs must point at members of the
+  // stack and at real ports on those members. Drop empty LAGs and reciprocal
+  // counterpart pointers that no longer resolve.
+  s.stacks.forEach((st) => {
+    const memberSet = new Set(st.members);
+    st.lags.forEach((lag) => {
+      if (!Array.isArray(lag.ports)) lag.ports = [];
+      if (!Array.isArray(lag.vlans)) lag.vlans = [];
+      lag.ports = lag.ports.map((p) => ({ deviceId: p.deviceId, portN: Number(p.portN) }))
+        .filter((p) => {
+          if (!memberSet.has(p.deviceId)) return false;
+          const host = s.devices.find((dd) => dd.id === p.deviceId);
+          return host && host.ports.some((pp) => pp.n === p.portN);
+        });
+      if (lag.counterpart && (!lag.counterpart.stackId || !lag.counterpart.lagId)) {
+        delete lag.counterpart;
+      }
     });
-    d.lags = (d.lags || []).filter((lag) => lag.ports.length > 0);
+    st.lags = st.lags.filter((lag) => lag.ports.length > 0);
   });
   recomputeVlanIndex(s);
 }
@@ -3606,6 +3538,7 @@ const MOD002_CSS = `
 .m002-lag-sides{display:flex;flex-direction:column;gap:10px;margin-top:4px;}
 .m002-lag-side{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px dashed #1a1a22;}
 .m002-lag-side-head{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;color:#ff003c;}
+.m002-port-lagtag{margin-left:6px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;color:#ff003c;border:1px solid #ff003c;padding:1px 4px;border-radius:2px;background:rgba(255,0,60,0.08);}
 
 .m002-stack-members{display:flex;flex-direction:column;gap:4px;}
 .m002-stack-member{display:grid;grid-template-columns:14px 1fr auto 22px;gap:6px;align-items:center;background:#06060a;border:1px solid #1a1a22;padding:4px 8px;}
