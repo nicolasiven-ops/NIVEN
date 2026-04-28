@@ -744,10 +744,9 @@ function bindBoard(s) {
 
     const laglinkEl = e.target.closest('[data-laglink-id]');
     if (laglinkEl && e.button === 0) {
-      const [devId, lagId] = laglinkEl.dataset.laglinkId.split('|');
-      // Select the device first so the inspector adapts; then open the LAG modal
-      select(s, 'device', devId);
-      openLagModal(s, devId, lagId);
+      // Selecting the LAG renders its editor inline in the inspector
+      // (used to open a modal — moved into inspector for consistency).
+      select(s, 'lag', laglinkEl.dataset.laglinkId);
       e.preventDefault();
       return;
     }
@@ -1748,6 +1747,9 @@ function markSelected(s) {
     // Could be collapsed (icon in gDevices) or expanded (envelope in gStacksBg)
     s.gDevices.querySelector(`[data-stack-id="${s.selected.id}"]`)?.classList.add('m002-selected');
     s.gStacksBg.querySelector(`[data-stack-id="${s.selected.id}"]`)?.classList.add('m002-selected');
+  } else if (s.selected.kind === 'lag') {
+    // Highlight the LAG-bundle on canvas (rendered as a single laglink path)
+    s.gLinks.querySelector(`[data-laglink-id="${s.selected.id}"]`)?.classList.add('m002-selected');
   }
 }
 
@@ -1875,7 +1877,7 @@ function openInspector(s) {
     body.querySelectorAll('[data-lag-row]').forEach((row) => {
       row.addEventListener('click', (e) => {
         if (e.target.closest('[data-lag-rm]')) return;
-        openLagModal(s, dev.id, row.dataset.lagRow);
+        select(s, 'lag', `${dev.id}|${row.dataset.lagRow}`);
       });
     });
     renderInspectorVlanPickers(s);
@@ -1967,6 +1969,135 @@ function openInspector(s) {
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
     renderInspectorVlanPickers(s);
+  } else if (s.selected.kind === 'lag') {
+    // LAG editor — was previously a modal, now lives in the inspector.
+    const [devId, lagId] = String(s.selected.id).split('|');
+    const dev = s.devices.find((d) => d.id === devId);
+    const lag = dev?.lags?.find((l) => l.id === lagId);
+    if (!dev || !lag) {
+      // Underlying LAG vanished (delete elsewhere) — fall back gracefully.
+      if (dev) { select(s, 'device', dev.id); return; }
+      deselect(s); return;
+    }
+
+    const cp = lagCounterpart(s, devId, lag);
+    const cpTxt = cp
+      ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`)
+      : '— not connected —';
+
+    // Counterpart options: every LAG on every device that has at least one
+    // link to this device.
+    const linkedDevs = new Map();
+    s.links.forEach((l) => {
+      let other = null;
+      if (l.from === devId) other = s.devices.find((d) => d.id === l.to);
+      else if (l.to === devId) other = s.devices.find((d) => d.id === l.from);
+      if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
+    });
+    const cpOptions = [...linkedDevs.values()].flatMap((d) =>
+      (d.lags || []).map((l) => ({ devId: d.id, devName: d.name, lagId: l.id, lagName: l.name }))
+    );
+    const cpKey = lag.counterpart?.lagId
+      ? `${lag.counterpart.deviceId}|${lag.counterpart.lagId}`
+      : '';
+
+    const otherLagPorts = new Set();
+    dev.lags.forEach((l) => { if (l !== lag) l.ports.forEach((n) => otherLagPorts.add(Number(n))); });
+    const lagPortSet = new Set(lag.ports.map(Number));
+
+    idEl.textContent = `// ${dev.name} · ${lag.name}`;
+    body.innerHTML = `
+      <button type="button" class="m002-insp-back" data-back>← BACK TO ${escSvg(dev.name.toUpperCase())}</button>
+      <label class="m002-field"><span>NAME</span>
+        <input class="m002-lagm-name" value="${escAttr(lag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
+      </label>
+      <div class="m002-field">
+        <span>MEMBER PORTS (${dev.ports.length})</span>
+        <div class="m002-lagm-ports">
+          ${dev.ports.map((p) => {
+            const inUse = otherLagPorts.has(p.n);
+            const checked = lagPortSet.has(p.n);
+            return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
+              <input type="checkbox" data-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
+              <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
+            </label>`;
+          }).join('')}
+        </div>
+      </div>
+      <div class="m002-field">
+        <span>COUNTERPART</span>
+        <div class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cpTxt)} ${lag.counterpart ? '· (manual)' : '· (auto)'}</div>
+        <select class="m002-lagm-cp">
+          <option value="">— auto-derive from links —</option>
+          ${cpOptions.map((o) => `<option value="${escAttr(o.devId + '|' + o.lagId)}" ${cpKey === (o.devId + '|' + o.lagId) ? 'selected' : ''}>${escSvg(o.devName)} · ${escSvg(o.lagName)}</option>`).join('')}
+        </select>
+        <p class="m002-link-hint">${cpOptions.length ? 'Pick the matching LAG on the peer side. The other LAG will be paired automatically.' : 'No LAGs found on linked devices — create one over there first.'}</p>
+      </div>
+      <div class="m002-field">
+        <span>VLANS</span>
+        <div class="m002-vlan-picker" data-vlan-target="lag:${escAttr(devId)}:${escAttr(lag.id)}"></div>
+      </div>
+      <div class="m002-port-actions">
+        <button type="button" class="m002-action danger" data-lact="delete">DELETE LAG</button>
+        <button type="button" class="m002-action" data-lact="save">SAVE</button>
+      </div>
+    `;
+    renderInspectorVlanPickers(s);
+
+    body.querySelector('[data-back]')?.addEventListener('click', () => {
+      select(s, 'device', devId);
+    });
+
+    body.querySelector('.m002-lagm-cp')?.addEventListener('change', (e) => {
+      snapshot(s);
+      // Drop the reciprocal pointer the previous counterpart held back
+      if (lag.counterpart?.lagId) {
+        const oldDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
+        const oldLag = oldDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+        if (oldLag?.counterpart?.lagId === lag.id) delete oldLag.counterpart;
+      }
+      const v = e.target.value;
+      if (!v) { delete lag.counterpart; }
+      else {
+        const [oDevId, oLagId] = v.split('|');
+        lag.counterpart = { deviceId: oDevId, lagId: oLagId };
+        const otherDev = s.devices.find((d) => d.id === oDevId);
+        const otherLag = otherDev?.lags?.find((ll) => ll.id === oLagId);
+        if (otherLag) otherLag.counterpart = { deviceId: devId, lagId: lag.id };
+      }
+      schedSave(s);
+      render(s);
+      openInspector(s);
+    });
+
+    body.querySelector('[data-lact="save"]')?.addEventListener('click', () => {
+      const name = (body.querySelector('.m002-lagm-name').value || '').trim();
+      const ports = [...body.querySelectorAll('.m002-lagm-ports input[type=checkbox]:checked')]
+        .map((c) => Number(c.dataset.port));
+      if (!name) { toast(s, 'LAG needs a name'); return; }
+      if (ports.length < 2) { toast(s, 'LAG needs at least 2 ports'); return; }
+      snapshot(s);
+      lag.name = name;
+      lag.ports = ports;
+      schedSave(s);
+      render(s);
+      openInspector(s);
+      toast(s, 'LAG saved');
+    });
+
+    body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
+      snapshot(s);
+      // Unhook reciprocal counterpart pointers before removing
+      if (lag.counterpart?.lagId) {
+        const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
+        const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+        if (oLag?.counterpart?.lagId === lag.id) delete oLag.counterpart;
+      }
+      dev.lags = dev.lags.filter((l) => l.id !== lag.id);
+      schedSave(s);
+      render(s);
+      select(s, 'device', dev.id);
+    });
   }
 }
 
@@ -2018,6 +2149,23 @@ function deleteSelected(s) {
   } else if (s.selected.kind === 'stack') {
     deleteStack(s, s.selected.id);
     deselect(s);
+    return;
+  } else if (s.selected.kind === 'lag') {
+    const [devId, lagId] = String(s.selected.id).split('|');
+    const dev = s.devices.find((d) => d.id === devId);
+    const lag = dev?.lags?.find((l) => l.id === lagId);
+    if (dev && lag) {
+      // Drop reciprocal counterpart pointer first
+      if (lag.counterpart?.lagId) {
+        const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
+        const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+        if (oLag?.counterpart?.lagId === lag.id) delete oLag.counterpart;
+      }
+      dev.lags = dev.lags.filter((l) => l.id !== lag.id);
+    }
+    render(s);
+    schedSave(s);
+    if (dev) select(s, 'device', dev.id); else deselect(s);
     return;
   } else {
     s.links = s.links.filter((l) => l.id !== s.selected.id);
@@ -3140,6 +3288,8 @@ const MOD002_CSS = `
 .m002-action.danger:hover{background:rgba(255,0,60,0.1);}
 .m002-insp-del{margin-top:6px;background:transparent;border:1px solid #ff003c;color:#ff003c;padding:6px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;cursor:pointer;}
 .m002-insp-del:hover{background:rgba(255,0,60,0.1);}
+.m002-insp-back{align-self:flex-start;background:transparent;border:none;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;padding:2px 0;margin-bottom:2px;}
+.m002-insp-back:hover{color:#e8e8ee;}
 
 .m002-multi-selected .m002-dev-bg{stroke-width:2;stroke-dasharray:3 3;}
 .m002-multi-selected.m002-stack-collapsed .m002-dev-bg{stroke-dasharray:3 3;}
