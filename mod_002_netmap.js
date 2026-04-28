@@ -1312,6 +1312,15 @@ function handleLinkClick(s, deviceId) {
     toPort: '',
   };
   s.links.push(link);
+  // Adding a link may shift sibling links between the same visual endpoints
+  // into new lanes — invalidate the slot cache and redraw every link that
+  // shares this pair so existing edges fan out to make room for the new one.
+  invalidateEdgeSlots(s);
+  const newKey = visualEndpointKey(s, link.from, link.to);
+  s.links.forEach((l) => {
+    if (l.id === link.id) return;
+    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+  });
   drawLink(s, link);
   updateStatus(s);
   s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
