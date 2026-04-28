@@ -362,7 +362,6 @@ async function mount(stage, ctx) {
   bindBoard(state);
   bindKeyboard(state);
   await loadFromServer(state);
-  applyLayoutForLayer(state);
   applyView(state);
   render(state);
   refreshMapBar(state);
@@ -653,10 +652,8 @@ function buildDOM(s) {
   s.layerBar.addEventListener('click', (e) => {
     const pill = e.target.closest('[data-layer]');
     if (!pill) return;
-    persistCurrentLayout(s);
     s.layerBar.querySelectorAll('.m002-layer-pill').forEach((p) => p.classList.toggle('active', p === pill));
     s.activeLayer = pill.dataset.layer;
-    applyLayoutForLayer(s);
     render(s);
   });
   s.activeLayer = 'physical';
@@ -845,11 +842,11 @@ function bindBoard(s) {
         ny = Math.round(ny / GRID) * GRID;
       }
       const ddx = nx - st.x, ddy = ny - st.y;
-      writeLayoutPos(st, s.activeLayer, nx, ny);
+      st.x = nx; st.y = ny;
       st.members.forEach((mid) => {
         const m = s.devices.find((d) => d.id === mid);
         if (m) {
-          writeLayoutPos(m, s.activeLayer, m.x + ddx, m.y + ddy);
+          m.x += ddx; m.y += ddy;
           updateDeviceTransform(s, m);
         }
       });
@@ -1084,12 +1081,6 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     zone: s.activeZone,
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
-  ensureLayouts(dev);
-  // Initialize all layers to the spawn position so the device is visible
-  // wherever the user navigates next.
-  dev.layouts.physical = { x: dev.x, y: dev.y };
-  dev.layouts.vlan     = { x: dev.x, y: dev.y };
-  dev.layouts.routing  = { x: dev.x, y: dev.y };
   s.devices.push(dev);
   drawDevice(s, dev);
   select(s, 'device', dev.id);
@@ -1176,39 +1167,8 @@ function handleLinkClick(s, deviceId) {
 // =============================================================================
 // Stacks
 // =============================================================================
-// =============================================================================
-// Per-layer layouts — every device + stack stores positions per layer so
-// rearranging in VLAN doesn't disturb the Physical layout.
-// =============================================================================
-function ensureLayouts(item) {
-  if (!item.layouts) {
-    const fallback = { x: item.x ?? 0, y: item.y ?? 0 };
-    item.layouts = {
-      physical: { ...fallback },
-      vlan:     { ...fallback },
-      routing:  { ...fallback },
-    };
-  } else {
-    if (!item.layouts.physical) item.layouts.physical = { x: item.x ?? 0, y: item.y ?? 0 };
-    if (!item.layouts.vlan)    item.layouts.vlan    = { ...item.layouts.physical };
-    if (!item.layouts.routing) item.layouts.routing = { ...item.layouts.physical };
-  }
-}
-function applyLayoutForLayer(s) {
-  const L = s.activeLayer;
-  s.devices.forEach((d) => { ensureLayouts(d); d.x = d.layouts[L].x; d.y = d.layouts[L].y; });
-  s.stacks.forEach((st) => { ensureLayouts(st); st.x = st.layouts[L].x; st.y = st.layouts[L].y; });
-}
-function persistCurrentLayout(s) {
-  const L = s.activeLayer;
-  s.devices.forEach((d) => { ensureLayouts(d); d.layouts[L] = { x: d.x, y: d.y }; });
-  s.stacks.forEach((st) => { ensureLayouts(st); st.layouts[L] = { x: st.x, y: st.y }; });
-}
-function writeLayoutPos(item, layer, x, y) {
-  ensureLayouts(item);
-  item.x = x; item.y = y;
-  item.layouts[layer] = { x, y };
-}
+// Positions are unified across layers — switching Physical / VLAN / Routing
+// no longer moves elements on the grid.
 
 function findStack(s, deviceId) {
   return s.stacks.find((st) => st.members.includes(deviceId)) || null;
@@ -1312,22 +1272,21 @@ function collectGroupTargets(s, primary) {
 }
 
 function moveItemBy(s, target, ddx, ddy) {
-  const L = s.activeLayer;
   if (target.kind === 'device') {
     const m = s.devices.find((d) => d.id === target.id);
     if (!m) return;
-    writeLayoutPos(m, L, m.x + ddx, m.y + ddy);
+    m.x += ddx; m.y += ddy;
     updateDeviceTransform(s, m);
     const stk = findStack(s, m.id);
     if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
   } else if (target.kind === 'stack') {
     const st = findStackById(s, target.id);
     if (!st) return;
-    writeLayoutPos(st, L, st.x + ddx, st.y + ddy);
+    st.x += ddx; st.y += ddy;
     st.members.forEach((mid) => {
       const m = s.devices.find((d) => d.id === mid);
       if (m) {
-        writeLayoutPos(m, L, m.x + ddx, m.y + ddy);
+        m.x += ddx; m.y += ddy;
         updateDeviceTransform(s, m);
       }
     });
@@ -1418,10 +1377,6 @@ function createStack(s, deviceIds) {
     expanded: false,
     zone: s.activeZone,
   };
-  ensureLayouts(st);
-  st.layouts.physical = { x: st.x, y: st.y };
-  st.layouts.vlan     = { x: st.x, y: st.y };
-  st.layouts.routing  = { x: st.x, y: st.y };
   s.stacks.push(st);
   render(s);
   schedSave(s);
@@ -1506,7 +1461,7 @@ function toggleStackExpanded(s, stackId) {
     if (devs.length) {
       const cx = Math.round((devs.reduce((sum, d) => sum + d.x, 0) / devs.length) / GRID) * GRID;
       const cy = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
-      writeLayoutPos(st, s.activeLayer, cx, cy);
+      st.x = cx; st.y = cy;
     }
   }
   render(s);
@@ -2877,7 +2832,6 @@ function schedSave(s) {
 }
 
 function snapshotMapData(s) {
-  persistCurrentLayout(s);
   return {
     v: 3,
     devices: s.devices, links: s.links, stacks: s.stacks,
@@ -3092,7 +3046,6 @@ async function switchMap(s, mapId) {
   await saveNow(s); // flush any pending edits on the outgoing map
   s.activeMapId = mapId;
   await loadMapData(s, mapId);
-  applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
@@ -3118,7 +3071,6 @@ async function createMap(s) {
     s.activeMapId = row.id;
     hydrateMapData(s, {});
   }
-  applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
@@ -3151,7 +3103,6 @@ async function deleteCurrentMap(s) {
   s.maps = s.maps.filter((mm) => mm.id !== m.id);
   s.activeMapId = s.maps[0].id;
   await loadMapData(s, s.activeMapId);
-  applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
@@ -3191,7 +3142,6 @@ function importMapFromFile(s, file) {
         s.activeMapId = row.id;
       }
       hydrateMapData(s, data);
-      applyLayoutForLayer(s);
       applyView(s);
       render(s);
       refreshMapBar(s);
@@ -3280,7 +3230,7 @@ function migrate(s) {
     // LAGs no longer hang on devices — they belong to stacks. Drop any legacy
     // device-owned LAG record on hydrate.
     delete d.lags;
-    ensureLayouts(d);
+    delete d.layouts;
     d.ports.forEach((p) => {
       // Restore per-port VLAN list. Old shape `p.vlan` (single string) → array.
       if (!Array.isArray(p.vlans)) {
@@ -3314,7 +3264,7 @@ function migrate(s) {
       if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
       delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
-      ensureLayouts(st);
+      delete st.layouts;
     });
     s.stacks = s.stacks.filter((st) => st.members.length >= 2);
   } else {
@@ -3367,7 +3317,6 @@ function applySnapshot(s, json) {
   s.links = data.links || [];
   s.stacks = data.stacks || [];
   s.vlanRegistry = data.vlanRegistry || [];
-  applyLayoutForLayer(s);
   vlansChanged(s);
   render(s);
   if (s.selected) {
