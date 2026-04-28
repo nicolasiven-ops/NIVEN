@@ -855,8 +855,18 @@ function bindBoard(s) {
       g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
       // Move envelope + cables if expanded
       if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
-      // Redraw links touching the stack
-      s.links.forEach((l) => { if (st.members.includes(l.from) || st.members.includes(l.to)) redrawLink(s, l); });
+      // Redraw links touching the stack — absorbed ones (owned by a LAG-pair
+      // visual) get their stale element removed instead, otherwise the bare
+      // link line leaks out from underneath the LAG double-line.
+      const absorbed = computeAbsorbedLinkIds(s);
+      s.links.forEach((l) => {
+        if (!(st.members.includes(l.from) || st.members.includes(l.to))) return;
+        if (absorbed.has(l.id)) {
+          s.gLinks.querySelector(`[data-link-id="${l.id}"]`)?.remove();
+          return;
+        }
+        redrawLink(s, l);
+      });
       st.members.forEach((mid) => updateLagPairsFor(s, mid));
     }
   };
@@ -1971,18 +1981,22 @@ function openInspector(s) {
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
       </div>
       <div class="m002-ports-block">
-        <div class="m002-ports-head">LAGS (${(dev.lags || []).length})</div>
-        <div class="m002-ports-grid">
-          <div class="m002-lagtable-head">
-            <span>NAME</span><span>PORTS</span><span>COUNTERPART</span>
-          </div>
-          ${(dev.lags || []).map((lag) => {
-            const cp = lagCounterpart(s, dev.id, lag);
+        ${(() => {
+          // Show every LAG visible from this device — for stacked devices that
+          // means the union across every stackmate, since a stack is one
+          // logical switch and its LAGs belong to the whole stack regardless
+          // of which member nominally owns the record.
+          const visibleLags = lagAvailableDevices(s, dev).flatMap((host) =>
+            (host.lags || []).map((lag) => ({ owner: host, lag }))
+          );
+          const headLabel = visibleLags.length === 1 ? '1' : visibleLags.length;
+          const rows = visibleLags.map(({ owner, lag }) => {
+            const cp = lagCounterpart(s, owner.id, lag);
             const cpTxt = cp
               ? (cp.lag ? `${cp.dev.name} · ${cp.lag.name}` : `${cp.dev.name} · ${cp.count}p`)
               : '—';
             // Stack-aware port summary: group port numbers by host device, so a
-            // LAG that spans multiple stackmates reads as "SW11: 1, 2 · SW12: 1, 2".
+            // LAG that spans multiple stackmates reads as "SW11: 1, 2 · SW13: 1".
             const byHost = new Map();
             (lag.ports || []).forEach((p) => {
               if (!byHost.has(p.deviceId)) byHost.set(p.deviceId, []);
@@ -1994,14 +2008,23 @@ function openInspector(s) {
               return label + ns.sort((a, b) => a - b).join(', ');
             }).join(' · ') || '—';
             return `
-            <div class="m002-lagtable-row" data-lag-row="${escAttr(lag.id)}" tabindex="0">
+            <div class="m002-lagtable-row" data-lag-row="${escAttr(lag.id)}" data-lag-owner="${escAttr(owner.id)}" tabindex="0">
               <span class="m002-lagtable-name">${escSvg(lag.name)}</span>
               <span class="m002-lagtable-ports" title="${escAttr(portTxt)}">${escSvg(portTxt)}</span>
               <span class="m002-lagtable-cp ${cp ? '' : 'dim'}" title="${escAttr(cpTxt)}">${escSvg(cpTxt)}</span>
             </div>`;
-          }).join('') || '<span class="m002-vlan-empty">no LAGs</span>'}
-        </div>
-        <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
+          }).join('') || '<span class="m002-vlan-empty">no LAGs</span>';
+          return `
+            <div class="m002-ports-head">LAGS (${headLabel})</div>
+            <div class="m002-ports-grid">
+              <div class="m002-lagtable-head">
+                <span>NAME</span><span>PORTS</span><span>COUNTERPART</span>
+              </div>
+              ${rows}
+            </div>
+            <button type="button" class="m002-action" data-newlag>+ NEW LAG</button>
+          `;
+        })()}
       </div>
       <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
@@ -2056,7 +2079,8 @@ function openInspector(s) {
     body.querySelectorAll('[data-lag-row]').forEach((row) => {
       row.addEventListener('click', (e) => {
         if (e.target.closest('[data-lag-rm]')) return;
-        select(s, 'lag', `${dev.id}|${row.dataset.lagRow}`);
+        const ownerId = row.dataset.lagOwner || dev.id;
+        select(s, 'lag', `${ownerId}|${row.dataset.lagRow}`);
       });
     });
     renderInspectorVlanPickers(s);
@@ -3638,7 +3662,8 @@ const MOD002_CSS = `
 
 .m002-lag-line{stroke-linecap:square;}
 .m002-link.m002-link-bundle:hover .m002-lag-line{stroke:#e8e8ee;}
-.m002-link.m002-selected .m002-lag-line{stroke:#ff003c;}
+.m002-link.m002-selected .m002-lag-line{stroke:#ffffff;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
+.m002-link.m002-selected .m002-link-bundle-label{fill:#ffffff!important;}
 .m002-lag-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
 .m002-lag-modal-body{display:flex;flex-direction:column;gap:10px;}
 .m002-lagm-ports{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
