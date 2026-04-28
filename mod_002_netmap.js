@@ -13,11 +13,17 @@
 //   Drag device  move
 //   Click device click-then-click in link mode → connect
 //
-// Persistence: localStorage  niven:m002:<projectId>  → { devices, links, view }
-// Supabase wiring follows once schema is decided.
+// Persistence: Supabase table `m002_maps` (RLS scoped to auth.uid())
+//   - One row per map: { id uuid, user_id uuid, name text, data jsonb, … }
+//   - The whole map (devices/links/stacks/vlans/zones/view) lives in `data`.
+//   - Save is debounced and runs as an UPDATE on the active row.
+//   - Active map id is remembered per-project in localStorage so reloads land
+//     on the same map. localStorage is otherwise NOT used as a data store.
+//   - Legacy localStorage maps (pre-cloud) are auto-migrated on first authed
+//     mount when the server table is empty.
 
 const MODULE_CODE = 'MOD_002';
-const SAVE_DEBOUNCE_MS = 400;
+const SAVE_DEBOUNCE_MS = 800;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const DEFAULT_PORTS = 2;
@@ -342,12 +348,12 @@ const GRID = 24;
 // =============================================================================
 let state = null;
 
-function mount(stage, ctx) {
+async function mount(stage, ctx) {
   state = createState(stage, ctx);
   buildDOM(state);
   bindBoard(state);
   bindKeyboard(state);
-  loadFromStorage(state);
+  await loadFromServer(state);
   applyLayoutForLayer(state);
   applyView(state);
   render(state);
@@ -359,6 +365,9 @@ function mount(stage, ctx) {
 
 function unmount() {
   if (!state) return;
+  // Best-effort: flush any pending edits before tearing down.
+  if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
+  if (state.dirty) { try { saveNow(state); } catch (_) {} }
   for (const off of state.cleanups) { try { off(); } catch (_) {} }
   state.host?.remove();
   state = null;
@@ -367,11 +376,13 @@ function unmount() {
 function createState(stage, ctx) {
   return {
     stage, sb: ctx.sb, project: ctx.project, code: ctx.code, exit: ctx.exit,
-    // Storage: meta lists all maps for the project, each map has its own key.
-    metaKey: `niven:m002:meta:${ctx.project?.id || ctx.code}`,
-    legacyKey: `niven:m002:${ctx.project?.id || ctx.code}`,
-    maps: [],          // [{id, name}]
+    // Maps come from Supabase. Each entry mirrors a row's id+name; the heavy
+    // map content lives in the table's `data` jsonb and is loaded on demand
+    // (or on mount, for the active map).
+    maps: [],          // [{id: uuid, name: string}]
     activeMapId: null,
+    suspendSaves: false, // true while hydrating — avoids save loops
+    dirty: false,        // an edit is pending (used by unmount best-effort flush)
     zones: [],         // [{id, name}] — per map
     activeZone: null,
 
@@ -2437,14 +2448,19 @@ function setMode(s, txt) {
 }
 
 // =============================================================================
-// Persistence (localStorage prototype)
+// Persistence (Supabase: m002_maps, RLS-scoped to auth.uid())
 // =============================================================================
+const ACTIVE_KEY    = (s) => `niven:m002:active:${s.project?.id || s.code}`;
+const LEGACY_META   = (s) => `niven:m002:meta:${s.project?.id || s.code}`;
+const LEGACY_MAP    = (mapId) => `niven:m002:map:${mapId}`;
+const LEGACY_SINGLE = (s) => `niven:m002:${s.project?.id || s.code}`;
+
 function schedSave(s) {
+  if (!s.activeMapId || s.suspendSaves) return;
+  s.dirty = true;
   clearTimeout(s.saveTimer);
   s.saveTimer = setTimeout(() => saveNow(s), SAVE_DEBOUNCE_MS);
 }
-// Per-map storage key
-function mapKey(mapId) { return `niven:m002:map:${mapId}`; }
 
 function snapshotMapData(s) {
   persistCurrentLayout(s);
@@ -2457,52 +2473,68 @@ function snapshotMapData(s) {
   };
 }
 
-function saveNow(s) {
+async function saveNow(s) {
+  if (!s.activeMapId || s.suspendSaves) return;
+  // Local-only maps (offline mode) — nothing to push.
+  if (!s.sb || String(s.activeMapId).startsWith('local_')) { s.dirty = false; return; }
+  const data = snapshotMapData(s);
+  s.dirty = false;
   try {
-    if (!s.activeMapId) return;
-    localStorage.setItem(mapKey(s.activeMapId), JSON.stringify(snapshotMapData(s)));
-    saveMeta(s);
-  } catch (e) { console.warn('[m002] save failed', e); }
+    const { error } = await s.sb.from('m002_maps')
+      .update({ data })
+      .eq('id', s.activeMapId);
+    if (error) throw error;
+  } catch (e) {
+    console.warn('[m002] save failed', e);
+    s.dirty = true; // keep flag so a later edit still triggers a retry
+    toast(s, 'SYNC FAILED — changes pending');
+  }
 }
 
-function saveMeta(s) {
-  localStorage.setItem(s.metaKey, JSON.stringify({
-    maps: s.maps, activeMap: s.activeMapId,
-  }));
-}
-
-function loadFromStorage(s) {
+async function loadFromServer(s) {
+  if (!s.sb) { initFreshMapLocal(s); toast(s, 'SYNC OFFLINE — local only'); return; }
+  s.suspendSaves = true;
   try {
-    const metaRaw = localStorage.getItem(s.metaKey);
-    if (metaRaw) {
-      const meta = JSON.parse(metaRaw);
-      s.maps = Array.isArray(meta.maps) ? meta.maps : [];
-      s.activeMapId = meta.activeMap || s.maps[0]?.id || null;
-      if (s.activeMapId) loadMapData(s, s.activeMapId);
-      else initFreshMap(s);
+    const { data: rows, error } = await s.sb.from('m002_maps')
+      .select('id,name,data')
+      .order('created_at', { ascending: true });
+    if (error) throw error;
+
+    if (!rows || rows.length === 0) {
+      const migrated = await migrateFromLocalStorage(s);
+      if (!migrated) await createInitialMap(s);
       return;
     }
-    // Legacy single-map blob — migrate to new shape on the fly.
-    const legacyRaw = localStorage.getItem(s.legacyKey);
-    if (legacyRaw) {
-      const data = JSON.parse(legacyRaw);
-      const id = 'map_' + rid();
-      s.maps = [{ id, name: 'Main' }];
-      s.activeMapId = id;
-      hydrateMapData(s, data);
-      saveNow(s);
-      // Keep legacy key as backup; user can clean up later.
-      return;
-    }
-    initFreshMap(s);
-  } catch (e) { console.warn('[m002] load failed', e); initFreshMap(s); }
+
+    s.maps = rows.map((r) => ({ id: r.id, name: r.name }));
+    const remembered = (() => { try { return localStorage.getItem(ACTIVE_KEY(s)); } catch { return null; } })();
+    const activeRow = (remembered && rows.find((r) => r.id === remembered)) || rows[0];
+    s.activeMapId = activeRow.id;
+    hydrateMapData(s, activeRow.data || {});
+    rememberActiveMap(s);
+  } catch (e) {
+    console.warn('[m002] load failed', e);
+    toast(s, 'SYNC OFFLINE — local only');
+    initFreshMapLocal(s);
+  } finally {
+    s.suspendSaves = false;
+  }
 }
 
-function loadMapData(s, mapId) {
-  const raw = localStorage.getItem(mapKey(mapId));
-  if (!raw) { hydrateMapData(s, {}); return; }
-  try { hydrateMapData(s, JSON.parse(raw)); }
-  catch (e) { console.warn('[m002] map load failed', e); hydrateMapData(s, {}); }
+async function loadMapData(s, mapId) {
+  if (!s.sb || String(mapId).startsWith('local_')) { hydrateMapData(s, {}); return; }
+  s.suspendSaves = true;
+  try {
+    const { data: row, error } = await s.sb.from('m002_maps')
+      .select('data').eq('id', mapId).single();
+    if (error) throw error;
+    hydrateMapData(s, row?.data || {});
+  } catch (e) {
+    console.warn('[m002] map load failed', e);
+    hydrateMapData(s, {});
+  } finally {
+    s.suspendSaves = false;
+  }
 }
 
 function hydrateMapData(s, data) {
@@ -2516,12 +2548,80 @@ function hydrateMapData(s, data) {
   migrate(s);
 }
 
-function initFreshMap(s) {
-  const id = 'map_' + rid();
-  s.maps = [{ id, name: 'Main' }];
+// One-time migration: scoop pre-cloud localStorage maps and push them up.
+async function migrateFromLocalStorage(s) {
+  let legacyMaps = [];
+  let legacyActive = null;
+  try {
+    const metaRaw = localStorage.getItem(LEGACY_META(s));
+    if (metaRaw) {
+      const meta = JSON.parse(metaRaw);
+      if (Array.isArray(meta?.maps)) {
+        legacyMaps = meta.maps;
+        legacyActive = meta.activeMap || null;
+      }
+    }
+    // Even older shape: a single-blob key from before the multi-map era.
+    if (!legacyMaps.length) {
+      const blob = localStorage.getItem(LEGACY_SINGLE(s));
+      if (blob) {
+        legacyMaps = [{ id: '__single__', name: 'Main', __blob: blob }];
+      }
+    }
+  } catch (e) { console.warn('[m002] legacy read failed', e); }
+
+  if (!legacyMaps.length) return false;
+
+  const inserted = [];
+  for (const m of legacyMaps) {
+    let data = {};
+    try {
+      const raw = m.__blob ?? localStorage.getItem(LEGACY_MAP(m.id));
+      if (raw) data = JSON.parse(raw);
+    } catch {}
+    const { data: row, error } = await s.sb.from('m002_maps')
+      .insert({ name: m.name || 'Main', data }).select('id,name,data').single();
+    if (error) { console.warn('[m002] migrate row failed', error); continue; }
+    inserted.push({ row, legacyId: m.id });
+  }
+  if (!inserted.length) return false;
+
+  s.maps = inserted.map((it) => ({ id: it.row.id, name: it.row.name }));
+  const matchIdx = inserted.findIndex((it) => it.legacyId === legacyActive);
+  const activeIt = inserted[matchIdx >= 0 ? matchIdx : 0];
+  s.activeMapId = activeIt.row.id;
+  hydrateMapData(s, activeIt.row.data || {});
+  rememberActiveMap(s);
+  toast(s, `Synced ${inserted.length} map${inserted.length === 1 ? '' : 's'} to cloud`);
+  return true;
+}
+
+async function createInitialMap(s) {
+  const { data: row, error } = await s.sb.from('m002_maps')
+    .insert({ name: 'Main', data: {} }).select('id,name').single();
+  if (error) {
+    console.warn('[m002] create initial failed', error);
+    initFreshMapLocal(s);
+    toast(s, 'SYNC OFFLINE — local only');
+    return;
+  }
+  s.maps = [{ id: row.id, name: row.name }];
+  s.activeMapId = row.id;
+  hydrateMapData(s, {});
+  rememberActiveMap(s);
+}
+
+// Fallback for unauthed / network-down boots — strictly in-memory.
+function initFreshMapLocal(s) {
+  const id = 'local_' + rid();
+  s.maps = [{ id, name: 'Main (offline)' }];
   s.activeMapId = id;
   hydrateMapData(s, {});
-  saveNow(s);
+}
+
+function rememberActiveMap(s) {
+  if (!s.activeMapId) return;
+  try { localStorage.setItem(ACTIVE_KEY(s), s.activeMapId); } catch {}
 }
 
 // =============================================================================
@@ -2573,61 +2673,76 @@ function toggleMapMenu(s) {
   s.mapMenuEl.hidden = false;
 }
 
-function switchMap(s, mapId) {
+async function switchMap(s, mapId) {
   if (!mapId || mapId === s.activeMapId) return;
-  saveNow(s); // persist current map before switching
+  await saveNow(s); // flush any pending edits on the outgoing map
   s.activeMapId = mapId;
-  loadMapData(s, mapId);
+  await loadMapData(s, mapId);
   applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
   refreshZoneBar(s);
-  saveMeta(s);
+  rememberActiveMap(s);
 }
 
-function createMap(s) {
+async function createMap(s) {
   const name = (prompt('New map name:', `Map ${s.maps.length + 1}`) || '').trim();
   if (!name) return;
-  saveNow(s); // persist the current map before swapping it out
-  const id = 'map_' + rid();
-  s.maps.push({ id, name });
-  s.activeMapId = id;
-  hydrateMapData(s, {});
+  await saveNow(s);
+  if (!s.sb) {
+    // Offline: in-memory only.
+    const id = 'local_' + rid();
+    s.maps.push({ id, name });
+    s.activeMapId = id;
+    hydrateMapData(s, {});
+  } else {
+    const { data: row, error } = await s.sb.from('m002_maps')
+      .insert({ name, data: {} }).select('id,name').single();
+    if (error) { console.warn('[m002] create failed', error); toast(s, 'Create failed'); return; }
+    s.maps.push({ id: row.id, name: row.name });
+    s.activeMapId = row.id;
+    hydrateMapData(s, {});
+  }
   applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
   refreshZoneBar(s);
-  saveNow(s);
+  rememberActiveMap(s);
   toast(s, `Map "${name}" created`);
 }
 
-function renameCurrentMap(s) {
+async function renameCurrentMap(s) {
   const m = s.maps.find((mm) => mm.id === s.activeMapId);
   if (!m) return;
   const name = (prompt('Rename map:', m.name) || '').trim();
   if (!name) return;
   m.name = name;
-  saveMeta(s);
   refreshMapBar(s);
+  if (!s.sb || String(m.id).startsWith('local_')) return;
+  const { error } = await s.sb.from('m002_maps').update({ name }).eq('id', m.id);
+  if (error) { console.warn('[m002] rename failed', error); toast(s, 'Rename failed'); }
 }
 
-function deleteCurrentMap(s) {
+async function deleteCurrentMap(s) {
   if (s.maps.length <= 1) { toast(s, 'Cannot delete the last map'); return; }
   const m = s.maps.find((mm) => mm.id === s.activeMapId);
   if (!m) return;
   if (!confirm(`Delete map "${m.name}"? This cannot be undone.`)) return;
-  localStorage.removeItem(mapKey(s.activeMapId));
-  s.maps = s.maps.filter((mm) => mm.id !== s.activeMapId);
+  if (s.sb && !String(m.id).startsWith('local_')) {
+    const { error } = await s.sb.from('m002_maps').delete().eq('id', m.id);
+    if (error) { console.warn('[m002] delete failed', error); toast(s, 'Delete failed'); return; }
+  }
+  s.maps = s.maps.filter((mm) => mm.id !== m.id);
   s.activeMapId = s.maps[0].id;
-  loadMapData(s, s.activeMapId);
+  await loadMapData(s, s.activeMapId);
   applyLayoutForLayer(s);
   applyView(s);
   render(s);
   refreshMapBar(s);
   refreshZoneBar(s);
-  saveMeta(s);
+  rememberActiveMap(s);
 }
 
 function exportMap(s) {
@@ -2645,21 +2760,29 @@ function exportMap(s) {
 
 function importMapFromFile(s, file) {
   const reader = new FileReader();
-  reader.onload = () => {
+  reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result);
       const name = (data.name || file.name.replace(/\.json$/i, '')).slice(0, 60);
-      saveNow(s); // persist current before swap
-      const id = 'map_' + rid();
-      s.maps.push({ id, name });
-      s.activeMapId = id;
+      await saveNow(s); // flush current before swap
+      if (!s.sb) {
+        const id = 'local_' + rid();
+        s.maps.push({ id, name });
+        s.activeMapId = id;
+      } else {
+        const { data: row, error } = await s.sb.from('m002_maps')
+          .insert({ name, data }).select('id,name').single();
+        if (error) { console.warn('[m002] import insert failed', error); toast(s, 'Import failed — server'); return; }
+        s.maps.push({ id: row.id, name: row.name });
+        s.activeMapId = row.id;
+      }
       hydrateMapData(s, data);
       applyLayoutForLayer(s);
       applyView(s);
       render(s);
       refreshMapBar(s);
       refreshZoneBar(s);
-      saveNow(s);
+      rememberActiveMap(s);
       toast(s, `Imported "${name}"`);
     } catch (e) {
       console.warn('[m002] import failed', e);
