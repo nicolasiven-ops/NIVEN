@@ -1643,6 +1643,14 @@ function lagBundleKey(s, link) {
   const infoA = findPortLag(s, link.from, link.fromPort);
   const infoB = findPortLag(s, link.to,   link.toPort);
   if (!infoA && !infoB) return null;
+  // Bundling collapses every member-port link into a single LAG line. That
+  // only makes visual sense when both owning stacks are collapsed — once a
+  // stack is expanded the user wants to see the underlying port-links as
+  // discrete edges between the visible members.
+  const stackA = findStack(s, link.from);
+  const stackB = findStack(s, link.to);
+  if (stackA && !isStackCollapsed(s, stackA)) return null;
+  if (stackB && !isStackCollapsed(s, stackB)) return null;
   // Direction-independent key. Keyed on the owning stack so a stack-LAG
   // bundles every member-port link regardless of which member hosts a given
   // port.
