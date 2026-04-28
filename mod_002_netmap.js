@@ -28,12 +28,16 @@ const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const DEFAULT_PORTS = 2;
 const DEVICE_TYPES = [
-  { id: 'switch',   label: 'SWITCH',   ports: DEFAULT_PORTS, accent: '#00d4ff' },
-  { id: 'router',   label: 'ROUTER',   ports: DEFAULT_PORTS, accent: '#35ff7a' },
-  { id: 'firewall', label: 'FIREWALL', ports: DEFAULT_PORTS, accent: '#ff003c' },
-  { id: 'endpoint', label: 'ENDPOINT', ports: DEFAULT_PORTS, accent: '#ffae00' },
-  { id: 'cloud',    label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#aab4c0' },
+  { id: 'switch',    label: 'SWITCH',   ports: DEFAULT_PORTS, accent: '#00d4ff' },
+  { id: 'router',    label: 'ROUTER',   ports: DEFAULT_PORTS, accent: '#35ff7a' },
+  { id: 'firewall',  label: 'FIREWALL', ports: DEFAULT_PORTS, accent: '#ff003c' },
+  { id: 'endpoint',  label: 'ENDPOINT', ports: DEFAULT_PORTS, accent: '#ffae00' },
+  { id: 'cloud',     label: 'CLOUD',    ports: DEFAULT_PORTS, accent: '#aab4c0' },
+  // JUMP nodes are portals — they reference another zone (in the same map) or
+  // another map. Double-clicking jumps. They have no ports / IP / VLANs.
+  { id: 'reference', label: 'JUMP',     ports: 0,             accent: '#c084fc' },
 ];
+const isReference = (dev) => dev && dev.type === 'reference';
 const TYPE_ALIASES = { server: 'endpoint', client: 'endpoint', ap: 'endpoint' };
 const typeOf = (id) => DEVICE_TYPES.find((t) => t.id === id)
   || DEVICE_TYPES.find((t) => t.id === TYPE_ALIASES[id])
@@ -751,13 +755,21 @@ function bindBoard(s) {
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
     if (s.linkMode && devEl && e.button === 0) {
+      const refDev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
+      if (refDev && isReference(refDev)) { toast(s, 'JUMP nodes cannot be linked'); e.preventDefault(); return; }
       handleLinkClick(s, devEl.dataset.deviceId);
       e.preventDefault();
       return;
     }
     if (s.stackMode && e.button === 0) {
       if (stackEl) { handleStackPick(s, { kind: 'stack',  id: stackEl.dataset.stackId  }); e.preventDefault(); return; }
-      if (devEl)   { handleStackPick(s, { kind: 'device', id: devEl.dataset.deviceId }); e.preventDefault(); return; }
+      if (devEl) {
+        const stackDev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
+        if (stackDev && isReference(stackDev)) { toast(s, 'JUMP nodes cannot be stacked'); e.preventDefault(); return; }
+        handleStackPick(s, { kind: 'device', id: devEl.dataset.deviceId });
+        e.preventDefault();
+        return;
+      }
     }
 
     if (stackEl && e.button === 0) {
@@ -834,12 +846,13 @@ function bindBoard(s) {
       // Drag-to-stack: highlight nearest valid merge candidate.
       // Skip when this device sits inside a stack (drag-to-merge across stacks
       // is too ambiguous for the prototype) or when shift is held.
-      if (!e.shiftKey && !findStack(s, dev.id)) {
+      if (!e.shiftKey && !findStack(s, dev.id) && !isReference(dev)) {
         const STACK_MERGE_THRESH = 70;
         let target = null;
         for (const d of s.devices) {
           if (d.id === dev.id) continue;
           if (findStack(s, d.id)) continue;
+          if (isReference(d)) continue;
           if (Math.hypot(dev.x - d.x, dev.y - d.y) < STACK_MERGE_THRESH) { target = { kind: 'device', id: d.id }; break; }
         }
         if (!target) {
@@ -965,6 +978,15 @@ function bindBoard(s) {
   };
 
   const onDblClick = (e) => {
+    const devEl = e.target.closest('[data-device-id]');
+    if (devEl) {
+      const dev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
+      if (dev && isReference(dev)) {
+        jumpToReference(s, dev);
+        e.preventDefault();
+        return;
+      }
+    }
     const stackEl = e.target.closest('[data-stack-id]');
     if (!stackEl) return;
     toggleStackExpanded(s, stackEl.dataset.stackId);
@@ -1128,6 +1150,11 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     zone: s.activeZone,
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
+  if (t.id === 'reference') {
+    dev.refMode = 'zone';
+    dev.refZoneId = null;
+    dev.refMapId = null;
+  }
   s.devices.push(dev);
   drawDevice(s, dev);
   select(s, 'device', dev.id);
@@ -1135,22 +1162,63 @@ function spawnDeviceAt(s, typeId, wx, wy) {
   schedSave(s);
 }
 
+// Resolve a reference's target into a display label. Returns "(no target)" if
+// nothing is set, or "(missing)" if the target id no longer exists.
+function referenceTargetLabel(s, dev) {
+  if (!isReference(dev)) return '';
+  if (dev.refMode === 'map') {
+    if (!dev.refMapId) return '(no target)';
+    const m = (s.maps || []).find((mm) => mm.id === dev.refMapId);
+    return m ? m.name : '(missing map)';
+  }
+  if (!dev.refZoneId) return '(no target)';
+  const z = (s.zones || []).find((zz) => zz.id === dev.refZoneId);
+  return z ? z.name : '(missing zone)';
+}
+
+function jumpToReference(s, dev) {
+  if (!isReference(dev)) return;
+  if (dev.refMode === 'map') {
+    if (!dev.refMapId) { toast(s, 'JUMP target not set'); return; }
+    if (!(s.maps || []).some((m) => m.id === dev.refMapId)) { toast(s, 'JUMP target map missing'); return; }
+    if (dev.refMapId === s.activeMapId) { toast(s, 'Already on this map'); return; }
+    switchMap(s, dev.refMapId);
+    return;
+  }
+  if (!dev.refZoneId) { toast(s, 'JUMP target not set'); return; }
+  if (!(s.zones || []).some((z) => z.id === dev.refZoneId)) { toast(s, 'JUMP target zone missing'); return; }
+  if (dev.refZoneId === s.activeZone) { toast(s, 'Already in this zone'); return; }
+  switchZone(s, dev.refZoneId);
+}
+
 function drawDevice(s, dev) {
   const t = typeOf(dev.type);
   const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('class', 'm002-device');
+  g.setAttribute('class', 'm002-device' + (isReference(dev) ? ' m002-device-ref' : ''));
   g.setAttribute('data-device-id', dev.id);
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
   const w = DEVICE_W, h = DEVICE_H;
-  g.innerHTML = `
-    <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-    <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label}</text>
-    <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
-    <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(dev.notes, 18) || '—')}</text>
-    <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(dev.ip || '')}</text>
-  `;
+  if (isReference(dev)) {
+    const arrow = dev.refMode === 'map' ? '↗ MAP' : '→ ZONE';
+    const target = referenceTargetLabel(s, dev);
+    g.innerHTML = `
+      <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
+      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label} · ${arrow}</text>
+      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 22))}</text>
+      <text class="m002-dev-ref-hint" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">DBL</text>
+    `;
+  } else {
+    g.innerHTML = `
+      <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
+      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label}</text>
+      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(dev.notes, 18) || '—')}</text>
+      <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(dev.ip || '')}</text>
+    `;
+  }
   s.gDevices.appendChild(g);
 }
 
@@ -1943,6 +2011,67 @@ function refreshToolHighlights(s) {
   setActive('[data-tool="select"]', !s.linkMode && !s.stackMode);
 }
 
+function renderReferenceInspector(s, dev, body) {
+  const otherZones = (s.zones || []).filter((z) => z.id !== s.activeZone);
+  const otherMaps = (s.maps || []).filter((m) => m.id !== s.activeMapId);
+  const mode = dev.refMode === 'map' ? 'map' : 'zone';
+  body.innerHTML = `
+    <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
+    <label class="m002-field"><span>TYPE</span>
+      <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
+    </label>
+    <div class="m002-field">
+      <span>TARGET</span>
+      <div class="m002-ref-modes">
+        <label class="m002-ref-mode ${mode === 'zone' ? 'active' : ''}"><input type="radio" name="m002-refmode" value="zone" ${mode === 'zone' ? 'checked' : ''}/>ZONE</label>
+        <label class="m002-ref-mode ${mode === 'map' ? 'active' : ''}"><input type="radio" name="m002-refmode" value="map" ${mode === 'map' ? 'checked' : ''}/>MAP</label>
+      </div>
+    </div>
+    ${mode === 'zone' ? `
+      <label class="m002-field"><span>ZONE</span>
+        <select data-rf="refZoneId">
+          <option value="">— select zone —</option>
+          ${otherZones.map((z) => `<option value="${escAttr(z.id)}" ${z.id === dev.refZoneId ? 'selected' : ''}>${escSvg(z.name)}</option>`).join('')}
+        </select>
+      </label>
+      ${otherZones.length === 0 ? '<p class="m002-link-hint">Keine weiteren Zonen in dieser Map. Mit "+" oben rechts hinzufügen.</p>' : ''}
+    ` : `
+      <label class="m002-field"><span>MAP</span>
+        <select data-rf="refMapId">
+          <option value="">— select map —</option>
+          ${otherMaps.map((m) => `<option value="${escAttr(m.id)}" ${m.id === dev.refMapId ? 'selected' : ''}>${escSvg(m.name)}</option>`).join('')}
+        </select>
+      </label>
+      ${otherMaps.length === 0 ? '<p class="m002-link-hint">Keine weiteren Maps. Über das Map-Menü oben rechts erstellen.</p>' : ''}
+    `}
+    <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes || '')}</textarea></label>
+    <p class="m002-link-hint">Doppelklick auf den JUMP-Knoten springt zum Ziel.</p>
+    <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
+    <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
+  `;
+  body.querySelectorAll('[data-f]').forEach((el) => {
+    el.addEventListener('input', () => updateDeviceField(s, dev, el));
+    el.addEventListener('change', () => updateDeviceField(s, dev, el));
+  });
+  body.querySelectorAll('input[name="m002-refmode"]').forEach((el) => {
+    el.addEventListener('change', () => {
+      dev.refMode = el.value === 'map' ? 'map' : 'zone';
+      redrawDevice(s, dev);
+      schedSave(s);
+      openInspector(s);
+    });
+  });
+  body.querySelectorAll('[data-rf]').forEach((el) => {
+    el.addEventListener('change', () => {
+      dev[el.dataset.rf] = el.value || null;
+      redrawDevice(s, dev);
+      schedSave(s);
+    });
+  });
+  body.querySelector('[data-ref-jump]')?.addEventListener('click', () => jumpToReference(s, dev));
+  body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+}
+
 function showInspectorEmpty(s) {
   const body = s.inspector.querySelector('.m002-insp-body');
   const idEl = s.inspector.querySelector('.m002-insp-id');
@@ -1970,6 +2099,7 @@ function openInspector(s) {
     if (!dev) return;
     const t = typeOf(dev.type);
     idEl.textContent = `// ${t.label}`;
+    if (isReference(dev)) { renderReferenceInspector(s, dev, body); return; }
     body.innerHTML = `
       <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
       <label class="m002-field"><span>TYPE</span>
@@ -2384,8 +2514,21 @@ function updateDeviceField(s, dev, el) {
     }
     redrawDevice(s, dev);
   } else if (f === 'type') {
+    const wasRef = isReference(dev);
     dev.type = el.value;
+    const isRefNow = isReference(dev);
+    if (isRefNow && !wasRef) {
+      dev.ports = [];
+      s.links = s.links.filter((l) => l.from !== dev.id && l.to !== dev.id);
+      if (dev.refMode == null) dev.refMode = 'zone';
+      if (dev.refZoneId === undefined) dev.refZoneId = null;
+      if (dev.refMapId === undefined) dev.refMapId = null;
+    } else if (!isRefNow && wasRef) {
+      const t2 = typeOf(dev.type);
+      dev.ports = Array.from({ length: t2.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] }));
+    }
     redrawDevice(s, dev);
+    openInspector(s);
   } else {
     dev[f] = el.value;
     if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
@@ -3468,6 +3611,14 @@ const MOD002_CSS = `
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
 .m002-dev-notes{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;font-style:italic;}
+.m002-device-ref .m002-dev-bg{stroke-dasharray:6 3;}
+.m002-dev-ref-target{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:.6px;}
+.m002-dev-ref-hint{font-size:8px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;letter-spacing:1.4px;opacity:.7;}
+.m002-ref-modes{display:flex;gap:6px;}
+.m002-ref-mode{flex:1;display:flex;align-items:center;justify-content:center;gap:6px;border:1px solid #1a1a22;padding:5px 8px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;color:#9aa0a8;cursor:pointer;background:transparent;}
+.m002-ref-mode:hover{border-color:#c084fc;color:#e8e8ee;}
+.m002-ref-mode.active{border-color:#c084fc;background:rgba(192,132,252,0.08);color:#c084fc;}
+.m002-ref-mode input{accent-color:#c084fc;}
 
 .m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
