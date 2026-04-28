@@ -855,6 +855,7 @@ function bindBoard(s) {
       if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
       // Redraw links touching the stack
       s.links.forEach((l) => { if (st.members.includes(l.from) || st.members.includes(l.to)) redrawLink(s, l); });
+      st.members.forEach((mid) => updateLagPairsFor(s, mid));
     }
   };
   const onUp = () => {
@@ -1705,12 +1706,36 @@ function drawLink(s, link) {
 
 function updateLinksFor(s, deviceId) {
   s.links.filter((l) => l.from === deviceId || l.to === deviceId).forEach((l) => redrawLink(s, l));
+  updateLagPairsFor(s, deviceId);
 }
 function redrawLink(s, link) {
   const g = s.gLinks.querySelector(`[data-link-id="${link.id}"]`);
   if (g) g.remove();
   drawLink(s, link);
   if (s.selected?.kind === 'link' && s.selected.id === link.id) markSelected(s);
+}
+
+// Redraw any LAG-pair line that has this device on either side. Uses the same
+// canonical iteration order as render() so the resulting data-laglink-id stays
+// stable across drags (selection highlight survives).
+function updateLagPairsFor(s, deviceId) {
+  const seen = new Set();
+  s.devices.forEach((d) => {
+    (d.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      if (d.id !== deviceId && lag.counterpart.deviceId !== deviceId) return;
+      const otherDev = s.devices.find((dd) => dd.id === lag.counterpart.deviceId);
+      const otherLag = otherDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
+      if (!otherDev || !otherLag) return;
+      const key = [d.id + ':' + lag.id, otherDev.id + ':' + otherLag.id].sort().join('::');
+      if (seen.has(key)) return;
+      seen.add(key);
+      s.gLinks.querySelector(`[data-laglink-id="${d.id}|${lag.id}"]`)?.remove();
+      s.gLinks.querySelector(`[data-laglink-id="${otherDev.id}|${otherLag.id}"]`)?.remove();
+      drawLagLink(s, { devA: d, lagA: lag, devB: otherDev, lagB: otherLag });
+    });
+  });
+  if (s.selected?.kind === 'lag') markSelected(s);
 }
 
 // =============================================================================
@@ -1996,11 +2021,42 @@ function openInspector(s) {
       ? `${lag.counterpart.deviceId}|${lag.counterpart.lagId}`
       : '';
 
-    const otherLagPorts = new Set();
-    dev.lags.forEach((l) => { if (l !== lag) l.ports.forEach((n) => otherLagPorts.add(Number(n))); });
-    const lagPortSet = new Set(lag.ports.map(Number));
+    const isPaired = !!(peerDev && peerLag && lag.counterpart?.lagId);
 
-    idEl.textContent = `// ${dev.name} · ${lag.name}`;
+    // Per-side block — symmetric layout when the LAG is paired so neither
+    // device "owns" the editor. Both sides edit their own NAME / PORTS;
+    // VLANs (intersection) and counterpart pointer are shared above.
+    const sideHTML = (sideDev, sideLag) => {
+      const otherLagPorts = new Set();
+      sideDev.lags.forEach((l) => { if (l !== sideLag) l.ports.forEach((n) => otherLagPorts.add(Number(n))); });
+      const lagPortSet = new Set(sideLag.ports.map(Number));
+      return `
+        <div class="m002-lag-side" data-side-dev="${escAttr(sideDev.id)}" data-side-lag="${escAttr(sideLag.id)}">
+          <div class="m002-lag-side-head">${escSvg(sideDev.name.toUpperCase())}</div>
+          <label class="m002-field"><span>NAME</span>
+            <input data-side-name value="${escAttr(sideLag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
+          </label>
+          <div class="m002-field">
+            <span>MEMBER PORTS (${sideDev.ports.length})</span>
+            <div class="m002-lagm-ports">
+              ${sideDev.ports.map((p) => {
+                const inUse = otherLagPorts.has(p.n);
+                const checked = lagPortSet.has(p.n);
+                return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
+                  <input type="checkbox" data-side-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
+                  <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
+                </label>`;
+              }).join('')}
+            </div>
+          </div>
+        </div>
+      `;
+    };
+
+    idEl.textContent = isPaired
+      ? `// ${dev.name} ⇄ ${peerDev.name} · LAG-PAIR`
+      : `// ${dev.name} · ${lag.name}`;
+
     body.innerHTML = `
       <button type="button" class="m002-insp-back" data-back>← BACK TO ${escSvg(dev.name.toUpperCase())}</button>
       <div class="m002-link-summary">
@@ -2027,26 +2083,12 @@ function openInspector(s) {
       </div>
       ${!toOpts.length ? `<p class="m002-link-hint">No LAGs found on linked devices — create one over there first to pair.</p>` : (lag.counterpart ? '' : (peerLag ? `<p class="m002-link-hint">Auto-derived from port links. Pick "TO LAG" to lock it manually.</p>` : ''))}
 
-      <div class="m002-lag-props">
-        <label class="m002-field"><span>NAME</span>
-          <input class="m002-lagm-name" value="${escAttr(lag.name)}" placeholder="e.g. Po1, LAG-CORE"/>
-        </label>
-        <div class="m002-field">
-          <span>MEMBER PORTS (${dev.ports.length})</span>
-          <div class="m002-lagm-ports">
-            ${dev.ports.map((p) => {
-              const inUse = otherLagPorts.has(p.n);
-              const checked = lagPortSet.has(p.n);
-              return `<label class="m002-lagm-port ${inUse ? 'disabled' : ''}" title="${inUse ? 'already in another LAG' : ''}">
-                <input type="checkbox" data-port="${p.n}" ${checked ? 'checked' : ''} ${inUse ? 'disabled' : ''}/>
-                <span>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</span>
-              </label>`;
-            }).join('')}
-          </div>
-        </div>
+      <div class="m002-lag-sides">
+        ${sideHTML(dev, lag)}
+        ${isPaired ? sideHTML(peerDev, peerLag) : ''}
       </div>
 
-      <button type="button" class="m002-insp-del" data-lact="delete">DELETE LAG</button>
+      <button type="button" class="m002-insp-del" data-lact="delete">${isPaired ? 'DELETE LAG-PAIR' : 'DELETE LAG'}</button>
     `;
     renderInspectorVlanPickers(s);
 
@@ -2060,11 +2102,9 @@ function openInspector(s) {
       if (newId && newId !== lag.id) select(s, 'lag', `${devId}|${newId}`);
     });
 
-    // TO LAG: pick / unpick the counterpart. Mirrors what the old COUNTERPART
-    // select did, with reciprocal pairing on the peer LAG.
+    // TO LAG: pick / unpick the counterpart, with reciprocal pairing.
     body.querySelector('[data-lf="to"]')?.addEventListener('change', (e) => {
       snapshot(s);
-      // Detach previous reciprocal pointer
       if (lag.counterpart?.lagId) {
         const oldDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
         const oldLag = oldDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
@@ -2084,49 +2124,57 @@ function openInspector(s) {
       openInspector(s);
     });
 
-    // NAME — live edit. Empty name is rejected on blur (revert).
-    const nameEl = body.querySelector('.m002-lagm-name');
-    nameEl?.addEventListener('input', () => {
-      const v = nameEl.value.trim();
-      if (!v) return; // wait for blur to validate
-      lag.name = v;
-      idEl.textContent = `// ${dev.name} · ${lag.name}`;
-      schedSave(s);
-    });
-    nameEl?.addEventListener('blur', () => {
-      if (!nameEl.value.trim()) {
-        nameEl.value = lag.name;
-        toast(s, 'LAG name cannot be empty');
-      } else {
-        // Redraw canvas labels referencing LAG name
-        render(s);
-      }
-    });
+    // Wire NAME + PORT edits per side. Symmetric: both sides editable.
+    body.querySelectorAll('.m002-lag-side').forEach((sideEl) => {
+      const sideDev = s.devices.find((d) => d.id === sideEl.dataset.sideDev);
+      const sideLag = sideDev?.lags?.find((l) => l.id === sideEl.dataset.sideLag);
+      if (!sideDev || !sideLag) return;
 
-    // PORT checkboxes — live edit with the 2-port minimum guard.
-    body.querySelectorAll('.m002-lagm-ports input[type=checkbox]').forEach((cb) => {
-      cb.addEventListener('change', () => {
-        const ports = [...body.querySelectorAll('.m002-lagm-ports input[type=checkbox]:checked')]
-          .map((c) => Number(c.dataset.port));
-        if (ports.length < 2) {
-          // Revert and warn
-          cb.checked = !cb.checked;
-          toast(s, 'LAG needs at least 2 ports');
-          return;
+      const nameEl = sideEl.querySelector('[data-side-name]');
+      nameEl?.addEventListener('input', () => {
+        const v = nameEl.value.trim();
+        if (!v) return;
+        sideLag.name = v;
+        if (!isPaired && sideDev.id === devId && sideLag.id === lag.id) {
+          idEl.textContent = `// ${dev.name} · ${lag.name}`;
         }
-        snapshot(s);
-        lag.ports = ports;
         schedSave(s);
-        render(s);
+      });
+      nameEl?.addEventListener('blur', () => {
+        if (!nameEl.value.trim()) {
+          nameEl.value = sideLag.name;
+          toast(s, 'LAG name cannot be empty');
+        } else {
+          render(s);
+        }
+      });
+
+      sideEl.querySelectorAll('[data-side-port]').forEach((cb) => {
+        cb.addEventListener('change', () => {
+          const ports = [...sideEl.querySelectorAll('[data-side-port]:checked')]
+            .map((c) => Number(c.dataset.sidePort));
+          if (ports.length < 2) {
+            cb.checked = !cb.checked;
+            toast(s, 'LAG needs at least 2 ports');
+            return;
+          }
+          snapshot(s);
+          sideLag.ports = ports;
+          schedSave(s);
+          render(s);
+        });
       });
     });
 
+    // DELETE — when paired, removes both LAGs (the pair *is* the connection).
+    // Standalone, removes just this side.
     body.querySelector('[data-lact="delete"]')?.addEventListener('click', () => {
       snapshot(s);
       if (lag.counterpart?.lagId) {
         const oDev = s.devices.find((d) => d.id === lag.counterpart.deviceId);
         const oLag = oDev?.lags?.find((ll) => ll.id === lag.counterpart.lagId);
         if (oLag?.counterpart?.lagId === lag.id) delete oLag.counterpart;
+        if (oDev && oLag) oDev.lags = oDev.lags.filter((l) => l.id !== oLag.id);
       }
       dev.lags = dev.lags.filter((l) => l.id !== lag.id);
       schedSave(s);
@@ -3297,6 +3345,9 @@ const MOD002_CSS = `
 .m002-link-hint{font-size:11px;color:#7a7f8e;line-height:1.4;margin:0;font-style:italic;}
 .m002-link-end.dim{color:#5a5f6e;font-weight:400;}
 .m002-lag-props{margin-top:4px;padding-top:10px;border-top:1px dashed #1a1a22;display:flex;flex-direction:column;gap:8px;}
+.m002-lag-sides{display:flex;flex-direction:column;gap:10px;margin-top:4px;}
+.m002-lag-side{display:flex;flex-direction:column;gap:8px;padding-top:10px;border-top:1px dashed #1a1a22;}
+.m002-lag-side-head{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:2px;color:#ff003c;}
 
 .m002-stack-members{display:flex;flex-direction:column;gap:4px;}
 .m002-stack-member{display:grid;grid-template-columns:14px 1fr auto 22px;gap:6px;align-items:center;background:#06060a;border:1px solid #1a1a22;padding:4px 8px;}
