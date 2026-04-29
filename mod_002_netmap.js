@@ -493,7 +493,7 @@ function createState(stage, ctx) {
 
     devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], lags:[{id,name,ports}], ports: [{n,name,vlans:[]}] }
     links: [],     // { id, from, to, fromPort, toPort }
-    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded } — VLANs are derived from members
+    stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded, lags:[], stackLinks:[{id,fromDevice,toDevice,fromPort,toPort}] } — VLANs are derived from members
     vlanRegistry: [],  // [{ id: string, name?: string }] — declared VLANs in this network
     portModalOpen: null, // { deviceId, portN } or null
     selected: null,// { kind: 'device'|'link'|'stack', id }
@@ -1304,6 +1304,17 @@ function handleLinkClick(s, deviceId) {
     setMode(s, 'LINK · pick first node');
     return;
   }
+  // Two members of the same stack — these are stacking cables, not regular
+  // links. Send the user to the stack inspector to configure a stack-link.
+  const stA = findStack(s, s.linkPending);
+  const stB = findStack(s, deviceId);
+  if (stA && stA === stB) {
+    toast(s, 'Use STACK-LINKS inside a stack');
+    s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
+    s.linkPending = null;
+    setMode(s, 'LINK · pick first node');
+    return;
+  }
   snapshot(s);
   const link = {
     id: rid(),
@@ -1571,6 +1582,8 @@ function createStack(s, deviceIds) {
     y: Math.round(cy / GRID) * GRID,
     expanded: false,
     zone: s.activeZone,
+    lags: [],
+    stackLinks: [],
   };
   s.stacks.push(st);
   render(s);
@@ -1627,6 +1640,10 @@ function removeFromStack(s, stackId, deviceId) {
       lag.ports = (lag.ports || []).filter((p) => p.deviceId !== deviceId);
     });
     st.lags = (st.lags || []).filter((lag) => lag.ports.length > 0);
+    // Drop any stack-links that touched the leaving member.
+    st.stackLinks = (st.stackLinks || []).filter((sl) =>
+      sl.fromDevice !== deviceId && sl.toDevice !== deviceId
+    );
   }
   render(s);
   schedSave(s);
@@ -1654,6 +1671,65 @@ function dropStackAndItsLags(s, st) {
     });
   });
   s.stacks = s.stacks.filter((x) => x.id !== st.id);
+}
+
+// Stack-links — "stacking cables" between members of a single stack. Modeled
+// per-stack so they vanish with the stack and can carry per-cable port refs.
+function addStackLink(s, stackId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  if (st.members.length < 2) { toast(s, 'Need at least 2 members'); return; }
+  if (!Array.isArray(st.stackLinks)) st.stackLinks = [];
+  snapshot(s);
+  st.stackLinks.push({
+    id: 'sl_' + rid(),
+    fromDevice: st.members[0],
+    toDevice: st.members[1],
+    fromPort: '',
+    toPort: '',
+  });
+  if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+  schedSave(s);
+  openInspector(s);
+}
+
+function removeStackLink(s, stackId, slId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  snapshot(s);
+  st.stackLinks = (st.stackLinks || []).filter((sl) => sl.id !== slId);
+  if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+  schedSave(s);
+  openInspector(s);
+}
+
+function updateStackLinkField(s, stackId, slId, field, value) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  const sl = (st.stackLinks || []).find((x) => x.id === slId);
+  if (!sl) return;
+  snapshot(s);
+  if (field === 'fromDevice') {
+    sl.fromDevice = value;
+    sl.fromPort = ''; // port list belongs to the device — reset
+    if (sl.fromDevice === sl.toDevice) {
+      // pick a different toDevice automatically
+      const alt = st.members.find((m) => m !== value);
+      if (alt) { sl.toDevice = alt; sl.toPort = ''; }
+    }
+  } else if (field === 'toDevice') {
+    sl.toDevice = value;
+    sl.toPort = '';
+    if (sl.fromDevice === sl.toDevice) {
+      const alt = st.members.find((m) => m !== value);
+      if (alt) { sl.fromDevice = alt; sl.fromPort = ''; }
+    }
+  } else if (field === 'fromPort' || field === 'toPort') {
+    sl[field] = value;
+  }
+  if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+  schedSave(s);
+  openInspector(s);
 }
 
 function toggleStackExpanded(s, stackId) {
@@ -1721,15 +1797,40 @@ function drawStackEnvelope(s, stack) {
     <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
   `;
   s.gStacksBg.appendChild(env);
-  // Stack cables between consecutive members
-  for (let i = 0; i < members.length - 1; i++) {
-    const a = members[i], b = members[i + 1];
-    const cab = document.createElementNS(SVG_NS, 'path');
-    cab.setAttribute('class', 'm002-stack-cable');
-    const path = orthPath(a, b, 0);
-    cab.setAttribute('d', path.d);
+  // Stacking cables — only the user-configured stack-links. Each one is a
+  // dashed orthogonal path between two members, with optional port labels at
+  // the endpoints. Lanes keep parallel cables between the same member-pair
+  // from overlapping.
+  const lanesByPair = new Map();
+  (stack.stackLinks || []).forEach((sl) => {
+    const key = [sl.fromDevice, sl.toDevice].sort().join('|');
+    if (!lanesByPair.has(key)) lanesByPair.set(key, 0);
+  });
+  (stack.stackLinks || []).forEach((sl, idx) => {
+    const a = members.find((m) => m.id === sl.fromDevice);
+    const b = members.find((m) => m.id === sl.toDevice);
+    if (!a || !b) return;
+    const key = [sl.fromDevice, sl.toDevice].sort().join('|');
+    const laneIdx = lanesByPair.get(key) || 0;
+    lanesByPair.set(key, laneIdx + 1);
+    const off = (laneIdx - 0) * 8;
+    const cab = document.createElementNS(SVG_NS, 'g');
+    cab.setAttribute('class', 'm002-stacklink');
+    cab.setAttribute('data-stack-id', stack.id);
+    cab.setAttribute('data-stacklink-id', sl.id);
+    const path = orthPath(a, b, off);
+    let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
+    if (sl.fromPort) {
+      const lbl = portLabel(a, sl.fromPort);
+      inner += `<text class="m002-stack-cable-label" x="${path.from.x}" y="${path.from.y}" text-anchor="${path.from.anchor}">${escSvg(lbl)}</text>`;
+    }
+    if (sl.toPort) {
+      const lbl = portLabel(b, sl.toPort);
+      inner += `<text class="m002-stack-cable-label" x="${path.to.x}" y="${path.to.y}" text-anchor="${path.to.anchor}">${escSvg(lbl)}</text>`;
+    }
+    cab.innerHTML = inner;
     s.gStacksBg.appendChild(cab);
-  }
+  });
 }
 
 function orthPath(a, b, off = 0) {
@@ -2340,6 +2441,43 @@ function openInspector(s) {
       `;
     })();
 
+    // STACK-LINKS section: stacking cables between members. Each row is a
+    // single-line editor; ports are scoped to the chosen member's port list.
+    const stackLinksHTML = (() => {
+      const memberOpts = (selectedId) => stack.members.map((mid) => {
+        const m = s.devices.find((d) => d.id === mid);
+        if (!m) return '';
+        return `<option value="${escAttr(mid)}" ${selectedId === mid ? 'selected' : ''}>${escSvg(m.name)}</option>`;
+      }).join('');
+      const portOpts = (deviceId, selectedPort) => {
+        const m = s.devices.find((d) => d.id === deviceId);
+        if (!m) return '<option value="">—</option>';
+        return '<option value="">—</option>' + (m.ports || []).map((p) =>
+          `<option value="${p.n}" ${String(selectedPort) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`
+        ).join('');
+      };
+      const rows = (stack.stackLinks || []).map((sl) => `
+        <div class="m002-stacklink-row" data-sl-id="${escAttr(sl.id)}">
+          <select data-sl-f="fromDevice">${memberOpts(sl.fromDevice)}</select>
+          <select data-sl-f="fromPort">${portOpts(sl.fromDevice, sl.fromPort)}</select>
+          <span class="m002-stacklink-arrow">⇄</span>
+          <select data-sl-f="toDevice">${memberOpts(sl.toDevice)}</select>
+          <select data-sl-f="toPort">${portOpts(sl.toDevice, sl.toPort)}</select>
+          <button type="button" data-sl-rm title="Remove stack-link">×</button>
+        </div>
+      `).join('') || '<span class="m002-vlan-empty">no stack-links</span>';
+      return `
+        <div class="m002-ports-block">
+          <div class="m002-ports-head">STACK-LINKS (${(stack.stackLinks || []).length})</div>
+          <div class="m002-stacklinks-grid">
+            ${rows}
+          </div>
+          <button type="button" class="m002-action" data-newsl ${stack.members.length < 2 ? 'disabled' : ''}>+ NEW STACK-LINK</button>
+          <p class="m002-link-hint">Stacking cables zwischen Stack-Members. Werden als gestrichelte Linien angezeigt, wenn der Stack expanded ist.</p>
+        </div>
+      `;
+    })();
+
     body.innerHTML = `
       <label class="m002-field"><span>NAME</span><input data-sf="name" value="${escAttr(stack.name)}"/></label>
       <div class="m002-field">
@@ -2353,6 +2491,7 @@ function openInspector(s) {
         <div class="m002-vlan-picker" data-vlan-target="stack:${escAttr(stack.id)}"></div>
       </div>
       ${lagsHTML}
+      ${stackLinksHTML}
       <div class="m002-field">
         <span>MEMBERS (${stack.members.length})</span>
         <div class="m002-stack-members">
@@ -2393,6 +2532,14 @@ function openInspector(s) {
     body.querySelector('[data-newlag]')?.addEventListener('click', () => openLagModal(s, stack.id));
     body.querySelectorAll('[data-lag-row]').forEach((row) => {
       row.addEventListener('click', () => select(s, 'lag', `${stack.id}|${row.dataset.lagRow}`));
+    });
+    body.querySelector('[data-newsl]')?.addEventListener('click', () => addStackLink(s, stack.id));
+    body.querySelectorAll('[data-sl-id]').forEach((row) => {
+      const slId = row.dataset.slId;
+      row.querySelectorAll('[data-sl-f]').forEach((el) => {
+        el.addEventListener('change', () => updateStackLinkField(s, stack.id, slId, el.dataset.slF, el.value));
+      });
+      row.querySelector('[data-sl-rm]')?.addEventListener('click', () => removeStackLink(s, stack.id, slId));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
     renderInspectorVlanPickers(s);
@@ -2619,6 +2766,13 @@ function updateDeviceField(s, dev, el) {
         });
         stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
       });
+      // Clear stack-link port-refs that pointed at removed ports.
+      s.stacks.forEach((stk) => {
+        (stk.stackLinks || []).forEach((sl) => {
+          if (sl.fromDevice === dev.id && Number(sl.fromPort) > n) sl.fromPort = '';
+          if (sl.toDevice === dev.id && Number(sl.toPort) > n) sl.toPort = '';
+        });
+      });
     }
     redrawDevice(s, dev);
   } else if (f === 'type') {
@@ -2717,14 +2871,33 @@ function counterpartFor(s, deviceId, portN) {
     (l.from === deviceId && String(l.fromPort) === String(portN)) ||
     (l.to   === deviceId && String(l.toPort)   === String(portN))
   );
-  if (!link) return null;
-  const otherId = link.from === deviceId ? link.to : link.from;
-  const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
-  const other = s.devices.find((d) => d.id === otherId);
-  if (!other) return null;
-  const op = other.ports.find((p) => String(p.n) === String(otherPort));
-  const portTxt = op ? (op.name || op.n) : '?';
-  return `${other.name} · ${portTxt}`;
+  if (link) {
+    const otherId = link.from === deviceId ? link.to : link.from;
+    const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
+    const other = s.devices.find((d) => d.id === otherId);
+    if (!other) return null;
+    const op = other.ports.find((p) => String(p.n) === String(otherPort));
+    const portTxt = op ? (op.name || op.n) : '?';
+    return `${other.name} · ${portTxt}`;
+  }
+  // Stack-link counterpart — port belongs to a stacking cable on the owning stack.
+  const stk = findStack(s, deviceId);
+  if (stk) {
+    const sl = (stk.stackLinks || []).find((l) =>
+      (l.fromDevice === deviceId && String(l.fromPort) === String(portN)) ||
+      (l.toDevice   === deviceId && String(l.toPort)   === String(portN))
+    );
+    if (sl) {
+      const otherId = sl.fromDevice === deviceId ? sl.toDevice : sl.fromDevice;
+      const otherPort = sl.fromDevice === deviceId ? sl.toPort : sl.fromPort;
+      const other = s.devices.find((d) => d.id === otherId);
+      if (!other) return null;
+      const op = other.ports.find((p) => String(p.n) === String(otherPort));
+      const portTxt = op ? (op.name || op.n) : '?';
+      return `${other.name} · ${portTxt} (stack)`;
+    }
+  }
+  return null;
 }
 
 function openPortModal(s, deviceId, portN) {
@@ -3602,6 +3775,7 @@ function migrate(s) {
       if (typeof st.expanded !== 'boolean') st.expanded = false;
       if (!Array.isArray(st.members)) st.members = [];
       if (!Array.isArray(st.lags))    st.lags    = [];
+      if (!Array.isArray(st.stackLinks)) st.stackLinks = [];
       if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
       delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
@@ -3611,6 +3785,45 @@ function migrate(s) {
   } else {
     s.stacks = [];
   }
+  // Migrate legacy intra-stack regular links into stack-owned stackLinks. These
+  // never made physical sense as canvas edges (they self-loop on the collapsed
+  // stack icon) — treat any pre-existing pair-of-members link as a stacking
+  // cable and move it onto its owning stack.
+  const memberOfStack = new Map();
+  s.stacks.forEach((st) => st.members.forEach((m) => memberOfStack.set(m, st)));
+  if (memberOfStack.size && Array.isArray(s.links)) {
+    const remaining = [];
+    s.links.forEach((l) => {
+      const stA = memberOfStack.get(l.from);
+      const stB = memberOfStack.get(l.to);
+      if (stA && stA === stB) {
+        stA.stackLinks.push({
+          id: l.id || ('sl_' + rid()),
+          fromDevice: l.from,
+          toDevice: l.to,
+          fromPort: l.fromPort || '',
+          toPort: l.toPort || '',
+        });
+      } else {
+        remaining.push(l);
+      }
+    });
+    s.links = remaining;
+  }
+  // Sanity-check stackLinks: both endpoints must be live members of this
+  // stack, and a stack-link must connect distinct members.
+  s.stacks.forEach((st) => {
+    const memberSet = new Set(st.members);
+    st.stackLinks = (st.stackLinks || []).filter((sl) =>
+      sl && sl.fromDevice !== sl.toDevice
+      && memberSet.has(sl.fromDevice) && memberSet.has(sl.toDevice)
+    );
+    st.stackLinks.forEach((sl) => {
+      if (!sl.id) sl.id = 'sl_' + rid();
+      if (sl.fromPort == null) sl.fromPort = '';
+      if (sl.toPort == null) sl.toPort = '';
+    });
+  });
   // Sanity-check stack-owned LAGs: port-refs must point at members of the
   // stack and at real ports on those members. Drop empty LAGs and reciprocal
   // counterpart pointers that no longer resolve.
@@ -3754,7 +3967,10 @@ const MOD002_CSS = `
 .m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke:#9aa0a8;stroke-width:1.4;filter:drop-shadow(0 0 3px rgba(154,160,168,0.55)) drop-shadow(0 0 9px rgba(154,160,168,0.35));}
 .m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#9aa0a8;}
 .m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
-.m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:2 3;fill:none;opacity:.6;}
+.m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
+.m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
+.m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1px;pointer-events:none;}
+.m002-stacklink:hover .m002-stack-cable-label{fill:#9aa0a8;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
@@ -3901,6 +4117,14 @@ const MOD002_CSS = `
 .m002-lagtable-ports{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .m002-lagtable-cp{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
 .m002-lagtable-cp.dim{color:#5a5f6e;}
+
+.m002-stacklinks-grid{display:flex;flex-direction:column;gap:4px;}
+.m002-stacklink-row{display:grid;grid-template-columns:1fr 56px 14px 1fr 56px 22px;gap:4px;align-items:center;padding:3px 0;}
+.m002-stacklink-row select{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:3px 4px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:.5px;outline:none;min-width:0;}
+.m002-stacklink-row select:focus{border-color:#ff003c;}
+.m002-stacklink-arrow{font-family:'Share Tech Mono',monospace;font-size:11px;color:#5a5f6e;text-align:center;}
+.m002-stacklink-row button[data-sl-rm]{background:transparent;border:1px solid transparent;color:#5a5f6e;font-size:14px;cursor:pointer;line-height:1;padding:2px 4px;}
+.m002-stacklink-row button[data-sl-rm]:hover{color:#ff003c;border-color:#ff003c;}
 
 .m002-lag-line{stroke-linecap:square;}
 .m002-link.m002-link-bundle:hover .m002-lag-line{stroke:#e8e8ee;}
