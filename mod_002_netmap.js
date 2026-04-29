@@ -394,8 +394,20 @@ function renderLegend(s) {
       const idx = s.view.vlanFilter.findIndex((x) => String(x) === v);
       if (idx >= 0) s.view.vlanFilter.splice(idx, 1);
       else s.view.vlanFilter.push(v);
+      s._vlanHover = null;
       render(s);
       schedSave(s);
+    });
+    row.addEventListener('mouseenter', () => {
+      const v = String(row.dataset.vsolo);
+      if (s._vlanHover === v) return;
+      s._vlanHover = v;
+      render(s);
+    });
+    row.addEventListener('mouseleave', () => {
+      if (s._vlanHover == null) return;
+      s._vlanHover = null;
+      render(s);
     });
   });
   const clearBtn = body.querySelector('[data-vclear]');
@@ -1817,9 +1829,9 @@ function drawLagLink(s, p) {
   g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
 
   const sharedVlans = (p.lagA.vlans || []).map(String).filter((v) => (p.lagB.vlans || []).map(String).includes(v));
-  const filter = (s.view?.vlanFilter || []).map(String);
+  const filter = effectiveVlanSolo(s);
   const isFiltered = filter.length > 0;
-  const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : sharedVlans;
+  const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : [];
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   if (s.activeLayer === 'vlan' && drawnVlans.length) {
     const gap = 6;
@@ -1835,6 +1847,9 @@ function drawLagLink(s, p) {
       g.classList.add('m002-link-faded');
     }
     inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
+    if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
+      inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
+    }
   }
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
   g.innerHTML = inner;
@@ -1865,6 +1880,16 @@ function linkVlans(s, link) {
   const va = new Set(portVlans(s, link.from, link.fromPort));
   const vb = new Set(portVlans(s, link.to,   link.toPort));
   return [...va].filter((v) => vb.has(v));
+}
+
+// Effective VLAN solo set = persisted filter + transient hover preview from
+// legend mouseenter. Hover acts additively so users can preview a single VLAN
+// without losing whatever they already soloed.
+function effectiveVlanSolo(s) {
+  const filter = (s.view?.vlanFilter || []).map(String);
+  const hover = s._vlanHover != null ? String(s._vlanHover) : null;
+  if (hover && !filter.includes(hover)) return [...filter, hover];
+  return filter;
 }
 
 function portLabel(dev, portN) {
@@ -1899,16 +1924,19 @@ function drawLink(s, link) {
 
   if (layer === 'vlan') {
     const vlans = linkVlans(s, link);
-    const filter = (s.view?.vlanFilter || []).map(String);
+    const filter = effectiveVlanSolo(s);
     const isFiltered = filter.length > 0;
-    const drawn = isFiltered ? vlans.filter((v) => filter.includes(String(v))) : vlans;
+    // Trace mode: only render colored stripes for VLANs the user has soloed.
+    // Without a solo filter the link stays neutral with a count badge — colored
+    // parallel lines stop scaling past ~7 VLANs and lose meaning when many
+    // VLANs share similar hues.
+    const drawn = isFiltered ? vlans.filter((v) => filter.includes(String(v))) : [];
     if (vlans.length === 0) {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
-    } else if (drawn.length === 0) {
-      // Filter active but link carries no soloed VLAN — fade out
+    } else if (isFiltered && drawn.length === 0) {
       g.classList.add('m002-link-faded');
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
-    } else {
+    } else if (drawn.length > 0) {
       const gap = 6;
       drawn.forEach((v, i) => {
         const off = lane + (i - (drawn.length - 1) / 2) * gap;
@@ -1918,6 +1946,10 @@ function drawLink(s, link) {
         inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}" stroke-width="${w}"/>`;
         inner += `<text class="m002-link-label" x="${p.lx}" y="${p.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
       });
+    } else {
+      const w = bundleInfo?.members ? 2.4 : 1.4;
+      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="${w}"/>`;
+      inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
     }
     if (bundleInfo?.members) {
       const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
@@ -3729,6 +3761,8 @@ const MOD002_CSS = `
 .m002-link.m002-selected .m002-link-line{stroke:#ffffff!important;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
 .m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
 .m002-link.m002-link-faded{opacity:.25;}
+.m002-link-vlan-count{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;fill:#9aa0a8;opacity:.7;pointer-events:none;}
+.m002-link:hover .m002-link-vlan-count{opacity:1;fill:#e8e8ee;}
 .m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
 
 .m002-palette{display:none;}
