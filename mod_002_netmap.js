@@ -1839,8 +1839,8 @@ function drawLagLink(s, p) {
       const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
       const op = orthPath(aPos, bPos, off);
       const c = vlanColor(s, v);
-      inner += `<path class="m002-link-line" d="${op.d}" stroke="${c}" stroke-width="2.4"/>`;
-      inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
+      inner += `<path class="m002-link-line m002-link-stripe" d="${op.d}" style="stroke:${c}" stroke-width="2.4"/>`;
+      inner += `<text class="m002-link-label m002-link-stripe-label" x="${op.lx}" y="${op.ly - 4}" style="fill:${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
     inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
@@ -1942,8 +1942,10 @@ function drawLink(s, link) {
         const p = orthPath(aPos, bPos, off);
         const c = vlanColor(s, v);
         const w = bundleInfo?.members ? 2.4 : 1.4;
-        inner += `<path class="m002-link-line" d="${p.d}" stroke="${c}" stroke-width="${w}"/>`;
-        inner += `<text class="m002-link-label" x="${p.lx}" y="${p.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
+        // Inline style on stripes — beats the .m002-selected white-stroke rule
+        // so a selected, soloed link keeps its VLAN colour and only gains glow.
+        inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c}" stroke-width="${w}"/>`;
+        inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c}" text-anchor="middle">${escSvg(v)}</text>`;
       });
     } else {
       const w = bundleInfo?.members ? 2.4 : 1.4;
@@ -3757,8 +3759,9 @@ const MOD002_CSS = `
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
 .m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
-.m002-link.m002-selected .m002-link-line{stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
-.m002-link.m002-selected .m002-link-label{filter:drop-shadow(0 0 3px rgba(255,255,255,0.8));}
+.m002-link.m002-selected .m002-link-line{stroke:#ffffff;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
+.m002-link.m002-selected .m002-link-label{fill:#ffffff;}
+.m002-link.m002-selected .m002-link-stripe-label{filter:drop-shadow(0 0 3px rgba(255,255,255,0.8));}
 .m002-link.m002-link-faded{opacity:.25;}
 .m002-link-vlan-count{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;fill:#9aa0a8;opacity:.7;pointer-events:none;}
 .m002-link:hover .m002-link-vlan-count{opacity:1;fill:#e8e8ee;}
