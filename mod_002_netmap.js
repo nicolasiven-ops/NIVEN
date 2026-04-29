@@ -3,16 +3,21 @@
 // device palette, link tool, inspector panel, layer toggle.
 //
 // JUMP nodes act as portals between zones. They have no ports / VLANs.
-//   - "Hub-leg" links: a Jump can be linked (with the link tool) to regular
-//     devices in the *same zone*. The Jump acts as a multi-leg hub connector.
-//   - Couple link: two Jumps in *different zones* of the same map can be
-//     coupled with the link tool. The couple is stored mutually as
-//     `dev.coupleId` on each Jump (not in `s.links`). A couple makes the pair
-//     a single logical hub spanning two zones — anything wired into Jump A is
-//     topologically connected through to anything wired into Jump B.
+//   - Hub-leg links: a Jump can be linked with the link tool to regular
+//     devices in the *same zone*. The Jump acts as a portless hub connector.
+//   - Couple: two Jumps in *different zones* of the same map are coupled
+//     via the JUMP inspector's COUPLE WITH dropdown. Mutually stored as
+//     `dev.coupleId` (NOT in s.links). A couple makes the Jump pair a single
+//     logical hub spanning two zones — anything wired into Jump A shares a
+//     broadcast domain with anything wired into Jump B.
 //   - Navigation: double-click / JUMP NOW prefers the couple (jumps to the
 //     peer's zone and selects the peer). Falls back to the manual zone/map
-//     reference if no couple is set.
+//     reference (FALLBACK TARGET) when no couple is set.
+//   - Hub-tunnel in counterparts: counterpartFor() and the port-modal's
+//     COUNTERPART dropdown look through coupled Jumps. Selecting a far-side
+//     switch port wires both hub-leg links symmetrically. The port-modal
+//     also surfaces the far-side VLANs and the through-tunnel intersection
+//     for read-only inspection.
 //
 // Controls
 //   N            cycle next device type and spawn at center
@@ -151,6 +156,13 @@ function vlansChanged(s) {
   s.links.forEach((l) => redrawLink(s, l));
   // Re-render any VLAN pickers visible in inspector
   s.host?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
+  // The open port modal has static FAR-SIDE / PASSING THROUGH sections that
+  // depend on VLAN assignments — refresh them so a hub-tunneled port shows
+  // the updated intersection without manual close/reopen.
+  if (s.portModalOpen) {
+    const { deviceId, portN } = s.portModalOpen;
+    if (s.devices.find((d) => d.id === deviceId)) openPortModal(s, deviceId, portN);
+  }
 }
 
 // VLAN picker — chip per available VLAN; click toggles assignment.
@@ -1267,6 +1279,33 @@ function uncoupleJump(s, dev) {
   dev.coupleId = null;
 }
 
+// All hub-legs directly attached to this Jump — links between the Jump and a
+// non-Jump device. JUMPs have no ports so the Jump-side port-ref is always
+// empty; the relevant info is the far device + the port chosen on its side.
+function hubLocalLegs(s, jumpId) {
+  const out = [];
+  s.links.forEach((l) => {
+    let farId, farPort;
+    if (l.from === jumpId)      { farId = l.to;   farPort = l.toPort; }
+    else if (l.to === jumpId)   { farId = l.from; farPort = l.fromPort; }
+    else return;
+    const farDev = s.devices.find((d) => d.id === farId);
+    if (!farDev || isReference(farDev)) return;
+    out.push({ device: farDev, portN: farPort, link: l });
+  });
+  return out;
+}
+
+// Far-side hub-legs reachable through the coupled peer (i.e. the legs in the
+// other zone that share this hub's broadcast domain).
+function hubFarLegs(s, jumpId) {
+  const jump = s.devices.find((d) => d.id === jumpId);
+  if (!isReference(jump)) return [];
+  const peer = couplePeer(s, jump);
+  if (!peer) return [];
+  return hubLocalLegs(s, peer.id);
+}
+
 function jumpToReference(s, dev) {
   if (!isReference(dev)) return;
   // Couple takes priority: if a peer Jump exists, jump to its zone and
@@ -1395,22 +1434,10 @@ function handleLinkClick(s, deviceId) {
   };
   if (!devA || !devB) { clearPending(); return; }
   if (isReference(devA) && isReference(devB)) {
-    if (devA.zone === devB.zone) {
-      toast(s, 'Couple JUMPs only across different zones');
-      clearPending();
-      return;
-    }
-    snapshot(s);
-    const hadA = devA.coupleId, hadB = devB.coupleId;
-    coupleJumps(s, devA, devB);
-    // Full render: a couple may live across two zones and may have displaced
-    // prior couples on either side — only render() respects the zone filter
-    // and redraws orphan peers consistently.
-    render(s);
+    // Coupling is owned by the JUMP inspector now. The link tool only handles
+    // hub-legs (JUMP ↔ regular device).
+    toast(s, 'Couple JUMPs via the inspector COUPLE WITH dropdown');
     clearPending();
-    schedSave(s);
-    select(s, 'device', devA.id);
-    toast(s, hadA || hadB ? 'JUMPs recoupled' : 'JUMPs coupled');
     return;
   }
   if ((isReference(devA) || isReference(devB)) && devA.zone !== devB.zone) {
@@ -2324,14 +2351,30 @@ function refreshToolHighlights(s) {
 }
 
 function renderReferenceInspector(s, dev, body) {
-  const otherZones = (s.zones || []).filter((z) => z.id !== s.activeZone);
   const otherMaps = (s.maps || []).filter((m) => m.id !== s.activeMapId);
-  const mode = dev.refMode === 'map' ? 'map' : 'zone';
   const peer = couplePeer(s, dev);
   const peerZone = peer ? (s.zones || []).find((z) => z.id === peer.zone) : null;
   // Hub-leg count: same-zone links touching this Jump.
   const hubLegs = s.links.filter((l) => l.from === dev.id || l.to === dev.id).length;
-  const targetSection = peer ? `
+  // All other Jumps anywhere in this map, sorted by zone then name. The picker
+  // is the primary way to couple — link-tool no longer supports Jump↔Jump.
+  const candidates = (s.devices || [])
+    .filter((d) => isReference(d) && d.id !== dev.id)
+    .map((d) => ({
+      d,
+      zone: (s.zones || []).find((z) => z.id === d.zone),
+    }))
+    .sort((a, b) => (a.zone?.name || '').localeCompare(b.zone?.name || '') || a.d.name.localeCompare(b.d.name));
+  // Group by zone for the dropdown's optgroups.
+  const byZone = new Map();
+  candidates.forEach(({ d, zone }) => {
+    const key = zone ? zone.id : '_none';
+    if (!byZone.has(key)) byZone.set(key, { name: zone ? zone.name : '(no zone)', items: [] });
+    byZone.get(key).items.push(d);
+  });
+  const isMap = dev.refMode === 'map';
+
+  const coupleSection = peer ? `
     <div class="m002-field">
       <span>COUPLED PEER</span>
       <div class="m002-couple-card">
@@ -2339,50 +2382,66 @@ function renderReferenceInspector(s, dev, body) {
         <div class="m002-couple-zone">${escSvg(peerZone ? peerZone.name : '(zone missing)')}</div>
       </div>
     </div>
-    <p class="m002-link-hint">JUMP-Paar bildet einen Hub: alle Hub-Legs auf beiden Seiten sind topologisch verbunden.</p>
-    <button type="button" class="m002-action" data-ref-uncouple>UNCOUPLE</button>
+    <p class="m002-link-hint">JUMP-Paar bildet einen Hub: alle Hub-Legs auf beiden Seiten teilen sich eine Broadcast-Domain. Ports auf der Far-Side erscheinen im Port-Modal als Counterpart.</p>
+    <div class="m002-row2">
+      <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
+      <button type="button" class="m002-action" data-ref-uncouple>UNCOUPLE</button>
+    </div>
   ` : `
     <div class="m002-field">
-      <span>TARGET</span>
-      <div class="m002-ref-modes">
-        <label class="m002-ref-mode ${mode === 'zone' ? 'active' : ''}"><input type="radio" name="m002-refmode" value="zone" ${mode === 'zone' ? 'checked' : ''}/>ZONE</label>
-        <label class="m002-ref-mode ${mode === 'map' ? 'active' : ''}"><input type="radio" name="m002-refmode" value="map" ${mode === 'map' ? 'checked' : ''}/>MAP</label>
-      </div>
+      <span>COUPLE WITH</span>
+      <select data-ref-couple>
+        <option value="">— select JUMP in another zone —</option>
+        ${[...byZone.entries()].map(([zid, group]) => `
+          <optgroup label="${escAttr(group.name)}">
+            ${group.items.map((j) => `<option value="${escAttr(j.id)}" ${j.zone === dev.zone ? 'disabled' : ''}>${escSvg(j.name)}${j.zone === dev.zone ? ' (same zone)' : ''}</option>`).join('')}
+          </optgroup>
+        `).join('')}
+      </select>
     </div>
-    ${mode === 'zone' ? `
-      <label class="m002-field"><span>ZONE</span>
-        <select data-rf="refZoneId">
-          <option value="">— select zone —</option>
-          ${otherZones.map((z) => `<option value="${escAttr(z.id)}" ${z.id === dev.refZoneId ? 'selected' : ''}>${escSvg(z.name)}</option>`).join('')}
-        </select>
-      </label>
-      ${otherZones.length === 0 ? '<p class="m002-link-hint">Keine weiteren Zonen in dieser Map. Mit "+" oben rechts hinzufügen.</p>' : ''}
-    ` : `
-      <label class="m002-field"><span>MAP</span>
-        <select data-rf="refMapId">
-          <option value="">— select map —</option>
-          ${otherMaps.map((m) => `<option value="${escAttr(m.id)}" ${m.id === dev.refMapId ? 'selected' : ''}>${escSvg(m.name)}</option>`).join('')}
-        </select>
-      </label>
-      ${otherMaps.length === 0 ? '<p class="m002-link-hint">Keine weiteren Maps. Über das Map-Menü oben rechts erstellen.</p>' : ''}
-    `}
-    <p class="m002-link-hint">Tipp: zwei JUMPs in verschiedenen Zonen mit dem LINK-Tool verbinden, um sie zu einem Hub zu koppeln.</p>
+    ${candidates.length === 0 ? '<p class="m002-link-hint">Keine weiteren JUMPs auf dieser Map. Erst einen JUMP in einer anderen Zone erstellen.</p>' : '<p class="m002-link-hint">Auswahl koppelt sofort. Die Far-Side wird mit-aktualisiert. Ungekoppelte JUMPs können auch als reines ZONE/MAP-Lesezeichen dienen (siehe FALLBACK TARGET).</p>'}
+    <details class="m002-ref-fallback">
+      <summary>FALLBACK TARGET (ohne Couple)</summary>
+      <div class="m002-field" style="margin-top:8px;">
+        <span>MODE</span>
+        <div class="m002-ref-modes">
+          <label class="m002-ref-mode ${!isMap ? 'active' : ''}"><input type="radio" name="m002-refmode" value="zone" ${!isMap ? 'checked' : ''}/>ZONE</label>
+          <label class="m002-ref-mode ${isMap ? 'active' : ''}"><input type="radio" name="m002-refmode" value="map" ${isMap ? 'checked' : ''}/>MAP</label>
+        </div>
+      </div>
+      ${!isMap ? `
+        <label class="m002-field"><span>ZONE</span>
+          <select data-rf="refZoneId">
+            <option value="">— select zone —</option>
+            ${(s.zones || []).filter((z) => z.id !== dev.zone).map((z) => `<option value="${escAttr(z.id)}" ${z.id === dev.refZoneId ? 'selected' : ''}>${escSvg(z.name)}</option>`).join('')}
+          </select>
+        </label>
+      ` : `
+        <label class="m002-field"><span>MAP</span>
+          <select data-rf="refMapId">
+            <option value="">— select map —</option>
+            ${otherMaps.map((m) => `<option value="${escAttr(m.id)}" ${m.id === dev.refMapId ? 'selected' : ''}>${escSvg(m.name)}</option>`).join('')}
+          </select>
+        </label>
+      `}
+    </details>
+    <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
   `;
+
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
     <label class="m002-field"><span>TYPE</span>
       <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
     </label>
-    ${targetSection}
+    ${coupleSection}
     <div class="m002-field">
       <span>HUB LEGS</span>
       <div class="m002-field-static">${hubLegs} link${hubLegs === 1 ? '' : 's'} in dieser Zone</div>
     </div>
     <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes || '')}</textarea></label>
-    <p class="m002-link-hint">Doppelklick auf den JUMP-Knoten springt zum Ziel.</p>
-    <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
     <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
   `;
+
   body.querySelectorAll('[data-f]').forEach((el) => {
     el.addEventListener('input', () => updateDeviceField(s, dev, el));
     el.addEventListener('change', () => updateDeviceField(s, dev, el));
@@ -2401,6 +2460,19 @@ function renderReferenceInspector(s, dev, body) {
       redrawDevice(s, dev);
       schedSave(s);
     });
+  });
+  body.querySelector('[data-ref-couple]')?.addEventListener('change', (e) => {
+    const targetId = e.target.value;
+    if (!targetId) return;
+    const target = s.devices.find((d) => d.id === targetId);
+    if (!target || !isReference(target)) { toast(s, 'Target JUMP missing'); return; }
+    if (target.zone === dev.zone) { toast(s, 'Couple JUMPs only across different zones'); return; }
+    snapshot(s);
+    coupleJumps(s, dev, target);
+    render(s);
+    schedSave(s);
+    select(s, 'device', dev.id);
+    toast(s, 'JUMPs coupled');
   });
   body.querySelector('[data-ref-jump]')?.addEventListener('click', () => jumpToReference(s, dev));
   body.querySelector('[data-ref-uncouple]')?.addEventListener('click', () => {
@@ -3035,6 +3107,21 @@ function counterpartFor(s, deviceId, portN) {
     const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
     const other = s.devices.find((d) => d.id === otherId);
     if (!other) return null;
+    // Hub tunnel: if this leg lands on a coupled JUMP, surface the far-side
+    // hub-leg as the effective counterpart instead of the (port-less) JUMP.
+    if (isReference(other)) {
+      const peer = couplePeer(s, other);
+      if (!peer) return `${other.name} · (uncoupled hub)`;
+      const farLegs = hubFarLegs(s, other.id);
+      if (farLegs.length === 0) return `${other.name} ⇄ ${peer.name} · (no far-side leg)`;
+      if (farLegs.length === 1) {
+        const fl = farLegs[0];
+        const fp = (fl.device.ports || []).find((p) => String(p.n) === String(fl.portN));
+        const portTxt = fp ? (fp.name || fp.n) : (fl.portN || '?');
+        return `${fl.device.name} · ${portTxt} (via ${other.name}⇄${peer.name})`;
+      }
+      return `${other.name} ⇄ ${peer.name} · ${farLegs.length} legs`;
+    }
     const op = other.ports.find((p) => String(p.n) === String(otherPort));
     const portTxt = op ? (op.name || op.n) : '?';
     return `${other.name} · ${portTxt}`;
@@ -3094,8 +3181,11 @@ function openPortModal(s, deviceId, portN) {
     <div class="m002-field">
       <span>COUNTERPART</span>
       ${(() => {
-        // Counterpart is "the other end of the link this port is on", picked
-        // from any port on devices currently linked to this device.
+        // Counterpart is "the other end of the link this port is on". Options
+        // are: (a) any port on a directly-linked non-Jump device, OR (b) any
+        // port on a far-side hub-leg device reachable through a coupled JUMP.
+        // Hub-tunneled options carry the via-Jump id and the far-link id so
+        // the change handler can wire both legs of the hub.
         const linkedDevs = new Map();
         s.links.forEach((l) => {
           let other = null;
@@ -3103,19 +3193,61 @@ function openPortModal(s, deviceId, portN) {
           else if (l.to === deviceId) other = s.devices.find((d) => d.id === l.from);
           if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
         });
-        const opts = [...linkedDevs.values()].flatMap((d) =>
-          (d.ports || []).map((p) => ({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }))
-        );
+        const opts = [];
+        linkedDevs.forEach((d) => {
+          if (isReference(d)) {
+            const peer = couplePeer(s, d);
+            if (!peer) return; // uncoupled hub: no useful counterpart
+            // Far-side hub-legs (links from peer to non-Jump devices). Each
+            // gives us a far device and the link object that wires it to peer.
+            const farLegs = hubLocalLegs(s, peer.id);
+            const farDevs = new Map();
+            farLegs.forEach((fl) => {
+              if (!farDevs.has(fl.device.id)) farDevs.set(fl.device.id, { dev: fl.device, link: fl.link });
+            });
+            farDevs.forEach(({ dev: farDev, link: farLink }) => {
+              (farDev.ports || []).forEach((p) => {
+                opts.push({
+                  devId: farDev.id, devName: farDev.name,
+                  portN: p.n, portName: p.name,
+                  via: { jumpId: d.id, peerName: peer.name, farLinkId: farLink.id },
+                });
+              });
+            });
+          } else {
+            (d.ports || []).forEach((p) => opts.push({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }));
+          }
+        });
+        // Determine current selection key for highlighting.
         let curKey = '';
         if (link) {
           const otherId = link.from === deviceId ? link.to : link.from;
-          const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
-          if (otherPort) curKey = otherId + ':' + otherPort;
+          const other = s.devices.find((d) => d.id === otherId);
+          if (isReference(other)) {
+            // Hub-leg: derive far-side selection from the far link's port-side.
+            const peer = couplePeer(s, other);
+            const localPortSet = (link.from === deviceId ? link.fromPort : link.toPort);
+            if (peer && localPortSet) {
+              const farLegs = hubLocalLegs(s, peer.id);
+              const matched = farLegs.find((fl) => fl.portN);
+              if (matched) curKey = 'hub:' + matched.device.id + ':' + matched.portN + ':' + matched.link.id;
+            }
+          } else {
+            const otherPort = link.from === deviceId ? link.toPort : link.fromPort;
+            if (otherPort) curKey = otherId + ':' + otherPort;
+          }
         }
         if (!opts.length) return `<div class="m002-port-counter dim">— not connected —</div>`;
         return `<select class="m002-pmodal-cp">
           <option value="">— not connected —</option>
-          ${opts.map((o) => `<option value="${escAttr(o.devId + ':' + o.portN)}" ${curKey === (o.devId + ':' + o.portN) ? 'selected' : ''}>${escSvg(o.devName)} · ${o.portN}${o.portName ? ' · ' + escAttr(o.portName) : ''}</option>`).join('')}
+          ${opts.map((o) => {
+            const key = o.via
+              ? 'hub:' + o.devId + ':' + o.portN + ':' + o.via.farLinkId
+              : o.devId + ':' + o.portN;
+            const label = `${o.devName} · ${o.portN}${o.portName ? ' · ' + o.portName : ''}${o.via ? ' (via ' + o.via.peerName + '⇄)' : ''}`;
+            const data = o.via ? ` data-via-jump="${escAttr(o.via.jumpId)}" data-far-link="${escAttr(o.via.farLinkId)}" data-far-dev="${escAttr(o.devId)}" data-far-port="${escAttr(o.portN)}"` : '';
+            return `<option value="${escAttr(key)}"${data} ${curKey === key ? 'selected' : ''}>${escSvg(label)}</option>`;
+          }).join('')}
         </select>`;
       })()}
     </div>
@@ -3123,6 +3255,41 @@ function openPortModal(s, deviceId, portN) {
       <span>VLANS (port)</span>
       <div class="m002-vlan-picker" data-vlan-target="port:${escAttr(deviceId)}:${portN}"></div>
     </div>
+    ${(() => {
+      // Far-side preview: when this port is wired into a coupled-JUMP hub, show
+      // the matched far port, its VLANs, and the intersection that "passes
+      // through" the hub. Read-only — the user edits VLANs on each side.
+      if (!link) return '';
+      const otherId = link.from === deviceId ? link.to : link.from;
+      const other = s.devices.find((d) => d.id === otherId);
+      if (!isReference(other)) return '';
+      const peer = couplePeer(s, other);
+      if (!peer) return `<div class="m002-field"><span>FAR-SIDE</span><div class="m002-port-counter dim">JUMP nicht gekoppelt — kein Tunnel-Counterpart</div></div>`;
+      const farLegs = hubLocalLegs(s, peer.id).filter((fl) => fl.portN);
+      if (farLegs.length === 0) return `<div class="m002-field"><span>FAR-SIDE</span><div class="m002-port-counter dim">Kein Far-Side Port gewählt — Switch auf der anderen Seite konfigurieren</div></div>`;
+      const fl = farLegs[0]; // 1:1 hub assumption (single far leg with port set)
+      const farPort = (fl.device.ports || []).find((p) => String(p.n) === String(fl.portN));
+      if (!farPort) return '';
+      const localPortObj = port;
+      const localVlans = (localPortObj?.vlans || []).map(String);
+      const farVlans = (farPort?.vlans || []).map(String);
+      const through = localVlans.filter((v) => farVlans.includes(v));
+      const chip = (v, on, dim) => `<span class="m002-vlan-chip-btn ${on ? 'on' : ''} ${dim ? 'dim' : ''}" style="--vc:${vlanColor(s, v)}">VLAN ${escSvg(v)}</span>`;
+      return `
+        <div class="m002-field">
+          <span>FAR-SIDE PORT</span>
+          <div class="m002-port-counter">${escSvg(fl.device.name)} · ${escSvg(farPort.name || String(farPort.n))} <span style="color:#c084fc">(via ${escSvg(other.name)}⇄${escSvg(peer.name)})</span></div>
+        </div>
+        <div class="m002-field">
+          <span>FAR-SIDE VLANS</span>
+          <div class="m002-vlan-readonly">${farVlans.length ? farVlans.map((v) => chip(v, true, false)).join('') : '<span class="m002-vlan-empty">— keine VLANs —</span>'}</div>
+        </div>
+        <div class="m002-field">
+          <span>PASSING THROUGH</span>
+          <div class="m002-vlan-readonly">${through.length ? through.map((v) => chip(v, true, false)).join('') : '<span class="m002-vlan-empty">— keine Schnittmenge —</span>'}</div>
+        </div>
+      `;
+    })()}
     <div class="m002-field">
       <span>LAG</span>
       <div class="m002-port-lag-row">
@@ -3138,16 +3305,39 @@ function openPortModal(s, deviceId, portN) {
   renderInspectorVlanPickers(s); // also covers the port-modal's picker (it's a .m002-vlan-picker too — but inside the modal, not inspector). Re-call directly:
   body.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
 
-  // Port counterpart wiring — change rewires the underlying link so the peer
-  // sees the same counterpart automatically (link is symmetric).
+  // Port counterpart wiring. Two flavours:
+  //  • Direct: rewires the symmetric link so both ends know each other.
+  //  • Hub-tunnel: the option carries data-via-jump + data-far-link. We patch
+  //    the local hub-leg (Switch↔Jump) AND the far hub-leg (FarSwitch↔Peer).
   body.querySelector('.m002-pmodal-cp')?.addEventListener('change', (e) => {
+    const sel = e.target.options[e.target.selectedIndex];
     const v = e.target.value;
     snapshot(s);
     if (!v) {
-      // Disconnect: remove this port from the link if present
+      // Disconnect: clear our side of the local link only. Far-side stays
+      // assigned (the user can clear it from the far Switch's port modal).
       if (link) {
         if (link.from === deviceId) link.fromPort = '';
         else                         link.toPort = '';
+      }
+    } else if (sel?.dataset.viaJump) {
+      // Hub-tunneled: wire local hub-leg + far hub-leg.
+      const farLinkId = sel.dataset.farLink;
+      const farDevId = sel.dataset.farDev;
+      const farPortN = sel.dataset.farPort;
+      const jumpId = sel.dataset.viaJump;
+      // Local: ensure our link points local→jump (jump-side has no port).
+      let localLink = link && ((link.from === deviceId && link.to === jumpId) || (link.to === deviceId && link.from === jumpId))
+        ? link
+        : s.links.find((l) => (l.from === deviceId && l.to === jumpId) || (l.to === deviceId && l.from === jumpId));
+      if (!localLink) { toast(s, 'Local hub-leg link missing'); return; }
+      if (localLink.from === deviceId) { localLink.fromPort = String(portN); localLink.toPort = ''; }
+      else                              { localLink.toPort   = String(portN); localLink.fromPort = ''; }
+      // Far: set far-Switch's port on the far hub-leg link.
+      const farLink = s.links.find((l) => l.id === farLinkId);
+      if (farLink) {
+        if (farLink.from === farDevId) { farLink.fromPort = String(farPortN); farLink.toPort = ''; }
+        else                            { farLink.toPort   = String(farPortN); farLink.fromPort = ''; }
       }
     } else {
       const [otherId, otherPortN] = v.split(':');
@@ -3160,6 +3350,9 @@ function openPortModal(s, deviceId, portN) {
     }
     schedSave(s);
     render(s);
+    // Refresh the inspector behind the modal so its port-row counterpart text
+    // reflects the new wiring once the user closes the modal.
+    if (s.selected?.kind === 'device' && s.selected.id === deviceId) openInspector(s);
     openPortModal(s, deviceId, portN);
   });
 
@@ -4132,6 +4325,12 @@ const MOD002_CSS = `
 .m002-couple-arrow{color:#c084fc;font-size:14px;}
 .m002-couple-zone{font-family:'Share Tech Mono',monospace;font-size:10px;color:#c084fc;letter-spacing:1.2px;text-transform:uppercase;}
 .m002-field-static{padding:6px 8px;border:1px dashed #1f1f28;background:#0a0a10;font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;letter-spacing:.6px;}
+.m002-ref-fallback{margin:4px 0 8px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1px;}
+.m002-ref-fallback summary{cursor:pointer;padding:4px 0;color:#7a7f8e;text-transform:uppercase;}
+.m002-ref-fallback[open] summary{color:#c084fc;}
+.m002-vlan-readonly{display:flex;flex-wrap:wrap;gap:4px;}
+.m002-vlan-readonly .m002-vlan-chip-btn{cursor:default;pointer-events:none;}
+.m002-vlan-readonly .m002-vlan-chip-btn.dim{opacity:.45;}
 
 .m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
