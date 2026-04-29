@@ -2,6 +2,18 @@
 // Flat 2D network map editor. SVG board with dotted grid, pan/zoom,
 // device palette, link tool, inspector panel, layer toggle.
 //
+// JUMP nodes act as portals between zones. They have no ports / VLANs.
+//   - "Hub-leg" links: a Jump can be linked (with the link tool) to regular
+//     devices in the *same zone*. The Jump acts as a multi-leg hub connector.
+//   - Couple link: two Jumps in *different zones* of the same map can be
+//     coupled with the link tool. The couple is stored mutually as
+//     `dev.coupleId` on each Jump (not in `s.links`). A couple makes the pair
+//     a single logical hub spanning two zones — anything wired into Jump A is
+//     topologically connected through to anything wired into Jump B.
+//   - Navigation: double-click / JUMP NOW prefers the couple (jumps to the
+//     peer's zone and selects the peer). Falls back to the manual zone/map
+//     reference if no couple is set.
+//
 // Controls
 //   N            cycle next device type and spawn at center
 //   L            toggle link mode
@@ -270,13 +282,17 @@ function renderVlanPicker(s, container) {
   } else if (kind === 'link') {
     const link = s.links.find((l) => l.id === parts[1]);
     if (!link) { container.innerHTML = ''; return; }
+    const aDev = s.devices.find((d) => d.id === link.from);
+    const bDev = s.devices.find((d) => d.id === link.to);
+    if (!aDev || !bDev) { container.innerHTML = ''; return; }
+    if (isReference(aDev) || isReference(bDev)) {
+      container.innerHTML = `<span class="m002-vlan-empty">JUMP hub-leg — VLANs flow through, no per-link config</span>`;
+      return;
+    }
     if (!link.fromPort || !link.toPort) {
       container.innerHTML = `<span class="m002-vlan-empty">assign From/To ports first</span>`;
       return;
     }
-    const aDev = s.devices.find((d) => d.id === link.from);
-    const bDev = s.devices.find((d) => d.id === link.to);
-    if (!aDev || !bDev) { container.innerHTML = ''; return; }
     const aPort = (aDev.ports || []).find((p) => String(p.n) === String(link.fromPort));
     const bPort = (bDev.ports || []).find((p) => String(p.n) === String(link.toPort));
     const intersect = (aDev.vlans || []).map(String).filter((v) => (bDev.vlans || []).map(String).includes(v));
@@ -804,8 +820,6 @@ function bindBoard(s) {
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
     if (s.linkMode && devEl && e.button === 0) {
-      const refDev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
-      if (refDev && isReference(refDev)) { toast(s, 'JUMP nodes cannot be linked'); e.preventDefault(); return; }
       handleLinkClick(s, devEl.dataset.deviceId);
       e.preventDefault();
       return;
@@ -1197,6 +1211,7 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     dev.refMode = 'zone';
     dev.refZoneId = null;
     dev.refMapId = null;
+    dev.coupleId = null;
   }
   s.devices.push(dev);
   drawDevice(s, dev);
@@ -1219,8 +1234,49 @@ function referenceTargetLabel(s, dev) {
   return z ? z.name : '(missing zone)';
 }
 
+// Resolve the live couple peer for a Jump (or null if uncoupled / stale).
+function couplePeer(s, dev) {
+  if (!isReference(dev) || !dev.coupleId) return null;
+  const peer = s.devices.find((d) => d.id === dev.coupleId);
+  if (!peer || !isReference(peer)) return null;
+  return peer;
+}
+
+// Mutually couple two Jumps. Drops any prior couples on either side. Both
+// Jumps must already exist in s.devices and live in different zones.
+function coupleJumps(s, devA, devB) {
+  if (!isReference(devA) || !isReference(devB)) return false;
+  if (devA.id === devB.id) return false;
+  // Break any pre-existing couples on either side first.
+  uncoupleJump(s, devA);
+  uncoupleJump(s, devB);
+  devA.coupleId = devB.id;
+  devB.coupleId = devA.id;
+  // Sync the manual zone reference so JUMP NOW / target label stay coherent.
+  devA.refMode = 'zone';
+  devA.refZoneId = devB.zone || null;
+  devB.refMode = 'zone';
+  devB.refZoneId = devA.zone || null;
+  return true;
+}
+
+function uncoupleJump(s, dev) {
+  if (!isReference(dev) || !dev.coupleId) return;
+  const peer = s.devices.find((d) => d.id === dev.coupleId);
+  if (peer && peer.coupleId === dev.id) peer.coupleId = null;
+  dev.coupleId = null;
+}
+
 function jumpToReference(s, dev) {
   if (!isReference(dev)) return;
+  // Couple takes priority: if a peer Jump exists, jump to its zone and
+  // select the peer so the user lands directly on the wormhole's other end.
+  const peer = couplePeer(s, dev);
+  if (peer) {
+    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone);
+    select(s, 'device', peer.id);
+    return;
+  }
   if (dev.refMode === 'map') {
     if (!dev.refMapId) { toast(s, 'JUMP target not set'); return; }
     if (!(s.maps || []).some((m) => m.id === dev.refMapId)) { toast(s, 'JUMP target map missing'); return; }
@@ -1237,20 +1293,31 @@ function jumpToReference(s, dev) {
 function drawDevice(s, dev) {
   const t = typeOf(dev.type);
   const g = document.createElementNS(SVG_NS, 'g');
-  g.setAttribute('class', 'm002-device' + (isReference(dev) ? ' m002-device-ref' : ''));
+  const peer = isReference(dev) ? couplePeer(s, dev) : null;
+  const cls = ['m002-device'];
+  if (isReference(dev)) cls.push('m002-device-ref');
+  if (peer) cls.push('m002-device-coupled');
+  g.setAttribute('class', cls.join(' '));
   g.setAttribute('data-device-id', dev.id);
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
   const w = DEVICE_W, h = DEVICE_H;
   if (isReference(dev)) {
-    const arrow = dev.refMode === 'map' ? '↗ MAP' : '→ ZONE';
-    const target = referenceTargetLabel(s, dev);
+    let arrow, target;
+    if (peer) {
+      const peerZone = (s.zones || []).find((z) => z.id === peer.zone);
+      arrow = '⇄ HUB';
+      target = peerZone ? `${peerZone.name} · ${peer.name}` : peer.name;
+    } else {
+      arrow = dev.refMode === 'map' ? '↗ MAP' : '→ ZONE';
+      target = referenceTargetLabel(s, dev);
+    }
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
       <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label} · ${arrow}</text>
       <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
-      <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 22))}</text>
+      <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 24))}</text>
       <text class="m002-dev-ref-hint" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">DBL</text>
     `;
   } else {
@@ -1313,6 +1380,42 @@ function handleLinkClick(s, deviceId) {
     s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
     s.linkPending = null;
     setMode(s, 'LINK · pick first node');
+    return;
+  }
+  // Jump-aware routing: a Jump↔Jump pick across zones is coupling (a portal
+  // pair, stored as mutual `coupleId` — not in s.links). Same-zone Jump↔Jump
+  // is rejected (no zone crossing → no point). Jump↔non-Jump must stay in
+  // the same zone (the Jump is a hub leg in its own zone).
+  const devA = s.devices.find((d) => d.id === s.linkPending);
+  const devB = s.devices.find((d) => d.id === deviceId);
+  const clearPending = () => {
+    s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
+    s.linkPending = null;
+    setMode(s, 'LINK · pick first node');
+  };
+  if (!devA || !devB) { clearPending(); return; }
+  if (isReference(devA) && isReference(devB)) {
+    if (devA.zone === devB.zone) {
+      toast(s, 'Couple JUMPs only across different zones');
+      clearPending();
+      return;
+    }
+    snapshot(s);
+    const hadA = devA.coupleId, hadB = devB.coupleId;
+    coupleJumps(s, devA, devB);
+    // Full render: a couple may live across two zones and may have displaced
+    // prior couples on either side — only render() respects the zone filter
+    // and redraws orphan peers consistently.
+    render(s);
+    clearPending();
+    schedSave(s);
+    select(s, 'device', devA.id);
+    toast(s, hadA || hadB ? 'JUMPs recoupled' : 'JUMPs coupled');
+    return;
+  }
+  if ((isReference(devA) || isReference(devB)) && devA.zone !== devB.zone) {
+    toast(s, 'JUMP hub-leg must stay in the same zone');
+    clearPending();
     return;
   }
   snapshot(s);
@@ -2224,11 +2327,21 @@ function renderReferenceInspector(s, dev, body) {
   const otherZones = (s.zones || []).filter((z) => z.id !== s.activeZone);
   const otherMaps = (s.maps || []).filter((m) => m.id !== s.activeMapId);
   const mode = dev.refMode === 'map' ? 'map' : 'zone';
-  body.innerHTML = `
-    <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
-    <label class="m002-field"><span>TYPE</span>
-      <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
-    </label>
+  const peer = couplePeer(s, dev);
+  const peerZone = peer ? (s.zones || []).find((z) => z.id === peer.zone) : null;
+  // Hub-leg count: same-zone links touching this Jump.
+  const hubLegs = s.links.filter((l) => l.from === dev.id || l.to === dev.id).length;
+  const targetSection = peer ? `
+    <div class="m002-field">
+      <span>COUPLED PEER</span>
+      <div class="m002-couple-card">
+        <div class="m002-couple-line"><span class="m002-couple-arrow">⇄</span><span>${escSvg(peer.name)}</span></div>
+        <div class="m002-couple-zone">${escSvg(peerZone ? peerZone.name : '(zone missing)')}</div>
+      </div>
+    </div>
+    <p class="m002-link-hint">JUMP-Paar bildet einen Hub: alle Hub-Legs auf beiden Seiten sind topologisch verbunden.</p>
+    <button type="button" class="m002-action" data-ref-uncouple>UNCOUPLE</button>
+  ` : `
     <div class="m002-field">
       <span>TARGET</span>
       <div class="m002-ref-modes">
@@ -2253,6 +2366,18 @@ function renderReferenceInspector(s, dev, body) {
       </label>
       ${otherMaps.length === 0 ? '<p class="m002-link-hint">Keine weiteren Maps. Über das Map-Menü oben rechts erstellen.</p>' : ''}
     `}
+    <p class="m002-link-hint">Tipp: zwei JUMPs in verschiedenen Zonen mit dem LINK-Tool verbinden, um sie zu einem Hub zu koppeln.</p>
+  `;
+  body.innerHTML = `
+    <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
+    <label class="m002-field"><span>TYPE</span>
+      <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
+    </label>
+    ${targetSection}
+    <div class="m002-field">
+      <span>HUB LEGS</span>
+      <div class="m002-field-static">${hubLegs} link${hubLegs === 1 ? '' : 's'} in dieser Zone</div>
+    </div>
     <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes || '')}</textarea></label>
     <p class="m002-link-hint">Doppelklick auf den JUMP-Knoten springt zum Ziel.</p>
     <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
@@ -2278,6 +2403,15 @@ function renderReferenceInspector(s, dev, body) {
     });
   });
   body.querySelector('[data-ref-jump]')?.addEventListener('click', () => jumpToReference(s, dev));
+  body.querySelector('[data-ref-uncouple]')?.addEventListener('click', () => {
+    const peerNow = couplePeer(s, dev);
+    if (!peerNow) return;
+    snapshot(s);
+    uncoupleJump(s, dev);
+    render(s);
+    schedSave(s);
+    openInspector(s);
+  });
   body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
 }
 
@@ -2369,7 +2503,19 @@ function openInspector(s) {
     if (!link) return;
     const a = s.devices.find((d) => d.id === link.from);
     const b = s.devices.find((d) => d.id === link.to);
+    const aRef = isReference(a), bRef = isReference(b);
     idEl.textContent = `// LINK`;
+    const portCell = (dev, side) => {
+      if (isReference(dev)) {
+        return `<label class="m002-field"><span>${side} PORT</span><div class="m002-field-static">JUMP — no port</div></label>`;
+      }
+      const f = side === 'FROM' ? 'fromPort' : 'toPort';
+      const cur = side === 'FROM' ? link.fromPort : link.toPort;
+      return `<label class="m002-field"><span>${side} PORT</span>
+        <select data-f="${f}"><option value="">—</option>${(dev?.ports || []).map((p) => `<option value="${p.n}" ${String(cur) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
+      </label>`;
+    };
+    const isHubLeg = aRef || bRef;
     body.innerHTML = `
       <div class="m002-link-summary">
         <span class="m002-link-end">${escSvg(a?.name || '?')}</span>
@@ -2377,18 +2523,16 @@ function openInspector(s) {
         <span class="m002-link-end">${escSvg(b?.name || '?')}</span>
       </div>
       <div class="m002-row2">
-        <label class="m002-field"><span>FROM PORT</span>
-          <select data-f="fromPort"><option value="">—</option>${(a?.ports || []).map((p) => `<option value="${p.n}" ${String(link.fromPort) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
-        </label>
-        <label class="m002-field"><span>TO PORT</span>
-          <select data-f="toPort"><option value="">—</option>${(b?.ports || []).map((p) => `<option value="${p.n}" ${String(link.toPort) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
-        </label>
+        ${portCell(a, 'FROM')}
+        ${portCell(b, 'TO')}
       </div>
       <div class="m002-field">
-        <span>VLANS (port-pair)</span>
+        <span>VLANS${isHubLeg ? '' : ' (port-pair)'}</span>
         <div class="m002-vlan-picker" data-vlan-target="link:${escAttr(link.id)}"></div>
       </div>
-      <p class="m002-link-hint">Aktivierte VLANs werden auf beide Ports gesetzt. Es erscheinen nur VLANs, die auf beiden Devices verfügbar sind.</p>
+      <p class="m002-link-hint">${isHubLeg
+        ? 'JUMP hub-leg: der Knoten reicht VLANs und Topologie unverändert weiter.'
+        : 'Aktivierte VLANs werden auf beide Ports gesetzt. Es erscheinen nur VLANs, die auf beiden Devices verfügbar sind.'}</p>
       <button type="button" class="m002-insp-del" data-del>DELETE LINK</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
@@ -2785,7 +2929,19 @@ function updateDeviceField(s, dev, el) {
       if (dev.refMode == null) dev.refMode = 'zone';
       if (dev.refZoneId === undefined) dev.refZoneId = null;
       if (dev.refMapId === undefined) dev.refMapId = null;
+      if (dev.coupleId === undefined) dev.coupleId = null;
     } else if (!isRefNow && wasRef) {
+      // Leaving JUMP: drop the couple so the (now non-Jump) peer reference
+      // doesn't dangle on the other side. uncoupleJump checks isReference,
+      // so do the peer cleanup directly here.
+      if (dev.coupleId) {
+        const peer = s.devices.find((d) => d.id === dev.coupleId);
+        if (peer && peer.coupleId === dev.id) {
+          peer.coupleId = null;
+          if (peer.zone === s.activeZone) redrawDevice(s, peer);
+        }
+        dev.coupleId = null;
+      }
       const t2 = typeOf(dev.type);
       dev.ports = Array.from({ length: t2.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] }));
     }
@@ -2822,6 +2978,9 @@ function deleteRef(s, ref) {
   snapshot(s);
   if (ref.kind === 'device') {
     const id = ref.id;
+    // Drop any couple before the device vanishes so the peer Jump's
+    // coupleId doesn't point at a ghost.
+    s.devices.forEach((d) => { if (isReference(d) && d.coupleId === id) d.coupleId = null; });
     // Remove from any stack first (which may dissolve it and drop its LAGs)
     const st = findStack(s, id);
     if (st) removeFromStack(s, st.id, id);
@@ -3721,6 +3880,8 @@ function zoneContextMenu(s, zoneId) {
     s.stacks  = s.stacks.filter((st) => st.zone !== zoneId);
     const liveIds = new Set(s.devices.map((d) => d.id));
     s.links = s.links.filter((l) => liveIds.has(l.from) && liveIds.has(l.to));
+    // Couples that pointed into the deleted zone are now dangling.
+    s.devices.forEach((d) => { if (isReference(d) && d.coupleId && !liveIds.has(d.coupleId)) d.coupleId = null; });
     s.zones = s.zones.filter((zz) => zz.id !== zoneId);
     s.activeZone = s.zones[0].id;
     refreshZoneBar(s);
@@ -3741,6 +3902,7 @@ function migrate(s) {
     if (TYPE_ALIASES[d.type]) d.type = TYPE_ALIASES[d.type];
     if (!Array.isArray(d.ports)) d.ports = [];
     if (!Array.isArray(d.vlans)) d.vlans = [];
+    if (d.type === 'reference' && d.coupleId === undefined) d.coupleId = null;
     // LAGs no longer hang on devices — they belong to stacks. Drop any legacy
     // device-owned LAG record on hydrate.
     delete d.lags;
@@ -3844,6 +4006,17 @@ function migrate(s) {
     });
     st.lags = st.lags.filter((lag) => lag.ports.length > 0);
   });
+  // Sanity-check Jump couples: must point at a live Jump in a different zone,
+  // and must be mutual.
+  const liveDevById = new Map(s.devices.map((d) => [d.id, d]));
+  s.devices.forEach((d) => {
+    if (!isReference(d)) { delete d.coupleId; return; }
+    if (!d.coupleId) return;
+    const peer = liveDevById.get(d.coupleId);
+    if (!peer || !isReference(peer) || peer.zone === d.zone) { d.coupleId = null; return; }
+    // Repair one-sided couples (peer doesn't point back) by enforcing mutuality.
+    if (peer.coupleId !== d.id) peer.coupleId = d.id;
+  });
   recomputeVlanIndex(s);
 }
 
@@ -3946,6 +4119,7 @@ const MOD002_CSS = `
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
 .m002-dev-notes{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;font-style:italic;}
 .m002-device-ref .m002-dev-bg{stroke-dasharray:6 3;}
+.m002-device-ref.m002-device-coupled .m002-dev-bg{stroke-dasharray:none;stroke-width:1.6;filter:drop-shadow(0 0 3px rgba(192,132,252,.55)) drop-shadow(0 0 9px rgba(192,132,252,.3));}
 .m002-dev-ref-target{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:.6px;}
 .m002-dev-ref-hint{font-size:8px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;letter-spacing:1.4px;opacity:.7;}
 .m002-ref-modes{display:flex;gap:6px;}
@@ -3953,6 +4127,11 @@ const MOD002_CSS = `
 .m002-ref-mode:hover{border-color:#c084fc;color:#e8e8ee;}
 .m002-ref-mode.active{border-color:#c084fc;background:rgba(192,132,252,0.08);color:#c084fc;}
 .m002-ref-mode input{accent-color:#c084fc;}
+.m002-couple-card{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:1px solid rgba(192,132,252,.45);background:rgba(192,132,252,.06);}
+.m002-couple-line{display:flex;gap:8px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:12px;color:#e8e8ee;letter-spacing:.6px;}
+.m002-couple-arrow{color:#c084fc;font-size:14px;}
+.m002-couple-zone{font-family:'Share Tech Mono',monospace;font-size:10px;color:#c084fc;letter-spacing:1.2px;text-transform:uppercase;}
+.m002-field-static{padding:6px 8px;border:1px dashed #1f1f28;background:#0a0a10;font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;letter-spacing:.6px;}
 
 .m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
