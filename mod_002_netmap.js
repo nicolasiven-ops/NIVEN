@@ -6,7 +6,7 @@
 //   N            cycle next device type and spawn at center
 //   L            toggle link mode
 //   DEL          delete selected element
-//   ESC          deselect / cancel link
+//   ESC          deselect / cancel link / exit delete mode
 //   R            recenter view
 //   Drag bg      pan
 //   Scroll       zoom
@@ -490,8 +490,7 @@ function createState(stage, ctx) {
     view: { ...DEFAULT_VIEW },
     linkMode: false,
     linkPending: null, // first device id in link mode
-    stackMode: false,
-    stackPending: null,// first target id (device or stack) in stack mode
+    deleteMode: false, // when true, clicks on canvas elements delete them
     spawnIdx: 0,
 
     drag: null,
@@ -534,10 +533,7 @@ function buildDOM(s) {
           <button type="button" class="m002-pal-btn m002-link-tool" data-tool="link" title="Link tool (L)">
             <span class="m002-pal-glyph">⌇</span><span>LINK</span>
           </button>
-          <button type="button" class="m002-pal-btn m002-stack-tool" data-tool="stack" title="Stack tool (S)">
-            <span class="m002-pal-glyph">⊟</span><span>STACK</span>
-          </button>
-          <button type="button" class="m002-pal-btn" data-tool="delete" title="Delete selection (Del)">
+          <button type="button" class="m002-pal-btn m002-delete-tool" data-tool="delete" title="Delete tool — click anything to remove">
             <span class="m002-pal-glyph">×</span><span>DELETE</span>
           </button>
           <button type="button" class="m002-pal-btn ghost" data-tool="undo" title="Undo (Ctrl+Z)">
@@ -722,11 +718,10 @@ function buildDOM(s) {
     if (!tool) return;
     if (tool.dataset.tool === 'select') {
       if (s.linkMode) toggleLinkMode(s);
-      if (s.stackMode) toggleStackMode(s);
+      if (s.deleteMode) toggleDeleteMode(s);
     }
     if (tool.dataset.tool === 'link') toggleLinkMode(s);
-    if (tool.dataset.tool === 'stack') toggleStackMode(s);
-    if (tool.dataset.tool === 'delete') deleteSelected(s);
+    if (tool.dataset.tool === 'delete') toggleDeleteMode(s);
     if (tool.dataset.tool === 'undo') undo(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
     refreshToolHighlights(s);
@@ -803,15 +798,11 @@ function bindBoard(s) {
       e.preventDefault();
       return;
     }
-    if (s.stackMode && e.button === 0) {
-      if (stackEl) { handleStackPick(s, { kind: 'stack',  id: stackEl.dataset.stackId  }); e.preventDefault(); return; }
-      if (devEl) {
-        const stackDev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
-        if (stackDev && isReference(stackDev)) { toast(s, 'JUMP nodes cannot be stacked'); e.preventDefault(); return; }
-        handleStackPick(s, { kind: 'device', id: devEl.dataset.deviceId });
-        e.preventDefault();
-        return;
-      }
+    if (s.deleteMode && e.button === 0) {
+      if (linkEl)  { deleteRef(s, { kind: 'link',   id: linkEl.dataset.linkId   }); e.preventDefault(); return; }
+      if (stackEl) { deleteRef(s, { kind: 'stack',  id: stackEl.dataset.stackId }); e.preventDefault(); return; }
+      if (devEl)   { deleteRef(s, { kind: 'device', id: devEl.dataset.deviceId  }); e.preventDefault(); return; }
+      // Empty space: fall through so the user can still pan in delete mode.
     }
 
     if (stackEl && e.button === 0) {
@@ -1147,8 +1138,6 @@ function bindKeyboard(s) {
       spawnDevice(s, t.id);
     } else if (e.key === 'l' || e.key === 'L') {
       toggleLinkMode(s);
-    } else if (e.key === 's' || e.key === 'S') {
-      toggleStackMode(s);
     } else if (e.key === 'r' || e.key === 'R') {
       recenter(s);
     } else if (e.key === 'Delete' || e.key === 'Backspace') {
@@ -1158,7 +1147,7 @@ function bindKeyboard(s) {
       if (lagModal && !lagModal.hidden) { closeLagModal(s); return; }
       if (s.portModalOpen) closePortModal(s);
       else if (s.linkMode) toggleLinkMode(s);
-      else if (s.stackMode) toggleStackMode(s);
+      else if (s.deleteMode) toggleDeleteMode(s);
       else deselect(s);
     }
   };
@@ -1538,64 +1527,12 @@ function moveItemBy(s, target, ddx, ddy) {
   }
 }
 
-function toggleStackMode(s) {
-  s.stackMode = !s.stackMode;
-  s.stackPending = null;
-  if (s.stackMode && s.linkMode) toggleLinkMode(s);
-  s.host.classList.toggle('m002-stacking', s.stackMode);
-  s.gDevices.querySelectorAll('.m002-stack-pending').forEach((el) => el.classList.remove('m002-stack-pending'));
-  setMode(s, s.stackMode ? 'STACK · pick first node/stack' : 'SELECT');
+function toggleDeleteMode(s) {
+  s.deleteMode = !s.deleteMode;
+  if (s.deleteMode && s.linkMode) toggleLinkMode(s);
+  s.host.classList.toggle('m002-deleting', s.deleteMode);
+  setMode(s, s.deleteMode ? 'DELETE · click anything to remove' : 'SELECT');
   refreshToolHighlights(s);
-}
-
-// In stack mode the user clicks two targets. A target is either a regular
-// device or an existing stack icon. Combinations:
-//   (dev,dev)   → new stack with both as members
-//   (dev,stack) → add the device to the stack  (also stack,dev)
-//   (stk,stk)   → merge stacks
-function handleStackPick(s, target) {
-  // target = { kind: 'device'|'stack', id }
-  if (!s.stackPending) {
-    s.stackPending = target;
-    setMode(s, 'STACK · pick second node/stack');
-    markStackPending(s, target, true);
-    return;
-  }
-  if (s.stackPending.kind === target.kind && s.stackPending.id === target.id) {
-    toast(s, 'Stack cancelled');
-    markStackPending(s, s.stackPending, false);
-    s.stackPending = null;
-    setMode(s, 'STACK · pick first node/stack');
-    return;
-  }
-  const a = s.stackPending, b = target;
-  markStackPending(s, a, false);
-  s.stackPending = null;
-  const ta = targetTypeOf(s, a), tb = targetTypeOf(s, b);
-  if (ta && tb && ta !== tb) {
-    toast(s, 'Stack only allowed between same device types');
-    setMode(s, 'STACK · pick first node/stack');
-    return;
-  }
-  let createdId = null;
-  if (a.kind === 'device' && b.kind === 'device') {
-    createdId = createStack(s, [a.id, b.id]);
-  } else if (a.kind === 'stack' && b.kind === 'device') {
-    addToStack(s, a.id, b.id); createdId = a.id;
-  } else if (a.kind === 'device' && b.kind === 'stack') {
-    addToStack(s, b.id, a.id); createdId = b.id;
-  } else {
-    createdId = mergeStacks(s, a.id, b.id);
-  }
-  setMode(s, 'STACK · pick first node/stack');
-  if (createdId) select(s, 'stack', createdId);
-}
-
-function markStackPending(s, target, on) {
-  const sel = target.kind === 'device'
-    ? s.gDevices.querySelector(`[data-device-id="${target.id}"]`)
-    : s.gDevices.querySelector(`[data-stack-id="${target.id}"]`);
-  sel?.classList.toggle('m002-stack-pending', !!on);
 }
 
 function createStack(s, deviceIds) {
@@ -2143,9 +2080,9 @@ function renderInspectorVlanPickers(s) {
 
 function refreshToolHighlights(s) {
   const setActive = (sel, on) => s.host.querySelector(sel)?.classList.toggle('active', !!on);
-  setActive('[data-tool="link"]',  s.linkMode);
-  setActive('[data-tool="stack"]', s.stackMode);
-  setActive('[data-tool="select"]', !s.linkMode && !s.stackMode);
+  setActive('[data-tool="link"]',   s.linkMode);
+  setActive('[data-tool="delete"]', s.deleteMode);
+  setActive('[data-tool="select"]', !s.linkMode && !s.deleteMode);
 }
 
 function renderReferenceInspector(s, dev, body) {
@@ -2685,9 +2622,18 @@ function updateLinkField(s, link, el) {
 
 function deleteSelected(s) {
   if (!s.selected) return;
+  deleteRef(s, s.selected);
+}
+
+// Delete an arbitrary target by reference, regardless of current selection.
+// Used by both the DEL key / inspector buttons (via deleteSelected) and the
+// DELETE tool mode (click-anything-to-remove).
+function deleteRef(s, ref) {
+  if (!ref) return;
+  const sameAsSelected = s.selected && s.selected.kind === ref.kind && s.selected.id === ref.id;
   snapshot(s);
-  if (s.selected.kind === 'device') {
-    const id = s.selected.id;
+  if (ref.kind === 'device') {
+    const id = ref.id;
     // Remove from any stack first (which may dissolve it and drop its LAGs)
     const st = findStack(s, id);
     if (st) removeFromStack(s, st.id, id);
@@ -2700,12 +2646,12 @@ function deleteSelected(s) {
       });
       stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
     });
-  } else if (s.selected.kind === 'stack') {
-    deleteStack(s, s.selected.id);
-    deselect(s);
+  } else if (ref.kind === 'stack') {
+    deleteStack(s, ref.id);
+    if (sameAsSelected) deselect(s);
     return;
-  } else if (s.selected.kind === 'lag') {
-    const [stackId, lagId] = String(s.selected.id).split('|');
+  } else if (ref.kind === 'lag') {
+    const [stackId, lagId] = String(ref.id).split('|');
     const stack = findStackById(s, stackId);
     const lag = stack?.lags?.find((l) => l.id === lagId);
     if (stack && lag) {
@@ -2717,12 +2663,14 @@ function deleteSelected(s) {
     }
     render(s);
     schedSave(s);
-    if (stack) select(s, 'stack', stack.id); else deselect(s);
+    if (sameAsSelected) {
+      if (stack) select(s, 'stack', stack.id); else deselect(s);
+    }
     return;
   } else {
-    s.links = s.links.filter((l) => l.id !== s.selected.id);
+    s.links = s.links.filter((l) => l.id !== ref.id);
   }
-  deselect(s);
+  if (sameAsSelected) deselect(s);
   render(s);
   schedSave(s);
 }
@@ -3735,7 +3683,7 @@ const MOD002_CSS = `
 .m002-board{position:absolute;inset:0;}
 .m002-svg{width:100%;height:100%;display:block;cursor:grab;}
 .m002-host.m002-linking .m002-svg{cursor:crosshair;}
-.m002-host.m002-stacking .m002-svg{cursor:cell;}
+.m002-host.m002-deleting .m002-svg{cursor:not-allowed;}
 .m002-svg:active{cursor:grabbing;}
 
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
