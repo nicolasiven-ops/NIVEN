@@ -1843,9 +1843,6 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-label" x="${op.lx}" y="${op.ly - 4}" fill="${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    if (s.activeLayer === 'vlan' && isFiltered && sharedVlans.length && !drawnVlans.length) {
-      g.classList.add('m002-link-faded');
-    }
     inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
     if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
@@ -1934,8 +1931,10 @@ function drawLink(s, link) {
     if (vlans.length === 0) {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
     } else if (isFiltered && drawn.length === 0) {
-      g.classList.add('m002-link-faded');
-      inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+      // Link carries no soloed VLAN — render at normal neutral so trace mode
+      // emphasises matches without hiding the rest of the topology.
+      const w = bundleInfo?.members ? 2.4 : 1.4;
+      inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="${w}"/>`;
     } else if (drawn.length > 0) {
       const gap = 6;
       drawn.forEach((v, i) => {
