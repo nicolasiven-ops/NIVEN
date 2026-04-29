@@ -3757,8 +3757,8 @@ const MOD002_CSS = `
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
 .m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
-.m002-link.m002-selected .m002-link-line{stroke:#ffffff!important;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
-.m002-link.m002-selected .m002-link-label{fill:#ffffff!important;}
+.m002-link.m002-selected .m002-link-line{stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
+.m002-link.m002-selected .m002-link-label{filter:drop-shadow(0 0 3px rgba(255,255,255,0.8));}
 .m002-link.m002-link-faded{opacity:.25;}
 .m002-link-vlan-count{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;fill:#9aa0a8;opacity:.7;pointer-events:none;}
 .m002-link:hover .m002-link-vlan-count{opacity:1;fill:#e8e8ee;}
