@@ -3,9 +3,17 @@
   "configurations": [
     {
       "name": "myhome",
-      "runtimeExecutable": "python",
-      "runtimeArgs": ["-m", "http.server"],
-      "autoPort": true
+      "runtimeExecutable": "powershell",
+      "runtimeArgs": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-File",
+        ".claude/dev-server.ps1",
+        "-Port",
+        "8000"
+      ],
+      "port": 8000
     }
   ]
 }
