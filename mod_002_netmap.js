@@ -1950,13 +1950,11 @@ function drawStackEnvelope(s, stack) {
     cab.setAttribute('data-stacklink-id', sl.id);
     const path = orthPath(a, b, off);
     let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
-    if (sl.fromPort) {
-      const lbl = portLabel(a, sl.fromPort);
-      inner += `<text class="m002-stack-cable-label" x="${path.from.x}" y="${path.from.y}" text-anchor="${path.from.anchor}">${escSvg(lbl)}</text>`;
-    }
-    if (sl.toPort) {
-      const lbl = portLabel(b, sl.toPort);
-      inner += `<text class="m002-stack-cable-label" x="${path.to.x}" y="${path.to.y}" text-anchor="${path.to.anchor}">${escSvg(lbl)}</text>`;
+    const fromLbl = sl.fromPort ? portLabel(a, sl.fromPort) : '';
+    const toLbl   = sl.toPort   ? portLabel(b, sl.toPort)   : '';
+    if (fromLbl || toLbl) {
+      const lbl = (fromLbl || '?') + ' ⇄ ' + (toLbl || '?');
+      inner += `<text class="m002-stack-cable-label" x="${path.lx}" y="${path.ly - 4}" text-anchor="middle">${escSvg(lbl)}</text>`;
     }
     cab.innerHTML = inner;
     s.gStacksBg.appendChild(cab);
@@ -2211,8 +2209,10 @@ function drawLink(s, link) {
     const lagB = findPortLag(s, b.id, link.toPort)?.lag;
     const fromTxt = link.fromPort ? portLabel(a, link.fromPort) + (lagA ? ` (${lagA.name})` : '') : '';
     const toTxt   = link.toPort   ? portLabel(b, link.toPort)   + (lagB ? ` (${lagB.name})` : '') : '';
-    if (fromTxt) inner += `<text class="m002-link-label" x="${base.from.x}" y="${base.from.y}" fill="#9aa0a8" text-anchor="${base.from.anchor}">${escSvg(fromTxt)}</text>`;
-    if (toTxt)   inner += `<text class="m002-link-label" x="${base.to.x}"   y="${base.to.y}"   fill="#9aa0a8" text-anchor="${base.to.anchor}">${escSvg(toTxt)}</text>`;
+    if (fromTxt || toTxt) {
+      const lbl = (fromTxt || '?') + ' ⇄ ' + (toTxt || '?');
+      inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(lbl)}</text>`;
+    }
   }
   g.innerHTML = inner;
   s.gLinks.appendChild(g);
