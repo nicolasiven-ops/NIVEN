@@ -822,13 +822,25 @@ function buildDOM(s) {
     if (e.target.closest('[data-detail-stop]')) return;
     exitDetailView(s);
   });
-  // Single click on a port in the detail view opens that port's detail in the
-  // inspector (right panel stays visible alongside the overlay).
+  // Single-click routing inside the detail overlay:
+  //   • port  → highlight it + open its detail in the inspector
+  //   • device → drop the port focus (back to device inspector) + clear highlight
+  // The dblclick handler above still gets the *bg* exit because [data-detail-stop]
+  // sits on both ports and the device, so neither single-click bubbles into bg.
   detailOverlay?.addEventListener('click', (e) => {
     const portEl = e.target.closest('[data-detail-port]');
-    if (!portEl || !s.detailDeviceId) return;
-    const portN = Number(portEl.dataset.detailPort);
-    if (Number.isFinite(portN)) openPortModal(s, s.detailDeviceId, portN);
+    if (portEl && s.detailDeviceId) {
+      const portN = Number(portEl.dataset.detailPort);
+      if (!Number.isFinite(portN)) return;
+      detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      portEl.classList.add('is-selected');
+      openPortModal(s, s.detailDeviceId, portN);
+      return;
+    }
+    if (e.target.closest('.m002-detail-device') && s.detailDeviceId) {
+      detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      if (s.portModalOpen) closePortModal(s);
+    }
   });
 
   // Background click → deselect, but only on a true click (not a pan-drag).
@@ -3729,6 +3741,10 @@ function closeLagModal(s) {
 function closePortModal(s) {
   if (!s.portModalOpen) return;
   s.portModalOpen = null;
+  // Drop the visual port selection in the detail overlay (if any) so the
+  // highlight matches the inspector state when the user came in via ESC or
+  // the back button rather than clicking the central element.
+  s.host?.querySelectorAll('.m002-detail-overlay .m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
   // Re-render the inspector for the underlying device. If the user has since
   // selected something else, openInspector picks the right body for that.
   if (s.selected) openInspector(s);
@@ -4057,8 +4073,12 @@ function renderDetailBody(s, dev, t) {
     }
   }
 
+  // Render at intrinsic viewBox size (1 unit = 1 CSS px) so the element keeps
+  // the dimensions designed in DETAIL.* — without this the SVG would stretch
+  // to fill the body via CSS width:100% and the visible element would not
+  // shrink when DETAIL.device.w shrinks.
   return `
-    <svg class="m002-detail-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMid meet">
+    <svg class="m002-detail-svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" preserveAspectRatio="xMidYMid meet">
       ${inner}
     </svg>
   `;
@@ -4996,7 +5016,7 @@ const MOD002_CSS = `
 .m002-detail-title{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:#9aa0a8;}
 .m002-detail-spacer{flex:1;}
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
-.m002-detail-svg{display:block;width:100%;height:100%;max-width:100%;max-height:100%;}
+.m002-detail-svg{display:block;max-width:100%;max-height:100%;}
 .m002-detail-section-label{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;fill:#5a5f6e;}
 .m002-detail-device{filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 8px var(--accent));}
 .m002-detail-dev-bg{}
@@ -5004,8 +5024,10 @@ const MOD002_CSS = `
 .m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;fill:#f5f3ff;letter-spacing:.6px;}
 .m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:10px;fill:#9aa0a8;letter-spacing:.6px;}
 .m002-detail-port{cursor:pointer;}
-.m002-detail-port-box{transition:filter .15s,stroke .15s;}
+.m002-detail-port-box{transition:filter .15s,stroke .15s,stroke-width .15s;}
 .m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 6px var(--accent));}
+.m002-detail-port.is-selected .m002-detail-port-box{stroke:var(--accent);stroke-width:2.2;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
+.m002-detail-device{cursor:pointer;}
 .m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#e8e8ee;letter-spacing:.3px;font-weight:600;}
 .m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
 .m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:6px;fill:#9aa0a8;letter-spacing:.3px;font-weight:600;}
