@@ -3881,13 +3881,23 @@ function classifyDetailPort(s, dev, portN) {
 }
 
 const DETAIL = {
-  port: { w: 56, h: 64 },
-  gap: 8,
-  device: { w: 360, h: 140 },
-  vgap: 64,
-  pad: 56,
-  maxCols: 16,
+  port: { w: 34, h: 40 },
+  gap: 4,
+  device: { w: 520, h: 130 },
+  vgap: 22,
+  pad: 36,
+  maxCols: 24,
 };
+
+// Compact peer label that fits a small port box (e.g. SWITCH-02 → "S2",
+// ENDPOINT-01 → "E1", ROUTER-01 → "R1", JUMP → "J"). Falls back to first
+// initial when the peer name has no numeric suffix.
+function abbrPeer(peer) {
+  if (!peer) return '';
+  const head = (peer.type || '?').charAt(0).toUpperCase();
+  const m = String(peer.name || '').match(/(\d+)\s*$/);
+  return head + (m ? m[1].replace(/^0+/, '') || m[1] : '');
+}
 
 function renderDetailView(s) {
   const overlay = s.host.querySelector('.m002-detail-overlay');
@@ -3934,14 +3944,16 @@ function renderDetailBody(s, dev, t) {
     const stripe = occ ? (firstV ? vlanColor(s, firstV) : t.accent) : '#2a2a36';
     const stroke = occ ? t.accent : '#2a2a36';
     const dash   = occ ? '' : ' stroke-dasharray="4 3"';
-    const peerLine = (occ && info.peer)
-      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 10}" text-anchor="middle">→ ${escSvg((info.peer.name || '').slice(0, 9))}</text>`
+    const peerAbbr = (occ && info.peer) ? abbrPeer(info.peer) : '';
+    const numY = peerAbbr ? D.port.h / 2 - 1 : D.port.h / 2 + 5;
+    const peerLine = peerAbbr
+      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 6}" text-anchor="middle">${escSvg(peerAbbr)}</text>`
       : '';
     return `
       <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="--accent:${t.accent}">
-        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
-        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="6" fill="${stripe}"/>
-        <text class="m002-detail-port-num" x="${D.port.w / 2}" y="${D.port.h / 2 + 4}" text-anchor="middle">${p.n}</text>
+        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.2"${dash}/>
+        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="3" fill="${stripe}"/>
+        <text class="m002-detail-port-num" x="${D.port.w / 2}" y="${numY}" text-anchor="middle">${p.n}</text>
         ${peerLine}
       </g>
     `;
@@ -4946,9 +4958,9 @@ const MOD002_CSS = `
 .m002-detail-port{cursor:pointer;}
 .m002-detail-port-box{transition:filter .15s,stroke .15s;}
 .m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 10px var(--accent));}
-.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:14px;fill:#e8e8ee;letter-spacing:1px;font-weight:600;}
+.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#e8e8ee;letter-spacing:.4px;font-weight:600;}
 .m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
-.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#9aa0a8;letter-spacing:.5px;}
+.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#9aa0a8;letter-spacing:.4px;font-weight:600;}
 @media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
