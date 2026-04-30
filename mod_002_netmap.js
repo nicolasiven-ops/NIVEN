@@ -1987,8 +1987,8 @@ function orthPath(a, b, off = 0) {
   return {
     d: `M ${ax} ${ey1} L ${ax} ${mid} L ${bx} ${mid} L ${bx} ${ey2}`,
     lx: (ax + bx) / 2, ly: mid,
-    from: { x: ax + 6, y: ey1 + sy * 12, anchor: 'start' },
-    to:   { x: bx + 6, y: ey2 - sy * 4,  anchor: 'start' },
+    from: { x: ax + 8, y: ey1 + sy * 14, anchor: 'start' },
+    to:   { x: bx + 8, y: ey2 - sy * 10, anchor: 'start' },
   };
 }
 
@@ -4347,7 +4347,7 @@ const MOD002_CSS = `
 .m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
 .m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
-.m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1px;pointer-events:none;}
+.m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#9aa0a8;letter-spacing:1px;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-stacklink:hover .m002-stack-cable-label{fill:#9aa0a8;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
@@ -4359,9 +4359,9 @@ const MOD002_CSS = `
 .m002-link.m002-selected .m002-link-label{fill:#ffffff;}
 .m002-link.m002-selected .m002-link-label.m002-link-stripe-label{filter:drop-shadow(0 0 3px currentColor);}
 .m002-link.m002-link-faded{opacity:.25;}
-.m002-link-vlan-count{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;fill:#9aa0a8;opacity:.7;pointer-events:none;}
+.m002-link-vlan-count{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;fill:#9aa0a8;opacity:.85;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-link:hover .m002-link-vlan-count{opacity:1;fill:#e8e8ee;}
-.m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;}
+.m002-link-label{font-size:9px;font-family:'Share Tech Mono',monospace;text-anchor:middle;letter-spacing:1px;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
 
 .m002-palette{display:none;}
 .m002-palette-title{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;margin-bottom:6px;}
@@ -4518,7 +4518,7 @@ const MOD002_CSS = `
 .m002-lag-modal-close:hover{color:#ff003c;}
 .m002-port-lag-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .m002-port-lag-select{flex:1;background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
-.m002-link-bundle-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;font-weight:600;}
+.m002-link-bundle-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-link-bundle .m002-link-hit{stroke-width:18;}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
