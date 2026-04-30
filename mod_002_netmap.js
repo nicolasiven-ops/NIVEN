@@ -490,6 +490,7 @@ async function mount(stage, ctx) {
   refreshZoneBar(state);
   showInspectorEmpty(state);
   refreshToolHighlights(state);
+  startFlowTicker(state);
 }
 
 function unmount() {
@@ -497,9 +498,40 @@ function unmount() {
   // Best-effort: flush any pending edits before tearing down.
   if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
   if (state.dirty) { try { saveNow(state); } catch (_) {} }
+  stopFlowTicker(state);
   for (const off of state.cleanups) { try { off(); } catch (_) {} }
   state.host?.remove();
   state = null;
+}
+
+// JS-driven flow animation. Replaces the CSS @keyframes that was governed by
+// `prefers-reduced-motion` — corporate Windows profiles often force that flag
+// and silently disabled the pulse. requestAnimationFrame is purely a repaint
+// hook and ignores reduced-motion, so the pulse runs unconditionally for
+// users who have the editor open.
+function startFlowTicker(s) {
+  if (s.flowFrame) return;
+  const PERIOD = 1500; // ms per cycle
+  const SPAN = 98;     // dashoffset travel range (matches stroke-dasharray "6 92")
+  const tick = (t) => {
+    s.flowFrame = requestAnimationFrame(tick);
+    if (s.host?.classList.contains('m002-dragging')) return;
+    const phase = (t % PERIOD) / PERIOD;
+    const fwd = (1 - phase) * SPAN;
+    const rev = phase * SPAN;
+    const flows = s.gLinks?.querySelectorAll('.m002-link-flow');
+    if (!flows || !flows.length) return;
+    flows.forEach((p) => {
+      const reverse = p.parentElement?.getAttribute('data-flow-from') === 'to';
+      p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
+    });
+  };
+  s.flowFrame = requestAnimationFrame(tick);
+}
+
+function stopFlowTicker(s) {
+  if (s.flowFrame) cancelAnimationFrame(s.flowFrame);
+  s.flowFrame = null;
 }
 
 function createState(stage, ctx) {
@@ -4697,22 +4729,10 @@ const MOD002_CSS = `
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:10;fill:none;cursor:pointer;}
 /* Traffic-pulse on links incident to the current selection. The <path> is
-   injected on-demand by applyIncidentFlow() — idle links never carry one,
-   so there's no wide transparent stroke around the cursor that could clip
-   the underlying grid pattern in Firefox. data-flow-from reverses direction
-   so the pulse always heads *outward* from the selected node. */
-.m002-link-flow{fill:none;stroke:#ffffff;stroke-width:2.4;stroke-dasharray:6 92;stroke-linecap:round;pointer-events:none;opacity:.95;filter:drop-shadow(0 0 3px #fff) drop-shadow(0 0 7px rgba(255,255,255,.55));animation:m002-link-flow 1.5s linear infinite;}
-.m002-link.m002-link-incident[data-flow-from="to"] .m002-link-flow{animation-direction:reverse;}
-@keyframes m002-link-flow{from{stroke-dashoffset:98;}to{stroke-dashoffset:0;}}
-/* Pause while dragging a device/stack — onMove rebuilds link DOM every
-   mousemove and an unpaused animation would visibly snap back to its start
-   each frame. Frozen pulse near source reads as a stable selection bracket. */
-.m002-host.m002-dragging .m002-link-flow{animation-play-state:paused;}
-@media (prefers-reduced-motion: reduce){
-  /* Static fallback — corporate FF profiles often force reduced-motion, so
-     give the user a steady highlighted overlay instead of nothing. */
-  .m002-link.m002-link-incident .m002-link-flow{animation:none;stroke-dasharray:none;stroke-width:1.6;opacity:.6;}
-}
+   injected on-demand by applyIncidentFlow() — idle links never carry one.
+   stroke-dashoffset is driven by startFlowTicker() (rAF) so the pulse runs
+   even when the OS forces prefers-reduced-motion. */
+.m002-link-flow{fill:none;stroke:#ffffff;stroke-width:2.4;stroke-dasharray:6 92;stroke-linecap:round;pointer-events:none;opacity:.95;filter:drop-shadow(0 0 3px #fff) drop-shadow(0 0 7px rgba(255,255,255,.55));}
 .m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
 .m002-link.m002-selected .m002-link-line{stroke:#ffffff;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
