@@ -797,6 +797,13 @@ function buildDOM(s) {
 
   const detailOverlay = host.querySelector('.m002-detail-overlay');
   detailOverlay?.querySelector('.m002-detail-back')?.addEventListener('click', () => exitDetailView(s));
+  // Double-click on empty detail-view background → back to map. Interactive
+  // elements (ports, back button, future controls) live in deeper containers
+  // and use [data-detail-stop] to opt out of this exit.
+  detailOverlay?.addEventListener('dblclick', (e) => {
+    if (e.target.closest('[data-detail-stop]')) return;
+    exitDetailView(s);
+  });
 
   // Background click → deselect, but only on a true click (not a pan-drag).
   // Actual deselect call lives in the pan onUp handler below — it checks
@@ -3858,6 +3865,30 @@ function exitDetailView(s) {
   setMode(s, s.linkMode ? 'LINK · pick first node' : (s.deleteMode ? 'DELETE · click anything to remove' : 'SELECT'));
 }
 
+// Port classification for the Detail-View. A port that links to a non-endpoint
+// device (switch/router/firewall/cloud/JUMP) counts as UPLINK; everything
+// else — including unlinked ports and links to endpoints — counts as ACCESS.
+function classifyDetailPort(s, dev, portN) {
+  const link = s.links.find((l) =>
+    (l.from === dev.id && Number(l.fromPort) === portN) ||
+    (l.to === dev.id && Number(l.toPort) === portN)
+  );
+  if (!link) return { kind: 'access', occupied: false, peer: null };
+  const peerId = link.from === dev.id ? link.to : link.from;
+  const peer = s.devices.find((d) => d.id === peerId) || null;
+  const isUplink = peer && peer.type !== 'endpoint';
+  return { kind: isUplink ? 'uplink' : 'access', occupied: true, peer };
+}
+
+const DETAIL = {
+  port: { w: 56, h: 64 },
+  gap: 8,
+  device: { w: 360, h: 140 },
+  vgap: 64,
+  pad: 56,
+  maxCols: 16,
+};
+
 function renderDetailView(s) {
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (!overlay) return;
@@ -3867,15 +3898,99 @@ function renderDetailView(s) {
   const titleEl = overlay.querySelector('.m002-detail-title');
   if (titleEl) titleEl.textContent = `// ${t.label} · ${dev.name || '—'}`;
   const body = overlay.querySelector('.m002-detail-body');
-  if (body) {
-    body.innerHTML = `
-      <div class="m002-detail-placeholder">
-        <div class="m002-detail-ph-title">DETAIL VIEW</div>
-        <div class="m002-detail-ph-sub">v2.21.0 — Grundgerüst</div>
-        <div class="m002-detail-ph-hint">Element-Render und Ports folgen in v2.21.1</div>
-      </div>
+  if (!body) return;
+  body.innerHTML = renderDetailBody(s, dev, t);
+}
+
+function renderDetailBody(s, dev, t) {
+  const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
+  const uplinks = cls.filter((c) => c.info.kind === 'uplink');
+  const access  = cls.filter((c) => c.info.kind === 'access');
+
+  const D = DETAIL;
+  const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
+  const upCount = Math.min(D.maxCols, uplinks.length);
+  const acCols  = Math.min(D.maxCols, Math.max(1, access.length));
+  const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
+  const upW     = rowW(upCount);
+  const acW     = access.length ? rowW(acCols) : 0;
+  const innerW  = Math.max(D.device.w, upW, acW);
+  const totalW  = innerW + D.pad * 2;
+
+  const upRowH  = uplinks.length ? D.port.h + D.vgap : 0;
+  const acRowsH = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
+  const totalH  = D.pad + upRowH + D.device.h + acRowsH + D.pad;
+
+  const cx     = totalW / 2;
+  const devX   = cx - D.device.w / 2;
+  const devY   = D.pad + upRowH;
+  const upY    = D.pad;
+  const acStartY = devY + D.device.h + D.vgap;
+
+  const portSvg = (entry, x, y) => {
+    const { p, info } = entry;
+    const occ = info.occupied;
+    const firstV = (p.vlans || [])[0];
+    const stripe = occ ? (firstV ? vlanColor(s, firstV) : t.accent) : '#2a2a36';
+    const stroke = occ ? t.accent : '#2a2a36';
+    const dash   = occ ? '' : ' stroke-dasharray="4 3"';
+    const peerLine = (occ && info.peer)
+      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 10}" text-anchor="middle">→ ${escSvg((info.peer.name || '').slice(0, 9))}</text>`
+      : '';
+    return `
+      <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="--accent:${t.accent}">
+        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
+        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="6" fill="${stripe}"/>
+        <text class="m002-detail-port-num" x="${D.port.w / 2}" y="${D.port.h / 2 + 4}" text-anchor="middle">${p.n}</text>
+        ${peerLine}
+      </g>
     `;
+  };
+
+  let inner = '';
+
+  // Section labels
+  if (uplinks.length) {
+    inner += `<text class="m002-detail-section-label" x="${cx}" y="${D.pad - 16}" text-anchor="middle">UPLINKS · ${uplinks.length}</text>`;
   }
+  if (access.length) {
+    inner += `<text class="m002-detail-section-label" x="${cx}" y="${acStartY - 16}" text-anchor="middle">ACCESS · ${access.length}</text>`;
+  }
+
+  // Device box (centered)
+  inner += `
+    <g class="m002-detail-device" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
+      <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.6"/>
+      <text class="m002-detail-dev-type" x="20" y="26">${t.label}</text>
+      <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${D.device.h / 2 + 4}" text-anchor="middle">${escSvg(dev.name || '')}</text>
+      ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${D.device.h / 2 + 28}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
+    </g>
+  `;
+
+  // Uplink row (centered above device)
+  if (uplinks.length) {
+    const startX = cx - upW / 2;
+    uplinks.slice(0, D.maxCols).forEach((c, i) => {
+      inner += portSvg(c, startX + i * (D.port.w + D.gap), upY);
+    });
+  }
+
+  // Access grid (multi-row, centered) below device
+  if (access.length) {
+    for (let r = 0; r < acRows; r++) {
+      const slice = access.slice(r * D.maxCols, (r + 1) * D.maxCols);
+      const startX = cx - rowW(slice.length) / 2;
+      slice.forEach((c, i) => {
+        inner += portSvg(c, startX + i * (D.port.w + D.gap), acStartY + r * (D.port.h + D.gap));
+      });
+    }
+  }
+
+  return `
+    <svg class="m002-detail-svg" viewBox="0 0 ${totalW} ${totalH}" preserveAspectRatio="xMidYMid meet">
+      ${inner}
+    </svg>
+  `;
 }
 
 // Smooth viewport tween for enter/exitDetailView. Cancels any running tween.
@@ -4820,11 +4935,20 @@ const MOD002_CSS = `
 .m002-detail-back-glyph{font-size:14px;line-height:1;}
 .m002-detail-title{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:#9aa0a8;}
 .m002-detail-spacer{flex:1;}
-.m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;}
-.m002-detail-placeholder{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;color:#5a5f6e;}
-.m002-detail-ph-title{font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:3px;color:#7a7f8e;}
-.m002-detail-ph-sub{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;color:#5a5f6e;}
-.m002-detail-ph-hint{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;color:#3a3a44;}
+.m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
+.m002-detail-svg{display:block;width:100%;height:100%;max-width:100%;max-height:100%;}
+.m002-detail-section-label{font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2.4px;fill:#5a5f6e;}
+.m002-detail-device{filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 16px var(--accent));}
+.m002-detail-dev-bg{}
+.m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2.2px;fill:var(--accent);opacity:.85;}
+.m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:600;fill:#f5f3ff;letter-spacing:.8px;}
+.m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:13px;fill:#9aa0a8;letter-spacing:.8px;}
+.m002-detail-port{cursor:pointer;}
+.m002-detail-port-box{transition:filter .15s,stroke .15s;}
+.m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 10px var(--accent));}
+.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:14px;fill:#e8e8ee;letter-spacing:1px;font-weight:600;}
+.m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
+.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#9aa0a8;letter-spacing:.5px;}
 @media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
