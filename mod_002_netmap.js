@@ -4030,11 +4030,11 @@ function renderDetailBody(s, dev, t) {
   const upY    = upPad;
   const acStartY = devY + D.device.h + D.vgap;
 
-  // Per-port enter delay (animation cascade). Element finishes around 580ms,
+  // Per-port enter delay (animation cascade). Element finishes around 1500ms,
   // then ports stagger every PORT_STAGGER_MS. Stubs derive their delay from
   // the parent port via a CSS calc() so they always come last on a port.
-  const PORT_BASE_DELAY = 600;
-  const PORT_STAGGER_MS = 35;
+  const PORT_BASE_DELAY = 1600;
+  const PORT_STAGGER_MS = 40;
   let portIndex = 0;
 
   const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
@@ -4073,14 +4073,22 @@ function renderDetailBody(s, dev, t) {
 
     const enterDelay = PORT_BASE_DELAY + portIndex * PORT_STAGGER_MS;
     portIndex++;
-    const styleStr = `--accent:${t.accent};--enter-delay:${enterDelay}ms;transform-origin:${D.port.w / 2}px ${D.port.h / 2}px;`;
+    // Inner-wrapper holds the visual content. We animate the inner group's
+    // transform (scale) without touching the outer's SVG `transform="translate"`,
+    // which is the only thing keeping the port at its grid position. Without
+    // this split, a CSS scale on the outer group would clobber the translate
+    // and the port would render at (0,0).
+    const outerStyle = `--accent:${t.accent};--enter-delay:${enterDelay}ms;`;
+    const innerStyle = `transform-origin:${D.port.w / 2}px ${D.port.h / 2}px;`;
 
     return `
-      <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="${styleStr}">
+      <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="${outerStyle}">
         ${stubSvg}
-        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
-        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="5" fill="${stripe}"/>
-        ${labelSvg}
+        <g class="m002-detail-port-inner" style="${innerStyle}">
+          <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
+          <rect class="m002-detail-port-stripe" width="${D.port.w}" height="5" fill="${stripe}"/>
+          ${labelSvg}
+        </g>
       </g>
     `;
   };
@@ -5100,30 +5108,38 @@ const MOD002_CSS = `
 .m002-detail-svg{display:block;max-width:100%;max-height:100%;}
 
 /* Initial states for choreographed entry. Without these the elements pop in
-   visible at frame 0 before the keyframe animation overrides on .show. */
+   visible at frame 0 before the keyframe animation overrides on .show.
+   Note: the *inner* wrappers carry the scale; the outer groups keep their
+   SVG translate untouched so the port grid stays in place. */
 .m002-detail-device-inner{transform:scale(0.01,0.06);opacity:0;}
-.m002-detail-overlay .m002-detail-port{transform:scale(0.6);opacity:0;}
+.m002-detail-overlay .m002-detail-port-inner{transform:scale(0.6);opacity:0;}
 .m002-detail-overlay .m002-detail-stub{opacity:0;}
 
+/* Element entry choreography (1500ms total, 80ms lead-in delay):
+     0–500ms   point appears, then vertical line grows to full height
+     500–700ms HOLD — same scale, no motion (200ms breath)
+     700–1500ms horizontal expansion to full width (800ms)
+   Percentages map 33%→500ms, 47%→700ms, 100%→1500ms. */
 @keyframes m002-detail-elem-emerge{
   0%   {transform:scale(0.01,0.06);opacity:0;}
-  10%  {transform:scale(0.01,0.06);opacity:1;}
-  32%  {transform:scale(0.01,1);    opacity:1;}
-  100% {transform:scale(1,1);       opacity:1;}
+  5%   {transform:scale(0.01,0.06);opacity:1;}
+  33%  {transform:scale(0.01,1);   opacity:1;}
+  47%  {transform:scale(0.01,1);   opacity:1;}
+  100% {transform:scale(1,1);      opacity:1;}
 }
 @keyframes m002-detail-port-pop{
-  0%   {transform:scale(0.6);opacity:0;}
+  0%   {transform:scale(0.6); opacity:0;}
   60%  {transform:scale(1.08);opacity:1;}
-  100% {transform:scale(1);  opacity:1;}
+  100% {transform:scale(1);   opacity:1;}
 }
 @keyframes m002-detail-stub-fade{
   0%   {opacity:0;}
   100% {opacity:1;}
 }
 
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 500ms cubic-bezier(0.5,0,0.2,1) 80ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port{animation:m002-detail-port-pop 320ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,600ms);}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 360ms ease-out forwards;animation-delay:calc(var(--enter-delay,600ms) + 240ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1500ms cubic-bezier(0.4,0,0.2,1) 80ms forwards;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 320ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1600ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 380ms ease-out forwards;animation-delay:calc(var(--enter-delay,1600ms) + 260ms);}
 .m002-detail-device{cursor:pointer;}
 .m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
 .m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
@@ -5141,8 +5157,8 @@ const MOD002_CSS = `
 .m002-detail-stub{pointer-events:none;}
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}
-  .m002-detail-device-inner,.m002-detail-port,.m002-detail-stub,.m002-detail-head{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}
+  .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head{transform:none!important;opacity:1!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
 `;
