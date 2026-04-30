@@ -2550,7 +2550,13 @@ function openInspector(s) {
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
       el.addEventListener('input', () => updateDeviceField(s, dev, el));
-      el.addEventListener('change', () => updateDeviceField(s, dev, el));
+      el.addEventListener('change', () => {
+        updateDeviceField(s, dev, el);
+        // Commit-only refresh for the port count: rebuilds the port table to
+        // match the new size. We skip on 'input' to avoid clobbering focus
+        // mid-keystroke; 'type' already re-opens itself inside the handler.
+        if (el.dataset.f === 'ports') openInspector(s);
+      });
     });
     body.querySelectorAll('[data-port]').forEach((el) => {
       el.addEventListener('input', () => {
@@ -3034,6 +3040,11 @@ function updateLinkField(s, link, el) {
   link[el.dataset.f] = el.value;
   redrawLink(s, link);
   schedSave(s);
+  // Live-refresh: the VLAN picker and the link summary depend on the new port
+  // selection, so rebuild the inspector immediately. All [data-f] elements in
+  // the link inspector are <select>, so this only fires on commit (no focus
+  // loss mid-typing).
+  openInspector(s);
 }
 
 function deleteSelected(s) {
