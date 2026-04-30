@@ -4030,6 +4030,13 @@ function renderDetailBody(s, dev, t) {
   const upY    = upPad;
   const acStartY = devY + D.device.h + D.vgap;
 
+  // Per-port enter delay (animation cascade). Element finishes around 580ms,
+  // then ports stagger every PORT_STAGGER_MS. Stubs derive their delay from
+  // the parent port via a CSS calc() so they always come last on a port.
+  const PORT_BASE_DELAY = 600;
+  const PORT_STAGGER_MS = 35;
+  let portIndex = 0;
+
   const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
     const { p, info } = entry;
     const occ = info.occupied;
@@ -4064,8 +4071,12 @@ function renderDetailBody(s, dev, t) {
       }
     }
 
+    const enterDelay = PORT_BASE_DELAY + portIndex * PORT_STAGGER_MS;
+    portIndex++;
+    const styleStr = `--accent:${t.accent};--enter-delay:${enterDelay}ms;transform-origin:${D.port.w / 2}px ${D.port.h / 2}px;`;
+
     return `
-      <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="--accent:${t.accent}">
+      <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="${styleStr}">
         ${stubSvg}
         <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
         <rect class="m002-detail-port-stripe" width="${D.port.w}" height="5" fill="${stripe}"/>
@@ -4095,15 +4106,20 @@ function renderDetailBody(s, dev, t) {
   // detail view selects the device — the click handler shifts the class to
   // the active port when one is clicked, and back to the device on element
   // click. Without this the central element looks dormant on entry.
+  // The inner <g> exists so CSS can apply a scale animation around the
+  // device's center on entry without fighting the parent's translate().
   const nameY = dev.ip ? D.device.h / 2 + 4 : D.device.h / 2 + 10;
   const ipY   = D.device.h / 2 + 36;
   const devSelected = !s.portModalOpen || s.portModalOpen.deviceId !== dev.id;
+  const devInnerStyle = `transform-origin:${D.device.w / 2}px ${D.device.h / 2}px;`;
   inner += `
     <g class="m002-detail-device ${devSelected ? 'is-selected' : ''}" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
-      <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
-      <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
-      <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
-      ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
+      <g class="m002-detail-device-inner" style="${devInnerStyle}">
+        <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
+        <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
+        <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
+        ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
+      </g>
     </g>
   `;
 
@@ -5062,13 +5078,15 @@ const MOD002_CSS = `
 .m002-inspector::-webkit-scrollbar,.m002-ports-grid::-webkit-scrollbar{width:6px;}
 .m002-inspector::-webkit-scrollbar-thumb,.m002-ports-grid::-webkit-scrollbar-thumb{background:#1a1a22;}
 
-/* Detail-View animation. Three layers move together on entry:
-     • the overlay backdrop fades in
-     • the head bar slides down from -10px
-     • the SVG content scales up from 0.94 with a slight blur lift
-   On exit they reverse, but on a shorter duration so the map feels responsive
-   to the user wanting out. cubic-bezier(0.16,1,0.3,1) is the easeOutExpo
-   counterpart used in CSS land — pairs with the JS map-zoom easing. */
+/* Detail-View choreographed entry:
+     • backdrop fades in + blur builds up (~520ms)
+     • head bar slides down from -12px
+     • central element: pinpoint → vertical line → expand horizontally
+       (~500ms total, runs over phases inside one keyframe set)
+     • ports pop in one-by-one from the centre (delay = base + i*stagger)
+     • port stubs fade in last, each one gated by its own port's delay
+   Exit reuses the overlay opacity transition only; individual elements
+   fade out implicitly with the parent so the exit feels snappier. */
 .m002-detail-overlay{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 0%,rgba(13,13,20,0.96) 0%,rgba(6,6,10,0.985) 70%);opacity:0;transition:opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);pointer-events:auto;backdrop-filter:blur(0px);-webkit-backdrop-filter:blur(0px);}
 .m002-detail-overlay.m002-detail-overlay-show{opacity:1;transition:opacity ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1),backdrop-filter ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1),-webkit-backdrop-filter ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
 .m002-detail-head{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #1a1a22;background:rgba(8,8,14,0.92);transform:translateY(-12px);opacity:0;transition:transform ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1),opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);}
@@ -5079,8 +5097,33 @@ const MOD002_CSS = `
 .m002-detail-title{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:#9aa0a8;}
 .m002-detail-spacer{flex:1;}
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
-.m002-detail-svg{display:block;max-width:100%;max-height:100%;transform:scale(0.94);opacity:0;transform-origin:50% 50%;transition:transform ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1),opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-svg{transform:scale(1);opacity:1;transition:transform ${DETAIL_ANIM_MS + 60}ms cubic-bezier(0.16,1,0.3,1) 100ms,opacity ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1) 100ms;}
+.m002-detail-svg{display:block;max-width:100%;max-height:100%;}
+
+/* Initial states for choreographed entry. Without these the elements pop in
+   visible at frame 0 before the keyframe animation overrides on .show. */
+.m002-detail-device-inner{transform:scale(0.01,0.06);opacity:0;}
+.m002-detail-overlay .m002-detail-port{transform:scale(0.6);opacity:0;}
+.m002-detail-overlay .m002-detail-stub{opacity:0;}
+
+@keyframes m002-detail-elem-emerge{
+  0%   {transform:scale(0.01,0.06);opacity:0;}
+  10%  {transform:scale(0.01,0.06);opacity:1;}
+  32%  {transform:scale(0.01,1);    opacity:1;}
+  100% {transform:scale(1,1);       opacity:1;}
+}
+@keyframes m002-detail-port-pop{
+  0%   {transform:scale(0.6);opacity:0;}
+  60%  {transform:scale(1.08);opacity:1;}
+  100% {transform:scale(1);  opacity:1;}
+}
+@keyframes m002-detail-stub-fade{
+  0%   {opacity:0;}
+  100% {opacity:1;}
+}
+
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 500ms cubic-bezier(0.5,0,0.2,1) 80ms forwards;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port{animation:m002-detail-port-pop 320ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,600ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 360ms ease-out forwards;animation-delay:calc(var(--enter-delay,600ms) + 240ms);}
 .m002-detail-device{cursor:pointer;}
 .m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
 .m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
@@ -5097,8 +5140,9 @@ const MOD002_CSS = `
 .m002-detail-port-name{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-stub{pointer-events:none;}
 @media (prefers-reduced-motion: reduce){
-  .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay .m002-detail-svg,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-svg{transition:none!important;}
-  .m002-detail-svg,.m002-detail-head{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}
+  .m002-detail-device-inner,.m002-detail-port,.m002-detail-stub,.m002-detail-head{transform:none!important;opacity:1!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
 `;
