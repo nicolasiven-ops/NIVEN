@@ -851,6 +851,7 @@ function bindBoard(s) {
       snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
       s.drag = { kind: 'stack', id: st.id, dx: st.x - w.x, dy: st.y - w.y };
+      s.host.classList.add('m002-dragging');
       e.preventDefault();
       return;
     }
@@ -863,6 +864,7 @@ function bindBoard(s) {
       snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
       s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y };
+      s.host.classList.add('m002-dragging');
       e.preventDefault();
       return;
     }
@@ -1046,6 +1048,7 @@ function bindBoard(s) {
       if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
     }
     s.drag = null;
+    s.host.classList.remove('m002-dragging');
   };
 
   const onDblClick = (e) => {
@@ -2078,6 +2081,7 @@ function drawLagLink(s, p) {
     }
   }
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
+  inner += `<path class="m002-link-flow" d="${path.d}"/>`;
   g.innerHTML = inner;
   s.gLinks.appendChild(g);
 }
@@ -2214,6 +2218,9 @@ function drawLink(s, link) {
       inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(lbl)}</text>`;
     }
   }
+  // Flow overlay — animated only when this link is "incident" to the current
+  // selection (see applyIncidentFlow). Hidden by default, no perf cost when idle.
+  inner += `<path class="m002-link-flow" d="${base.d}"/>`;
   g.innerHTML = inner;
   s.gLinks.appendChild(g);
 }
@@ -2275,7 +2282,10 @@ function redrawLink(s, link) {
   if (absorbed.has(link.id)) return;
   invalidateEdgeSlots(s);
   drawLink(s, link);
-  if (s.selected?.kind === 'link' && s.selected.id === link.id) markSelected(s);
+  // Always reapply selection / incident-flow state — the new <g> has none of
+  // those classes yet, and applyIncidentFlow() needs to re-flag this redrawn
+  // link if it belongs to the active selection.
+  markSelected(s);
 }
 
 // Redraw any LAG-pair line that this device participates in. Only drawn when
@@ -2302,7 +2312,9 @@ function updateLagPairsFor(s, deviceId) {
       }
     });
   });
-  if (s.selected?.kind === 'lag') markSelected(s);
+  // Always reapply — same reason as redrawLink: incident-flow needs the
+  // freshly drawn laglink groups re-flagged.
+  markSelected(s);
 }
 
 // =============================================================================
@@ -2324,6 +2336,7 @@ function deselect(s) {
 function markSelected(s) {
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   refreshMultiSelectClasses(s);
+  applyIncidentFlow(s);
   if (!s.selected) return;
   if (s.selected.kind === 'device') {
     s.gDevices.querySelector(`[data-device-id="${s.selected.id}"]`)?.classList.add('m002-selected');
@@ -2337,6 +2350,75 @@ function markSelected(s) {
     // Highlight the LAG-bundle on canvas (rendered as a single laglink path)
     s.gLinks.querySelector(`[data-laglink-id="${s.selected.id}"]`)?.classList.add('m002-selected');
   }
+}
+
+// Animated traffic pulse on every link incident to the current selection.
+// Direction (`data-flow-from`) is set so the pulse always travels *away* from
+// the selected node — picked up by CSS via animation-direction. Cleared and
+// reapplied on every selection change / partial redraw via markSelected().
+function applyIncidentFlow(s) {
+  s.gLinks.querySelectorAll('.m002-link-incident').forEach((el) => {
+    el.classList.remove('m002-link-incident');
+    el.removeAttribute('data-flow-from');
+  });
+  if (!s.selected) return;
+
+  const flag = (g, side) => {
+    if (!g) return;
+    g.classList.add('m002-link-incident');
+    if (side) g.setAttribute('data-flow-from', side);
+  };
+
+  const sel = s.selected;
+  if (sel.kind === 'link') {
+    flag(s.gLinks.querySelector(`[data-link-id="${sel.id}"]`), null);
+    return;
+  }
+  if (sel.kind === 'lag') {
+    const [stackId, lagId] = String(sel.id).split('|');
+    const own = s.gLinks.querySelector(`[data-laglink-id="${stackId}|${lagId}"]`);
+    flag(own, 'from');
+    // Only one side of the pair owns the rendered laglink — also flag the peer
+    // selector for completeness in case rendering picked the other end.
+    const stack = s.stacks.find((st) => st.id === stackId);
+    const lag = stack?.lags?.find((l) => l.id === lagId);
+    if (lag?.counterpart?.lagId) {
+      const peer = s.gLinks.querySelector(`[data-laglink-id="${lag.counterpart.stackId}|${lag.counterpart.lagId}"]`);
+      flag(peer, 'from');
+    }
+    return;
+  }
+
+  // Resolve which device-ids belong to the selection (a stack expands to its members).
+  const memberIds = new Set();
+  if (sel.kind === 'device') {
+    memberIds.add(sel.id);
+  } else if (sel.kind === 'stack') {
+    const st = findStackById(s, sel.id);
+    if (st) st.members.forEach((m) => memberIds.add(m));
+    memberIds.add(sel.id); // a collapsed stack is its own endpoint
+  }
+  if (!memberIds.size) return;
+
+  s.gLinks.querySelectorAll('[data-link-id]').forEach((g) => {
+    const link = s.links.find((l) => l.id === g.getAttribute('data-link-id'));
+    if (!link) return;
+    if (memberIds.has(link.from)) flag(g, 'from');
+    else if (memberIds.has(link.to)) flag(g, 'to');
+  });
+  s.gLinks.querySelectorAll('[data-laglink-id]').forEach((g) => {
+    const [stackId, lagId] = g.getAttribute('data-laglink-id').split('|');
+    const stack = s.stacks.find((st) => st.id === stackId);
+    if (!stack) return;
+    const lag = stack.lags?.find((l) => l.id === lagId);
+    const peerInfo = lag?.counterpart?.lagId
+      ? findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId)
+      : null;
+    const onSelf = stack.members.some((m) => memberIds.has(m)) || memberIds.has(stack.id);
+    const onPeer = peerInfo?.stack?.members?.some((m) => memberIds.has(m)) || (peerInfo?.stack && memberIds.has(peerInfo.stack.id));
+    if (onSelf) flag(g, 'from');
+    else if (onPeer) flag(g, 'to');
+  });
 }
 
 function renderInspectorVlanPickers(s) {
@@ -4363,6 +4445,23 @@ const MOD002_CSS = `
 
 .m002-link-line{stroke-width:1.4;fill:none;}
 .m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
+/* Traffic-pulse on links incident to the current selection. Idle paths are
+   inert (transparent stroke + opacity 0). When the parent group gets the
+   .m002-link-incident class a single 6-unit dash chases along a 92-unit gap,
+   giving a small bright "packet" that travels along the link. data-flow-from
+   reverses direction so the pulse always heads *outward* from the selected
+   node regardless of how the underlying link was authored. */
+.m002-link-flow{fill:none;stroke:transparent;stroke-width:2.4;stroke-dasharray:6 92;stroke-linecap:round;pointer-events:none;opacity:0;}
+.m002-link.m002-link-incident .m002-link-flow{stroke:#ffffff;opacity:.95;filter:drop-shadow(0 0 3px #fff) drop-shadow(0 0 7px rgba(255,255,255,.55));animation:m002-link-flow 1.5s linear infinite;}
+.m002-link.m002-link-incident[data-flow-from="to"] .m002-link-flow{animation-direction:reverse;}
+@keyframes m002-link-flow{from{stroke-dashoffset:98;}to{stroke-dashoffset:0;}}
+/* Pause while dragging a device/stack — onMove rebuilds link DOM every
+   mousemove and an unpaused animation would visibly snap back to its start
+   each frame. Frozen pulse near source reads as a stable selection bracket. */
+.m002-host.m002-dragging .m002-link-flow{animation-play-state:paused;}
+@media (prefers-reduced-motion: reduce){
+  .m002-link.m002-link-incident .m002-link-flow{animation:none;opacity:0;}
+}
 .m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
 .m002-link.m002-selected .m002-link-line{stroke:#ffffff;stroke-width:2.4;filter:drop-shadow(0 0 4px #fff) drop-shadow(0 0 10px rgba(255,255,255,0.65));}
