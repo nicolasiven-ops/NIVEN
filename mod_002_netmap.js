@@ -524,6 +524,7 @@ function createState(stage, ctx) {
     stacks: [],    // { id, name, members: [deviceId,...], x, y, expanded, lags:[], stackLinks:[{id,fromDevice,toDevice,fromPort,toPort}] } — VLANs are derived from members
     vlanRegistry: [],  // [{ id: string, name?: string }] — declared VLANs in this network
     portModalOpen: null, // { deviceId, portN } or null
+    detailDeviceId: null, // when set, the dedicated Detail-View overlay shows this device
     selected: null,// { kind: 'device'|'link'|'stack', id }
     multiSelected: new Set(), // additional selected targets — keys "device:ID" / "stack:ID"
 
@@ -647,6 +648,15 @@ function buildDOM(s) {
         <span class="m002-stat-links">0 LINKS</span>
         <span class="m002-stat-sep">·</span>
         <span class="m002-stat-mode">SELECT</span>
+      </div>
+
+      <div class="m002-detail-overlay" hidden>
+        <div class="m002-detail-head">
+          <button type="button" class="m002-detail-back" title="Back to map (ESC)"><span class="m002-detail-back-glyph">←</span><span>MAP</span></button>
+          <span class="m002-detail-title">// DETAIL</span>
+          <span class="m002-detail-spacer"></span>
+        </div>
+        <div class="m002-detail-body"></div>
       </div>
 
     </main>
@@ -784,6 +794,9 @@ function buildDOM(s) {
   const lagModal = host.querySelector('.m002-lag-modal');
   lagModal.querySelector('.m002-lag-modal-close')?.addEventListener('click', () => closeLagModal(s));
   lagModal.addEventListener('click', (e) => { if (e.target === lagModal) closeLagModal(s); });
+
+  const detailOverlay = host.querySelector('.m002-detail-overlay');
+  detailOverlay?.querySelector('.m002-detail-back')?.addEventListener('click', () => exitDetailView(s));
 
   // Background click → deselect, but only on a true click (not a pan-drag).
   // Actual deselect call lives in the pan onUp handler below — it checks
@@ -1060,6 +1073,11 @@ function bindBoard(s) {
         e.preventDefault();
         return;
       }
+      if (dev) {
+        enterDetailView(s, dev.id);
+        e.preventDefault();
+        return;
+      }
     }
     const stackEl = e.target.closest('[data-stack-id]');
     if (!stackEl) return;
@@ -1187,6 +1205,7 @@ function bindKeyboard(s) {
       const lagModal = s.host?.querySelector('.m002-lag-modal');
       if (lagModal && !lagModal.hidden) { closeLagModal(s); return; }
       if (s.portModalOpen) closePortModal(s);
+      else if (s.detailDeviceId) exitDetailView(s);
       else if (s.linkMode) toggleLinkMode(s);
       else if (s.deleteMode) toggleDeleteMode(s);
       else deselect(s);
@@ -3791,6 +3810,95 @@ function setMode(s, txt) {
 }
 
 // =============================================================================
+// Detail-View — drill-down on a single element.
+//   Doubleclick a device → smooth-zoom to it → dedicated overlay shows the
+//   element large with all its ports (uplinks top / access bottom). ESC or the
+//   "← MAP" button restores the prior viewport. Body content is rendered by
+//   renderDetailView() and grows in later versions (v2.21.1+).
+// =============================================================================
+const DETAIL_ANIM_MS = 320;
+const DETAIL_TARGET_ZOOM = 1.6;
+
+function enterDetailView(s, deviceId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  if (s.detailDeviceId === deviceId) return;
+  s._viewBeforeDetail = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+  s.detailDeviceId = deviceId;
+  const rect = s.svg.getBoundingClientRect();
+  const targetZoom = DETAIL_TARGET_ZOOM;
+  const targetX = rect.width / 2 - dev.x * targetZoom;
+  const targetY = rect.height / 2 - dev.y * targetZoom;
+  animateView(s, { x: targetX, y: targetY, zoom: targetZoom }, DETAIL_ANIM_MS);
+  const overlay = s.host.querySelector('.m002-detail-overlay');
+  if (overlay) {
+    renderDetailView(s);
+    overlay.hidden = false;
+    // Force a style/layout flush before flipping the show class so the
+    // opacity transition actually runs (rAF can miss when the tab is
+    // backgrounded; reading offsetHeight is reliable in every environment).
+    void overlay.offsetHeight;
+    overlay.classList.add('m002-detail-overlay-show');
+  }
+  setMode(s, 'DETAIL');
+}
+
+function exitDetailView(s) {
+  if (!s.detailDeviceId) return;
+  s.detailDeviceId = null;
+  const overlay = s.host.querySelector('.m002-detail-overlay');
+  if (overlay) {
+    overlay.classList.remove('m002-detail-overlay-show');
+    setTimeout(() => { if (!s.detailDeviceId) overlay.hidden = true; }, DETAIL_ANIM_MS);
+  }
+  if (s._viewBeforeDetail) {
+    animateView(s, s._viewBeforeDetail, DETAIL_ANIM_MS);
+    s._viewBeforeDetail = null;
+  }
+  setMode(s, s.linkMode ? 'LINK · pick first node' : (s.deleteMode ? 'DELETE · click anything to remove' : 'SELECT'));
+}
+
+function renderDetailView(s) {
+  const overlay = s.host.querySelector('.m002-detail-overlay');
+  if (!overlay) return;
+  const dev = s.devices.find((d) => d.id === s.detailDeviceId);
+  if (!dev) return;
+  const t = typeOf(dev.type);
+  const titleEl = overlay.querySelector('.m002-detail-title');
+  if (titleEl) titleEl.textContent = `// ${t.label} · ${dev.name || '—'}`;
+  const body = overlay.querySelector('.m002-detail-body');
+  if (body) {
+    body.innerHTML = `
+      <div class="m002-detail-placeholder">
+        <div class="m002-detail-ph-title">DETAIL VIEW</div>
+        <div class="m002-detail-ph-sub">v2.21.0 — Grundgerüst</div>
+        <div class="m002-detail-ph-hint">Element-Render und Ports folgen in v2.21.1</div>
+      </div>
+    `;
+  }
+}
+
+// Smooth viewport tween for enter/exitDetailView. Cancels any running tween.
+// Does NOT call schedSave — the user didn't intend to move the map.
+function animateView(s, target, durationMs) {
+  if (s._viewAnimRaf) cancelAnimationFrame(s._viewAnimRaf);
+  const start = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+  const t0 = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const step = (now) => {
+    const t = Math.min(1, (now - t0) / durationMs);
+    const k = ease(t);
+    s.view.x = start.x + (target.x - start.x) * k;
+    s.view.y = start.y + (target.y - start.y) * k;
+    s.view.zoom = start.zoom + (target.zoom - start.zoom) * k;
+    applyView(s);
+    if (t < 1) s._viewAnimRaf = requestAnimationFrame(step);
+    else { s._viewAnimRaf = null; }
+  };
+  s._viewAnimRaf = requestAnimationFrame(step);
+}
+
+// =============================================================================
 // Persistence (Supabase: m002_maps, RLS-scoped to auth.uid())
 // =============================================================================
 const ACTIVE_KEY    = (s) => `niven:m002:active:${s.project?.id || s.code}`;
@@ -4703,6 +4811,21 @@ const MOD002_CSS = `
 
 .m002-inspector::-webkit-scrollbar,.m002-ports-grid::-webkit-scrollbar{width:6px;}
 .m002-inspector::-webkit-scrollbar-thumb,.m002-ports-grid::-webkit-scrollbar-thumb{background:#1a1a22;}
+
+.m002-detail-overlay{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 0%,rgba(13,13,20,0.96) 0%,rgba(6,6,10,0.985) 70%);opacity:0;transition:opacity ${DETAIL_ANIM_MS}ms ease-out;pointer-events:auto;}
+.m002-detail-overlay.m002-detail-overlay-show{opacity:1;}
+.m002-detail-head{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #1a1a22;background:rgba(8,8,14,0.92);}
+.m002-detail-back{display:inline-flex;align-items:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;cursor:pointer;transition:.15s;}
+.m002-detail-back:hover{border-color:#ff003c;color:#ff003c;background:rgba(255,0,60,0.06);}
+.m002-detail-back-glyph{font-size:14px;line-height:1;}
+.m002-detail-title{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:#9aa0a8;}
+.m002-detail-spacer{flex:1;}
+.m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;}
+.m002-detail-placeholder{display:flex;flex-direction:column;align-items:center;gap:10px;text-align:center;color:#5a5f6e;}
+.m002-detail-ph-title{font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:3px;color:#7a7f8e;}
+.m002-detail-ph-sub{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;color:#5a5f6e;}
+.m002-detail-ph-hint{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;color:#3a3a44;}
+@media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
 // =============================================================================
