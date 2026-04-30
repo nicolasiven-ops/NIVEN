@@ -719,16 +719,6 @@ function buildDOM(s) {
       </div>
     </div>
 
-    <div class="m002-port-modal" hidden>
-      <div class="m002-port-panel">
-        <div class="m002-port-modal-head">
-          <span class="m002-port-modal-id">// PORT</span>
-          <button type="button" class="m002-port-modal-close" title="Close">×</button>
-        </div>
-        <div class="m002-port-modal-body"></div>
-      </div>
-    </div>
-
     <div class="m002-toast"></div>
   `;
   s.stage.appendChild(host);
@@ -819,10 +809,6 @@ function buildDOM(s) {
   s.activeLayer = 'physical';
 
 
-  const portModal = host.querySelector('.m002-port-modal');
-  portModal.querySelector('.m002-port-modal-close')?.addEventListener('click', () => closePortModal(s));
-  portModal.addEventListener('click', (e) => { if (e.target === portModal) closePortModal(s); });
-
   const lagModal = host.querySelector('.m002-lag-modal');
   lagModal.querySelector('.m002-lag-modal-close')?.addEventListener('click', () => closeLagModal(s));
   lagModal.addEventListener('click', (e) => { if (e.target === lagModal) closeLagModal(s); });
@@ -835,6 +821,14 @@ function buildDOM(s) {
   detailOverlay?.addEventListener('dblclick', (e) => {
     if (e.target.closest('[data-detail-stop]')) return;
     exitDetailView(s);
+  });
+  // Single click on a port in the detail view opens that port's detail in the
+  // inspector (right panel stays visible alongside the overlay).
+  detailOverlay?.addEventListener('click', (e) => {
+    const portEl = e.target.closest('[data-detail-port]');
+    if (!portEl || !s.detailDeviceId) return;
+    const portN = Number(portEl.dataset.detailPort);
+    if (Number.isFinite(portN)) openPortModal(s, s.detailDeviceId, portN);
   });
 
   // Background click → deselect, but only on a true click (not a pan-drag).
@@ -2383,6 +2377,12 @@ function updateLagPairsFor(s, deviceId) {
 // Selection + inspector
 // =============================================================================
 function select(s, kind, id) {
+  // Clear any port-focus that doesn't belong to the new selection. Without
+  // this, switching from one device to another would still show the previous
+  // device's port form.
+  if (s.portModalOpen && !(kind === 'device' && id === s.portModalOpen.deviceId)) {
+    s.portModalOpen = null;
+  }
   s.selected = { kind, id };
   markSelected(s);
   openInspector(s);
@@ -2390,6 +2390,7 @@ function select(s, kind, id) {
 
 function deselect(s) {
   s.selected = null;
+  s.portModalOpen = null;
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   clearMultiSelection(s);
   showInspectorEmpty(s);
@@ -2668,6 +2669,14 @@ function openInspector(s) {
   if (s.selected.kind === 'device') {
     const dev = s.devices.find((d) => d.id === s.selected.id);
     if (!dev) return;
+    // Port-focus mode: when a port on this device is being inspected, render
+    // the port detail body in place of the device form. Stale focus pointing
+    // at a now-removed port falls through to the regular device view.
+    if (s.portModalOpen?.deviceId === dev.id) {
+      const port = dev.ports.find((p) => p.n === s.portModalOpen.portN);
+      if (port) { openPortModal(s, dev.id, s.portModalOpen.portN); return; }
+      s.portModalOpen = null;
+    }
     const t = typeOf(dev.type);
     idEl.textContent = `// ${t.label}`;
     if (isReference(dev)) { renderReferenceInspector(s, dev, body); return; }
@@ -3313,15 +3322,23 @@ function counterpartFor(s, deviceId, portN) {
   return null;
 }
 
+// Port detail view. Lives inside the inspector panel (no longer a floating
+// modal). Setting s.portModalOpen + selecting the device routes openInspector
+// to render this body in place of the device form. Callers may invoke
+// openPortModal directly (e.g. from the detail-view port click); it ensures
+// the inspector context is right and renders.
 function openPortModal(s, deviceId, portN) {
   const dev = s.devices.find((d) => d.id === deviceId);
   if (!dev) return;
   const port = dev.ports.find((p) => p.n === portN);
   if (!port) return;
   s.portModalOpen = { deviceId, portN };
-  const modal = s.host.querySelector('.m002-port-modal');
-  const idEl = modal.querySelector('.m002-port-modal-id');
-  const body = modal.querySelector('.m002-port-modal-body');
+  if (!(s.selected?.kind === 'device' && s.selected.id === deviceId)) {
+    s.selected = { kind: 'device', id: deviceId };
+    markSelected(s);
+  }
+  const idEl = s.inspector.querySelector('.m002-insp-id');
+  const body = s.inspector.querySelector('.m002-insp-body');
   idEl.textContent = `// ${dev.name} · PORT ${port.n}`;
 
   const link = s.links.find((l) =>
@@ -3342,6 +3359,7 @@ function openPortModal(s, deviceId, portN) {
     : [];
 
   body.innerHTML = `
+    <button type="button" class="m002-port-back" data-pact="back">← ${escSvg(typeOf(dev.type).label)} · ${escSvg(dev.name || '')}</button>
     <label class="m002-field"><span>PORT NAME</span>
       <input class="m002-pmodal-name" value="${escAttr(port.name)}" placeholder="e.g. GE0/0/1"/>
     </label>
@@ -3570,9 +3588,7 @@ function openPortModal(s, deviceId, portN) {
     deletePort(s, deviceId, portN);
     closePortModal(s);
   });
-
-  modal.hidden = false;
-  setTimeout(() => body.querySelector('.m002-pmodal-name')?.focus(), 30);
+  body.querySelector('[data-pact="back"]')?.addEventListener('click', () => closePortModal(s));
 }
 
 function openLagModal(s, stackId, lagId) {
@@ -3711,9 +3727,12 @@ function closeLagModal(s) {
 }
 
 function closePortModal(s) {
-  const modal = s.host?.querySelector('.m002-port-modal');
-  if (modal) modal.hidden = true;
+  if (!s.portModalOpen) return;
   s.portModalOpen = null;
+  // Re-render the inspector for the underlying device. If the user has since
+  // selected something else, openInspector picks the right body for that.
+  if (s.selected) openInspector(s);
+  else showInspectorEmpty(s);
 }
 
 function deletePort(s, deviceId, portN) {
@@ -3862,6 +3881,12 @@ function enterDetailView(s, deviceId) {
   const dev = s.devices.find((d) => d.id === deviceId);
   if (!dev) return;
   if (s.detailDeviceId === deviceId) return;
+  // Make sure the inspector context matches what the overlay is showing — the
+  // user can click a port and see its detail next to the canvas without
+  // ambiguity about which device the port belongs to.
+  if (!(s.selected?.kind === 'device' && s.selected.id === deviceId)) {
+    select(s, 'device', deviceId);
+  }
   s._viewBeforeDetail = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   s.detailDeviceId = deviceId;
   const rect = s.svg.getBoundingClientRect();
@@ -3913,11 +3938,11 @@ function classifyDetailPort(s, dev, portN) {
 }
 
 const DETAIL = {
-  port: { w: 34, h: 40 },
-  gap: 4,
-  device: { w: 520, h: 130 },
-  vgap: 22,
-  pad: 36,
+  port: { w: 22, h: 26 },
+  gap: 3,
+  device: { w: 360, h: 90 },
+  vgap: 16,
+  pad: 24,
   maxCols: 24,
 };
 
@@ -4002,12 +4027,14 @@ function renderDetailBody(s, dev, t) {
   }
 
   // Device box (centered)
+  const nameY = dev.ip ? D.device.h / 2 + 1 : D.device.h / 2 + 5;
+  const ipY   = D.device.h / 2 + 18;
   inner += `
     <g class="m002-detail-device" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
-      <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.6"/>
-      <text class="m002-detail-dev-type" x="20" y="26">${t.label}</text>
-      <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${D.device.h / 2 + 4}" text-anchor="middle">${escSvg(dev.name || '')}</text>
-      ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${D.device.h / 2 + 28}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
+      <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
+      <text class="m002-detail-dev-type" x="14" y="18">${t.label}</text>
+      <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
+      ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
     </g>
   `;
 
@@ -4826,13 +4853,14 @@ const MOD002_CSS = `
 .m002-stack-member button{background:transparent;border:none;color:#9aa0a8;cursor:pointer;font-size:14px;line-height:1;padding:0;}
 .m002-stack-member button:hover{color:#ff003c;}
 
-.m002-port-modal{position:absolute;inset:0;background:rgba(4,4,8,0.7);display:flex;align-items:center;justify-content:center;z-index:100;backdrop-filter:blur(2px);}
+/* The LAG modal still uses .m002-port-panel + .m002-port-modal-head/-id
+   for its floating card. The PORT detail moved into the inspector panel, so
+   no backdrop / floating panel rules remain for it. */
 .m002-port-panel{background:#0a0a10;border:1px solid #ff003c;width:340px;max-width:calc(100% - 32px);padding:16px;display:flex;flex-direction:column;gap:12px;box-shadow:0 0 20px rgba(255,0,60,0.25);}
 .m002-port-modal-head{display:flex;justify-content:space-between;align-items:center;}
 .m002-port-modal-id{font-family:'Share Tech Mono',monospace;font-size:11px;color:#ff003c;letter-spacing:2px;}
-.m002-port-modal-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
-.m002-port-modal-close:hover{color:#ff003c;}
-.m002-port-modal-body{display:flex;flex-direction:column;gap:10px;}
+.m002-port-back{display:inline-flex;align-items:center;justify-content:flex-start;background:transparent;border:1px solid #1a1a22;color:#9aa0a8;padding:6px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;cursor:pointer;text-align:left;text-transform:uppercase;transition:.15s;}
+.m002-port-back:hover{border-color:#ff003c;color:#ff003c;background:rgba(255,0,60,0.06);}
 .m002-vlan-chips{display:flex;flex-wrap:wrap;gap:4px;min-height:24px;padding:4px;background:#06060a;border:1px solid #1a1a22;}
 .m002-vlan-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
 .m002-vlan-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
@@ -4969,18 +4997,18 @@ const MOD002_CSS = `
 .m002-detail-spacer{flex:1;}
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
 .m002-detail-svg{display:block;width:100%;height:100%;max-width:100%;max-height:100%;}
-.m002-detail-section-label{font-family:'Share Tech Mono',monospace;font-size:13px;letter-spacing:2.4px;fill:#5a5f6e;}
-.m002-detail-device{filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 16px var(--accent));}
+.m002-detail-section-label{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;fill:#5a5f6e;}
+.m002-detail-device{filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 8px var(--accent));}
 .m002-detail-dev-bg{}
-.m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2.2px;fill:var(--accent);opacity:.85;}
-.m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:26px;font-weight:600;fill:#f5f3ff;letter-spacing:.8px;}
-.m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:13px;fill:#9aa0a8;letter-spacing:.8px;}
+.m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.8px;fill:var(--accent);opacity:.85;}
+.m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;fill:#f5f3ff;letter-spacing:.6px;}
+.m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:10px;fill:#9aa0a8;letter-spacing:.6px;}
 .m002-detail-port{cursor:pointer;}
 .m002-detail-port-box{transition:filter .15s,stroke .15s;}
-.m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 10px var(--accent));}
-.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#e8e8ee;letter-spacing:.4px;font-weight:600;}
+.m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 6px var(--accent));}
+.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#e8e8ee;letter-spacing:.3px;font-weight:600;}
 .m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
-.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#9aa0a8;letter-spacing:.4px;font-weight:600;}
+.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:6px;fill:#9aa0a8;letter-spacing:.3px;font-weight:600;}
 @media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
