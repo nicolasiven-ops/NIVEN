@@ -823,8 +823,10 @@ function buildDOM(s) {
     exitDetailView(s);
   });
   // Single-click routing inside the detail overlay:
-  //   • port  → highlight it + open its detail in the inspector
-  //   • device → drop the port focus (back to device inspector) + clear highlight
+  //   • port  → highlight the port (and drop the central element's selection)
+  //              + open the port's detail in the inspector
+  //   • device → drop the port focus (back to device inspector) + reselect
+  //              the central element so the user sees what's currently active
   // The dblclick handler above still gets the *bg* exit because [data-detail-stop]
   // sits on both ports and the device, so neither single-click bubbles into bg.
   detailOverlay?.addEventListener('click', (e) => {
@@ -833,12 +835,14 @@ function buildDOM(s) {
       const portN = Number(portEl.dataset.detailPort);
       if (!Number.isFinite(portN)) return;
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
       portEl.classList.add('is-selected');
       openPortModal(s, s.detailDeviceId, portN);
       return;
     }
     if (e.target.closest('.m002-detail-device') && s.detailDeviceId) {
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      detailOverlay.querySelector('.m002-detail-device')?.classList.add('is-selected');
       if (s.portModalOpen) closePortModal(s);
     }
   });
@@ -3741,10 +3745,11 @@ function closeLagModal(s) {
 function closePortModal(s) {
   if (!s.portModalOpen) return;
   s.portModalOpen = null;
-  // Drop the visual port selection in the detail overlay (if any) so the
-  // highlight matches the inspector state when the user came in via ESC or
-  // the back button rather than clicking the central element.
+  // Sync the detail overlay's visual selection to the inspector state when
+  // the user came in via ESC or the back button rather than clicking the
+  // central element. Drop the port highlight, restore the device's.
   s.host?.querySelectorAll('.m002-detail-overlay .m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+  s.host?.querySelector('.m002-detail-overlay .m002-detail-device')?.classList.add('is-selected');
   // Re-render the inspector for the underlying device. If the user has since
   // selected something else, openInspector picks the right body for that.
   if (s.selected) openInspector(s);
@@ -4010,7 +4015,12 @@ function renderDetailBody(s, dev, t) {
   const upY    = D.pad;
   const acStartY = devY + D.device.h + D.vgap;
 
-  const portSvg = (entry, x, y) => {
+  // Stub line lengths — fade outward toward the page edge from each occupied
+  // port. We use a pair of object-bounding-box gradients (one fading up,
+  // one down) defined once at the SVG root.
+  const STUB_LEN = Math.max(12, D.vgap - 8);
+
+  const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
     const { p, info } = entry;
     const occ = info.occupied;
     const firstV = (p.vlans || [])[0];
@@ -4018,27 +4028,68 @@ function renderDetailBody(s, dev, t) {
     const stroke = occ ? t.accent : '#2a2a36';
     const dash   = occ ? '' : ' stroke-dasharray="4 3"';
     const peerAbbr = (occ && info.peer) ? abbrPeer(info.peer) : '';
-    const numY = peerAbbr ? D.port.h / 2 + 2 : D.port.h / 2 + 8;
-    const peerLine = peerAbbr
-      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 10}" text-anchor="middle">${escSvg(peerAbbr)}</text>`
-      : '';
+
+    // Empty ports: show port name (truncated) instead of the index. No
+    // number — the index is implicit from grid position; the name is the
+    // user-meaningful identifier ("GE0/0/12").
+    let labelSvg = '';
+    if (occ) {
+      const numY = peerAbbr ? D.port.h / 2 + 2 : D.port.h / 2 + 8;
+      labelSvg += `<text class="m002-detail-port-num" x="${D.port.w / 2}" y="${numY}" text-anchor="middle">${p.n}</text>`;
+      if (peerAbbr) labelSvg += `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 10}" text-anchor="middle">${escSvg(peerAbbr)}</text>`;
+    } else if (p.name) {
+      const trimmed = String(p.name).slice(0, 7);
+      labelSvg += `<text class="m002-detail-port-name" x="${D.port.w / 2}" y="${D.port.h / 2 + 4}" text-anchor="middle">${escSvg(trimmed)}</text>`;
+    }
+
+    // Stub: only on occupied ports. Drawn behind the box (via SVG order).
+    let stubSvg = '';
+    if (occ) {
+      const stubW = 1.4;
+      const stubX = D.port.w / 2 - stubW / 2;
+      if (dir === 'up') {
+        stubSvg = `<rect class="m002-detail-stub" x="${stubX}" y="${-STUB_LEN}" width="${stubW}" height="${STUB_LEN}" fill="url(#m002-stub-up)"/>`;
+      } else {
+        stubSvg = `<rect class="m002-detail-stub" x="${stubX}" y="${D.port.h}" width="${stubW}" height="${STUB_LEN}" fill="url(#m002-stub-down)"/>`;
+      }
+    }
+
     return `
       <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="--accent:${t.accent}">
+        ${stubSvg}
         <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
         <rect class="m002-detail-port-stripe" width="${D.port.w}" height="5" fill="${stripe}"/>
-        <text class="m002-detail-port-num" x="${D.port.w / 2}" y="${numY}" text-anchor="middle">${p.n}</text>
-        ${peerLine}
+        ${labelSvg}
       </g>
     `;
   };
 
-  let inner = '';
+  // Inline gradient defs for the port stubs — one fades from transparent at
+  // the page edge to solid where it meets the port; the other reverses. The
+  // stop-color uses the device's accent so the stubs visually tie to the
+  // central element.
+  let inner = `
+    <defs>
+      <linearGradient id="m002-stub-up" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="${t.accent}" stop-opacity="0"/>
+        <stop offset="1" stop-color="${t.accent}" stop-opacity="0.55"/>
+      </linearGradient>
+      <linearGradient id="m002-stub-down" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="${t.accent}" stop-opacity="0.55"/>
+        <stop offset="1" stop-color="${t.accent}" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+  `;
 
-  // Device box (centered)
+  // Device box (centered). Marked .is-selected by default since entering the
+  // detail view selects the device — the click handler shifts the class to
+  // the active port when one is clicked, and back to the device on element
+  // click. Without this the central element looks dormant on entry.
   const nameY = dev.ip ? D.device.h / 2 + 4 : D.device.h / 2 + 10;
   const ipY   = D.device.h / 2 + 36;
+  const devSelected = !s.portModalOpen || s.portModalOpen.deviceId !== dev.id;
   inner += `
-    <g class="m002-detail-device" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
+    <g class="m002-detail-device ${devSelected ? 'is-selected' : ''}" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
       <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
       <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
       <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
@@ -4050,7 +4101,7 @@ function renderDetailBody(s, dev, t) {
   if (uplinks.length) {
     const startX = cx - upW / 2;
     uplinks.slice(0, D.maxCols).forEach((c, i) => {
-      inner += portSvg(c, startX + i * (D.port.w + D.gap), upY);
+      inner += portSvg(c, startX + i * (D.port.w + D.gap), upY, 'up');
     });
   }
 
@@ -4060,7 +4111,7 @@ function renderDetailBody(s, dev, t) {
       const slice = access.slice(r * D.maxCols, (r + 1) * D.maxCols);
       const startX = cx - rowW(slice.length) / 2;
       slice.forEach((c, i) => {
-        inner += portSvg(c, startX + i * (D.port.w + D.gap), acStartY + r * (D.port.h + D.gap));
+        inner += portSvg(c, startX + i * (D.port.w + D.gap), acStartY + r * (D.port.h + D.gap), 'down');
       });
     }
   }
@@ -5010,6 +5061,8 @@ const MOD002_CSS = `
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
 .m002-detail-svg{display:block;max-width:100%;max-height:100%;}
 .m002-detail-device{cursor:pointer;}
+.m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
+.m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:3px;fill:var(--accent);opacity:.85;}
 .m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:34px;font-weight:600;fill:#f5f3ff;letter-spacing:1px;}
 .m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:18px;fill:#9aa0a8;letter-spacing:1px;}
@@ -5020,6 +5073,8 @@ const MOD002_CSS = `
 .m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:14px;fill:#e8e8ee;letter-spacing:.5px;font-weight:600;}
 .m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
 .m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
+.m002-detail-port-name{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
+.m002-detail-stub{pointer-events:none;}
 @media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
