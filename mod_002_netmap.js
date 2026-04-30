@@ -2081,8 +2081,11 @@ function drawLagLink(s, p) {
     }
   }
   inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
-  inner += `<path class="m002-link-flow" d="${path.d}"/>`;
   g.innerHTML = inner;
+  // Flow path is injected on-demand by applyIncidentFlow() — store the path
+  // shape here so the injection has nothing to recompute. No idle <path> means
+  // no Firefox SVG-pattern flicker around the cursor.
+  g.setAttribute('data-flow-d', path.d);
   s.gLinks.appendChild(g);
 }
 
@@ -2218,10 +2221,11 @@ function drawLink(s, link) {
       inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(lbl)}</text>`;
     }
   }
-  // Flow overlay — animated only when this link is "incident" to the current
-  // selection (see applyIncidentFlow). Hidden by default, no perf cost when idle.
-  inner += `<path class="m002-link-flow" d="${base.d}"/>`;
   g.innerHTML = inner;
+  // Flow path is injected on-demand by applyIncidentFlow() — store the path
+  // shape here so the injection has nothing to recompute. No idle <path> means
+  // no Firefox SVG-pattern flicker around the cursor.
+  g.setAttribute('data-flow-d', base.d);
   s.gLinks.appendChild(g);
 }
 
@@ -2360,6 +2364,7 @@ function applyIncidentFlow(s) {
   s.gLinks.querySelectorAll('.m002-link-incident').forEach((el) => {
     el.classList.remove('m002-link-incident');
     el.removeAttribute('data-flow-from');
+    el.querySelectorAll(':scope > .m002-link-flow').forEach((p) => p.remove());
   });
   if (!s.selected) return;
 
@@ -2367,6 +2372,17 @@ function applyIncidentFlow(s) {
     if (!g) return;
     g.classList.add('m002-link-incident');
     if (side) g.setAttribute('data-flow-from', side);
+    // Inject the flow path lazily — only links that are incident to the active
+    // selection ever carry one. data-flow-d was stamped by drawLink/drawLagLink.
+    if (!g.querySelector(':scope > .m002-link-flow')) {
+      const d = g.getAttribute('data-flow-d');
+      if (d) {
+        const flow = document.createElementNS(SVG_NS, 'path');
+        flow.setAttribute('class', 'm002-link-flow');
+        flow.setAttribute('d', d);
+        g.appendChild(flow);
+      }
+    }
   };
 
   const sel = s.selected;
@@ -4367,7 +4383,7 @@ function toast(s, msg) {
 // CSS
 // =============================================================================
 const MOD002_CSS = `
-.m002-host{position:absolute;inset:0;overflow:hidden;font-family:'Rajdhani',sans-serif;color:#e8e8ee;background:radial-gradient(ellipse at 50% 0%,#0d0d14 0%,#06060a 70%);display:grid;grid-template-columns:220px 1fr 320px;grid-template-rows:1fr;}
+.m002-host{position:absolute;inset:0;overflow:hidden;font-family:'Rajdhani',sans-serif;color:#e8e8ee;background:radial-gradient(ellipse at 50% 0%,#0d0d14 0%,#06060a 70%);display:grid;grid-template-columns:220px 1fr 320px;grid-template-rows:1fr;isolation:isolate;}
 .m002-leftpanel{background:rgba(8,8,14,0.92);border-right:1px solid #1a1a22;padding:14px 12px;overflow:hidden;display:flex;flex-direction:column;gap:14px;min-height:0;}
 .m002-leftpanel-spacer{flex:0 0 8px;}
 .m002-panel-section.m002-panel-section--legend{flex:1 1 auto;min-height:0;overflow:hidden;}
@@ -4444,15 +4460,13 @@ const MOD002_CSS = `
 .m002-stacklink:hover .m002-stack-cable-label{fill:#9aa0a8;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
-.m002-link-hit{stroke:transparent;stroke-width:14;fill:none;cursor:pointer;}
-/* Traffic-pulse on links incident to the current selection. Idle paths are
-   inert (transparent stroke + opacity 0). When the parent group gets the
-   .m002-link-incident class a single 6-unit dash chases along a 92-unit gap,
-   giving a small bright "packet" that travels along the link. data-flow-from
-   reverses direction so the pulse always heads *outward* from the selected
-   node regardless of how the underlying link was authored. */
-.m002-link-flow{fill:none;stroke:transparent;stroke-width:2.4;stroke-dasharray:6 92;stroke-linecap:round;pointer-events:none;opacity:0;}
-.m002-link.m002-link-incident .m002-link-flow{stroke:#ffffff;opacity:.95;filter:drop-shadow(0 0 3px #fff) drop-shadow(0 0 7px rgba(255,255,255,.55));animation:m002-link-flow 1.5s linear infinite;}
+.m002-link-hit{stroke:transparent;stroke-width:10;fill:none;cursor:pointer;}
+/* Traffic-pulse on links incident to the current selection. The <path> is
+   injected on-demand by applyIncidentFlow() — idle links never carry one,
+   so there's no wide transparent stroke around the cursor that could clip
+   the underlying grid pattern in Firefox. data-flow-from reverses direction
+   so the pulse always heads *outward* from the selected node. */
+.m002-link-flow{fill:none;stroke:#ffffff;stroke-width:2.4;stroke-dasharray:6 92;stroke-linecap:round;pointer-events:none;opacity:.95;filter:drop-shadow(0 0 3px #fff) drop-shadow(0 0 7px rgba(255,255,255,.55));animation:m002-link-flow 1.5s linear infinite;}
 .m002-link.m002-link-incident[data-flow-from="to"] .m002-link-flow{animation-direction:reverse;}
 @keyframes m002-link-flow{from{stroke-dashoffset:98;}to{stroke-dashoffset:0;}}
 /* Pause while dragging a device/stack — onMove rebuilds link DOM every
@@ -4460,7 +4474,9 @@ const MOD002_CSS = `
    each frame. Frozen pulse near source reads as a stable selection bracket. */
 .m002-host.m002-dragging .m002-link-flow{animation-play-state:paused;}
 @media (prefers-reduced-motion: reduce){
-  .m002-link.m002-link-incident .m002-link-flow{animation:none;opacity:0;}
+  /* Static fallback — corporate FF profiles often force reduced-motion, so
+     give the user a steady highlighted overlay instead of nothing. */
+  .m002-link.m002-link-incident .m002-link-flow{animation:none;stroke-dasharray:none;stroke-width:1.6;opacity:.6;}
 }
 .m002-link:hover .m002-link-line{stroke-width:1.8;filter:drop-shadow(0 0 2px rgba(255,255,255,0.55)) drop-shadow(0 0 6px rgba(255,255,255,0.25));}
 .m002-link:hover .m002-link-label{filter:drop-shadow(0 0 2px rgba(255,255,255,0.4));}
