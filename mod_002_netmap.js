@@ -3895,8 +3895,14 @@ function setMode(s, txt) {
 //   "← MAP" button restores the prior viewport. Body content is rendered by
 //   renderDetailView() and grows in later versions (v2.21.1+).
 // =============================================================================
-const DETAIL_ANIM_MS = 320;
-const DETAIL_TARGET_ZOOM = 1.6;
+// Detail-View animation timings. The map zoom runs in the background and the
+// overlay fade-in stacks on top with a brief lead so the camera move plants
+// the user before the panel scales in. Easing is `easeOutExpo` (JS) /
+// cubic-bezier(0.16,1,0.3,1) (CSS) — the same family — so motion across the
+// JS and CSS sides reads as one coordinated decel.
+const DETAIL_ANIM_MS       = 520;
+const DETAIL_FADE_OUT_MS   = 280;
+const DETAIL_TARGET_ZOOM   = 1.6;
 
 function enterDetailView(s, deviceId) {
   const dev = s.devices.find((d) => d.id === deviceId);
@@ -3934,7 +3940,8 @@ function exitDetailView(s) {
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
     overlay.classList.remove('m002-detail-overlay-show');
-    setTimeout(() => { if (!s.detailDeviceId) overlay.hidden = true; }, DETAIL_ANIM_MS);
+    // Snappier exit than entry — feels responsive when the user wants out.
+    setTimeout(() => { if (!s.detailDeviceId) overlay.hidden = true; }, DETAIL_FADE_OUT_MS);
   }
   if (s._viewBeforeDetail) {
     animateView(s, s._viewBeforeDetail, DETAIL_ANIM_MS);
@@ -4005,20 +4012,23 @@ function renderDetailBody(s, dev, t) {
   const innerW  = Math.max(D.device.w, upW, acW);
   const totalW  = innerW + D.pad * 2;
 
+  // Stub line length and the matching padding so the stub never overflows the
+  // viewBox. Defined here (above the layout math) so the totalH calculation
+  // can grow the page when sections are present.
+  const STUB_LEN = (D.vgap - 8) * 5;
+  const stubPad  = STUB_LEN + 12;
+  const upPad    = uplinks.length ? Math.max(D.pad, stubPad) : D.pad;
+  const dnPad    = access.length  ? Math.max(D.pad, stubPad) : D.pad;
+
   const upRowH  = uplinks.length ? D.port.h + D.vgap : 0;
   const acRowsH = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
-  const totalH  = D.pad + upRowH + D.device.h + acRowsH + D.pad;
+  const totalH  = upPad + upRowH + D.device.h + acRowsH + dnPad;
 
   const cx     = totalW / 2;
   const devX   = cx - D.device.w / 2;
-  const devY   = D.pad + upRowH;
-  const upY    = D.pad;
+  const devY   = upPad + upRowH;
+  const upY    = upPad;
   const acStartY = devY + D.device.h + D.vgap;
-
-  // Stub line lengths — fade outward toward the page edge from each occupied
-  // port. We use a pair of object-bounding-box gradients (one fading up,
-  // one down) defined once at the SVG root.
-  const STUB_LEN = Math.max(12, D.vgap - 8);
 
   const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
     const { p, info } = entry;
@@ -4129,11 +4139,13 @@ function renderDetailBody(s, dev, t) {
 
 // Smooth viewport tween for enter/exitDetailView. Cancels any running tween.
 // Does NOT call schedSave — the user didn't intend to move the map.
+// Easing: easeOutExpo. Decelerates aggressively at the end for a "settling"
+// feel that complements the CSS overlay fade.
 function animateView(s, target, durationMs) {
   if (s._viewAnimRaf) cancelAnimationFrame(s._viewAnimRaf);
   const start = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const t0 = performance.now();
-  const ease = (t) => 1 - Math.pow(1 - t, 3);
+  const ease = (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
   const step = (now) => {
     const t = Math.min(1, (now - t0) / durationMs);
     const k = ease(t);
@@ -5050,16 +5062,25 @@ const MOD002_CSS = `
 .m002-inspector::-webkit-scrollbar,.m002-ports-grid::-webkit-scrollbar{width:6px;}
 .m002-inspector::-webkit-scrollbar-thumb,.m002-ports-grid::-webkit-scrollbar-thumb{background:#1a1a22;}
 
-.m002-detail-overlay{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 0%,rgba(13,13,20,0.96) 0%,rgba(6,6,10,0.985) 70%);opacity:0;transition:opacity ${DETAIL_ANIM_MS}ms ease-out;pointer-events:auto;}
-.m002-detail-overlay.m002-detail-overlay-show{opacity:1;}
-.m002-detail-head{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #1a1a22;background:rgba(8,8,14,0.92);}
+/* Detail-View animation. Three layers move together on entry:
+     • the overlay backdrop fades in
+     • the head bar slides down from -10px
+     • the SVG content scales up from 0.94 with a slight blur lift
+   On exit they reverse, but on a shorter duration so the map feels responsive
+   to the user wanting out. cubic-bezier(0.16,1,0.3,1) is the easeOutExpo
+   counterpart used in CSS land — pairs with the JS map-zoom easing. */
+.m002-detail-overlay{position:absolute;inset:0;z-index:10;display:flex;flex-direction:column;background:radial-gradient(ellipse at 50% 0%,rgba(13,13,20,0.96) 0%,rgba(6,6,10,0.985) 70%);opacity:0;transition:opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);pointer-events:auto;backdrop-filter:blur(0px);-webkit-backdrop-filter:blur(0px);}
+.m002-detail-overlay.m002-detail-overlay-show{opacity:1;transition:opacity ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1),backdrop-filter ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1),-webkit-backdrop-filter ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
+.m002-detail-head{display:flex;align-items:center;gap:14px;padding:12px 18px;border-bottom:1px solid #1a1a22;background:rgba(8,8,14,0.92);transform:translateY(-12px);opacity:0;transition:transform ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1),opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transform:translateY(0);opacity:1;transition:transform ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1) 60ms,opacity ${DETAIL_ANIM_MS - 80}ms cubic-bezier(0.16,1,0.3,1) 60ms;}
 .m002-detail-back{display:inline-flex;align-items:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:6px 12px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;cursor:pointer;transition:.15s;}
 .m002-detail-back:hover{border-color:#ff003c;color:#ff003c;background:rgba(255,0,60,0.06);}
 .m002-detail-back-glyph{font-size:14px;line-height:1;}
 .m002-detail-title{font-family:'Share Tech Mono',monospace;font-size:12px;letter-spacing:2px;color:#9aa0a8;}
 .m002-detail-spacer{flex:1;}
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
-.m002-detail-svg{display:block;max-width:100%;max-height:100%;}
+.m002-detail-svg{display:block;max-width:100%;max-height:100%;transform:scale(0.94);opacity:0;transform-origin:50% 50%;transition:transform ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1),opacity ${DETAIL_FADE_OUT_MS}ms cubic-bezier(0.4,0,1,1);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-svg{transform:scale(1);opacity:1;transition:transform ${DETAIL_ANIM_MS + 60}ms cubic-bezier(0.16,1,0.3,1) 100ms,opacity ${DETAIL_ANIM_MS}ms cubic-bezier(0.16,1,0.3,1) 100ms;}
 .m002-detail-device{cursor:pointer;}
 .m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
 .m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
@@ -5075,7 +5096,11 @@ const MOD002_CSS = `
 .m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-port-name{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-stub{pointer-events:none;}
-@media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
+@media (prefers-reduced-motion: reduce){
+  .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay .m002-detail-svg,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-svg{transition:none!important;}
+  .m002-detail-svg,.m002-detail-head{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
+}
 `;
 
 // =============================================================================
