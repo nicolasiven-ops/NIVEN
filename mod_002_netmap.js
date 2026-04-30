@@ -3954,11 +3954,11 @@ function classifyDetailPort(s, dev, portN) {
 }
 
 const DETAIL = {
-  port: { w: 22, h: 26 },
-  gap: 3,
-  device: { w: 360, h: 90 },
-  vgap: 16,
-  pad: 24,
+  port: { w: 44, h: 52 },
+  gap: 6,
+  device: { w: 720, h: 180 },
+  vgap: 32,
+  pad: 48,
   maxCols: 24,
 };
 
@@ -4018,14 +4018,14 @@ function renderDetailBody(s, dev, t) {
     const stroke = occ ? t.accent : '#2a2a36';
     const dash   = occ ? '' : ' stroke-dasharray="4 3"';
     const peerAbbr = (occ && info.peer) ? abbrPeer(info.peer) : '';
-    const numY = peerAbbr ? D.port.h / 2 - 1 : D.port.h / 2 + 5;
+    const numY = peerAbbr ? D.port.h / 2 + 2 : D.port.h / 2 + 8;
     const peerLine = peerAbbr
-      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 6}" text-anchor="middle">${escSvg(peerAbbr)}</text>`
+      ? `<text class="m002-detail-port-peer" x="${D.port.w / 2}" y="${D.port.h - 10}" text-anchor="middle">${escSvg(peerAbbr)}</text>`
       : '';
     return `
       <g class="m002-detail-port ${occ ? 'is-occupied' : 'is-empty'}" data-detail-port="${p.n}" data-detail-stop="1" transform="translate(${x} ${y})" style="--accent:${t.accent}">
-        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.2"${dash}/>
-        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="3" fill="${stripe}"/>
+        <rect class="m002-detail-port-box" width="${D.port.w}" height="${D.port.h}" fill="#0a0a10" stroke="${stroke}" stroke-width="1.4"${dash}/>
+        <rect class="m002-detail-port-stripe" width="${D.port.w}" height="5" fill="${stripe}"/>
         <text class="m002-detail-port-num" x="${D.port.w / 2}" y="${numY}" text-anchor="middle">${p.n}</text>
         ${peerLine}
       </g>
@@ -4034,21 +4034,13 @@ function renderDetailBody(s, dev, t) {
 
   let inner = '';
 
-  // Section labels
-  if (uplinks.length) {
-    inner += `<text class="m002-detail-section-label" x="${cx}" y="${D.pad - 16}" text-anchor="middle">UPLINKS · ${uplinks.length}</text>`;
-  }
-  if (access.length) {
-    inner += `<text class="m002-detail-section-label" x="${cx}" y="${acStartY - 16}" text-anchor="middle">ACCESS · ${access.length}</text>`;
-  }
-
   // Device box (centered)
-  const nameY = dev.ip ? D.device.h / 2 + 1 : D.device.h / 2 + 5;
-  const ipY   = D.device.h / 2 + 18;
+  const nameY = dev.ip ? D.device.h / 2 + 4 : D.device.h / 2 + 10;
+  const ipY   = D.device.h / 2 + 36;
   inner += `
     <g class="m002-detail-device" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
       <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
-      <text class="m002-detail-dev-type" x="14" y="18">${t.label}</text>
+      <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
       <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
       ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
     </g>
@@ -5017,20 +5009,17 @@ const MOD002_CSS = `
 .m002-detail-spacer{flex:1;}
 .m002-detail-body{flex:1;min-height:0;display:flex;align-items:center;justify-content:center;padding:24px;overflow:auto;cursor:zoom-out;}
 .m002-detail-svg{display:block;max-width:100%;max-height:100%;}
-.m002-detail-section-label{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;fill:#5a5f6e;}
-.m002-detail-device{filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 8px var(--accent));}
-.m002-detail-dev-bg{}
-.m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.8px;fill:var(--accent);opacity:.85;}
-.m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;fill:#f5f3ff;letter-spacing:.6px;}
-.m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:10px;fill:#9aa0a8;letter-spacing:.6px;}
+.m002-detail-device{cursor:pointer;}
+.m002-detail-dev-type{font-family:'Share Tech Mono',monospace;font-size:18px;letter-spacing:3px;fill:var(--accent);opacity:.85;}
+.m002-detail-dev-name{font-family:'Rajdhani',sans-serif;font-size:34px;font-weight:600;fill:#f5f3ff;letter-spacing:1px;}
+.m002-detail-dev-ip{font-family:'Share Tech Mono',monospace;font-size:18px;fill:#9aa0a8;letter-spacing:1px;}
 .m002-detail-port{cursor:pointer;}
 .m002-detail-port-box{transition:filter .15s,stroke .15s,stroke-width .15s;}
-.m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 6px var(--accent));}
-.m002-detail-port.is-selected .m002-detail-port-box{stroke:var(--accent);stroke-width:2.2;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
-.m002-detail-device{cursor:pointer;}
-.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:8px;fill:#e8e8ee;letter-spacing:.3px;font-weight:600;}
+.m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 8px var(--accent));}
+.m002-detail-port.is-selected .m002-detail-port-box{stroke:var(--accent);stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 12px var(--accent));}
+.m002-detail-port-num{font-family:'Share Tech Mono',monospace;font-size:14px;fill:#e8e8ee;letter-spacing:.5px;font-weight:600;}
 .m002-detail-port.is-empty .m002-detail-port-num{fill:#5a5f6e;}
-.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:6px;fill:#9aa0a8;letter-spacing:.3px;font-weight:600;}
+.m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 @media (prefers-reduced-motion: reduce){.m002-detail-overlay{transition:none;}}
 `;
 
