@@ -619,9 +619,6 @@ function buildDOM(s) {
           <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
             <span class="m002-pal-glyph">◎</span><span>RECENTER</span>
           </button>
-          <button type="button" class="m002-pal-btn ghost" data-tool="export-png" title="Export current zone as PNG">
-            <span class="m002-pal-glyph">⤓</span><span>EXPORT</span>
-          </button>
         </div>
       </section>
 
@@ -803,7 +800,6 @@ function buildDOM(s) {
     if (tool.dataset.tool === 'delete') toggleDeleteMode(s);
     if (tool.dataset.tool === 'undo') undo(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
-    if (tool.dataset.tool === 'export-png') exportPNG(s);
     refreshToolHighlights(s);
   });
 
@@ -4591,6 +4587,7 @@ function toggleMapMenu(s) {
     <div class="m002-menu-sep"></div>
     <div class="m002-menu-section">
       <button type="button" class="m002-menu-item" data-mapact="export">EXPORT JSON</button>
+      <button type="button" class="m002-menu-item" data-mapact="export-png">EXPORT PNG</button>
       <button type="button" class="m002-menu-item" data-mapact="import">IMPORT JSON</button>
     </div>
   `;
@@ -4605,6 +4602,7 @@ function toggleMapMenu(s) {
       else if (act === 'rename') renameCurrentMap(s);
       else if (act === 'delete') deleteCurrentMap(s);
       else if (act === 'export') exportMap(s);
+      else if (act === 'export-png') exportPNG(s);
       else if (act === 'import') s.importInputEl.click();
     });
   });
