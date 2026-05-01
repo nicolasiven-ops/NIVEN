@@ -2140,7 +2140,9 @@ function bindKeyboard(s) {
       toggleLinkMode(s);
     } else if (e.key === 'r' || e.key === 'R') {
       recenter(s);
-    } else if (e.key === 'Delete' || e.key === 'Backspace') {
+    } else if (e.key === 'Delete') {
+      // Backspace deliberately excluded — too easy to clobber a stack while
+      // navigating between input fields. Use DEL or the delete tool.
       if (s.selected) deleteSelected(s);
     } else if (e.key === 'Escape') {
       const lagModal = s.host?.querySelector('.m002-lag-modal');
