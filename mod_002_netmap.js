@@ -1467,6 +1467,11 @@ function buildDOM(s) {
     const prev = s.activeLayer;
     s.activeLayer = pill.dataset.layer;
     s.host.setAttribute('data-active-layer', s.activeLayer);
+    // Persist on the map's view block so a tab change / reload returns
+    // the user to the layer they were on.
+    if (!s.view || typeof s.view !== 'object') s.view = { ...DEFAULT_VIEW };
+    s.view.activeLayer = s.activeLayer;
+    schedSave(s);
     // Routing-layer ergonomics: pure-L2 stacks (switches without a VIP) are
     // visual noise on the routing layer — they're transit. Auto-collapse them
     // on entry so the L3 ribbons read cleanly. We remember which stacks WE
@@ -1847,6 +1852,18 @@ function clientToWorld(s, cx, cy) {
 
 function applyView(s) {
   s.gWorld.setAttribute('transform', `translate(${s.view.x} ${s.view.y}) scale(${s.view.zoom})`);
+  // Layer pill: restore the saved active layer if the map carries one. The
+  // activeLayer is part of view state so it round-trips per-map across
+  // unmount/remount (tab change, hash navigation, browser reload).
+  const savedLayer = s.view?.activeLayer;
+  const valid = LAYERS.find((l) => l.id === savedLayer);
+  if (valid) {
+    s.activeLayer = savedLayer;
+    s.host?.setAttribute('data-active-layer', s.activeLayer);
+    s.layerBar?.querySelectorAll('.m002-layer-pill').forEach((p) => {
+      p.classList.toggle('active', p.dataset.layer === s.activeLayer);
+    });
+  }
   renderMinimap(s);
 }
 
