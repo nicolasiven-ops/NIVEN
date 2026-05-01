@@ -3036,11 +3036,17 @@ function lagBundleKey(s, link) {
   const stackB = findStack(s, link.to);
   if (stackA && !isStackCollapsed(s, stackA)) return null;
   if (stackB && !isStackCollapsed(s, stackB)) return null;
-  // Direction-independent key. Keyed on the owning stack so a stack-LAG
-  // bundles every member-port link regardless of which member hosts a given
-  // port.
-  const aSide = infoA ? `${infoA.stack.id}:${infoA.lag.id}` : `${link.from}:_`;
-  const bSide = infoB ? `${infoB.stack.id}:${infoB.lag.id}` : `${link.to}:_`;
+  // Direction-independent key keyed on the OWNING STACK on each side. Using
+  // stack ids (not the per-member device id of the no-LAG side) ensures all
+  // links from one stack's LAG to any member of the peer stack collapse
+  // into a single bundle — otherwise N parallel "Po1 ⇄ ? · ×1" stubs
+  // appear when the peer side has no LAG configured.
+  const aSide = infoA
+    ? `${infoA.stack.id}:${infoA.lag.id}`
+    : (stackA ? `${stackA.id}:_` : `${link.from}:_`);
+  const bSide = infoB
+    ? `${infoB.stack.id}:${infoB.lag.id}`
+    : (stackB ? `${stackB.id}:_` : `${link.to}:_`);
   return [aSide, bSide].sort().join('::');
 }
 
