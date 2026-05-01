@@ -1337,9 +1337,6 @@ function buildDOM(s) {
           <button type="button" class="m002-pal-btn ghost" data-tool="undo" title="Undo (Ctrl+Z)">
             <span class="m002-pal-glyph">↶</span><span>UNDO</span>
           </button>
-          <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
-            <span class="m002-pal-glyph">◎</span><span>RECENTER</span>
-          </button>
         </div>
       </section>
 
@@ -2541,6 +2538,11 @@ function computeStackPairAggregations(s, absorbed) {
   const zoneOk = (entity) => !s.activeZone || !entity?.zone || entity.zone === s.activeZone;
   s.links.forEach((l) => {
     if (absorbed.has(l.id)) return;
+    // Skip links that participate in any LAG (paired or single-sided). Those
+    // render via the LAG-pair / bundle visuals — pulling them into the
+    // aggregate would stack a dim "click to LAG" line right under the LAG
+    // graphic the user just configured.
+    if (lagBundleKey(s, l)) return;
     const a = s.devices.find((d) => d.id === l.from);
     const b = s.devices.find((d) => d.id === l.to);
     if (!a || !b) return;
@@ -2549,10 +2551,12 @@ function computeStackPairAggregations(s, absorbed) {
     const stkB = findStack(s, l.to);
     const aCollapsed = stkA && isStackCollapsed(s, stkA);
     const bCollapsed = stkB && isStackCollapsed(s, stkB);
-    if (!aCollapsed && !bCollapsed) return;
-    const aSide = stkA ? (aCollapsed ? stkA.id : null) : l.from;
-    const bSide = stkB ? (bCollapsed ? stkB.id : null) : l.to;
-    if (!aSide || !bSide) return;
+    // Stack ↔ Stack only. Stack ↔ single device keeps the original per-link
+    // rendering — aggregating those would hide one-off links that the user
+    // can perfectly well manage as regular wires.
+    if (!aCollapsed || !bCollapsed) return;
+    const aSide = stkA.id;
+    const bSide = stkB.id;
     if (aSide === bSide) return;
     const key = [aSide, bSide].sort().join('::');
     if (!groups.has(key)) groups.set(key, { aSide, bSide, linkIds: [] });
