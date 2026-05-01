@@ -6599,6 +6599,25 @@ function migrate(s) {
   // L3 — auto-discover subnets from every populated IP so a freshly-loaded
   // map already shows meaningful content in the routing layer. Idempotent.
   autoDiscoverSubnets(s);
+  // Backfill the auto-default-route for hydrated devices whose IP was set
+  // before the routes[] redesign. Without this, legacy endpoints would
+  // load with empty routes[] and stop voting for their gateway in the L3
+  // engine — no ribbon, no DGW badge.
+  s.devices.forEach((d) => {
+    if (isReference(d)) return;
+    if (isL3Type(d.type)) {
+      (d.interfaces || []).forEach((iface) => {
+        if (iface.ip) autoCreateDefaultRoute(d.routes, iface.ip, iface.prefix, iface.id);
+      });
+    } else if (d.ip) {
+      autoCreateDefaultRoute(d.routes, d.ip, d.prefix, null);
+    }
+  });
+  s.stacks.forEach((st) => {
+    (st.virtualInterfaces || []).forEach((vif) => {
+      if (vif.ip) autoCreateDefaultRoute(st.routes, vif.ip, vif.prefix, vif.id);
+    });
+  });
   // Interfaces now derive their subnet from ip+prefix on the fly — no
   // orphan-id sweep needed. Subnet registry just gets re-indexed.
   recomputeSubnetIndex(s);
@@ -7051,9 +7070,9 @@ const MOD002_CSS = `
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
 .m002-iface-head{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
-/* Endpoint / cloud / switch single-row L3 trio — same grid, no NAME column */
-.m002-iface-row--single{grid-template-columns:8px 1.2fr 0.5fr 1.2fr 18px !important;}
-.m002-iface-head--single{grid-template-columns:8px 1.2fr 0.5fr 1.2fr 18px !important;}
+/* Endpoint / cloud / switch single-row L3 — IP + PREFIX, no NAME / GATEWAY */
+.m002-iface-row--non-l3{grid-template-columns:8px 1.4fr 0.6fr 18px !important;}
+.m002-iface-head--non-l3{grid-template-columns:8px 1.4fr 0.6fr 18px !important;}
 .m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
 .m002-iface-row{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
