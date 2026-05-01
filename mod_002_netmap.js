@@ -103,12 +103,9 @@ function vlanRegistryRemove(s, id) {
   s.devices.forEach((d) => {
     if (Array.isArray(d.vlans)) d.vlans = d.vlans.filter((x) => String(x) !== id);
     (d.ports || []).forEach((p) => { if (Array.isArray(p.vlans)) p.vlans = p.vlans.filter((x) => String(x) !== id); });
-    // L3 interfaces can be VLAN-bound (SVI / subinterface); drop the binding
-    // so the dropdown falls back to "—" when the VLAN no longer exists.
-    (d.interfaces || []).forEach((iface) => { if (String(iface.vlanId || '') === id) iface.vlanId = null; });
   });
-  // Subnets that were tagged with this VLAN keep the field but a non-existent
-  // tag is harmless — they still resolve via CIDR. Strip for hygiene.
+  // Subnets that were tagged with this VLAN keep the CIDR but lose the tag
+  // — VLANs and L3 are independent now and the routing layer never reads it.
   (s.subnetRegistry || []).forEach((sn) => { if (String(sn.vlanId || '') === id) sn.vlanId = null; });
 }
 
@@ -546,14 +543,6 @@ function renderSubnetLegend(s) {
     const before = s.subnetRegistry.length;
     autoDiscoverSubnets(s);
     const added = s.subnetRegistry.length - before;
-    // Backfill iface.subnetId for any iface whose IP now matches a registry
-    // entry — the legend's AUTO-DERIVE is the natural moment to do this.
-    s.devices.forEach((d) => (d.interfaces || []).forEach((iface) => {
-      if (!iface.subnetId) {
-        const sn = ifaceSubnet(s, iface);
-        if (sn) iface.subnetId = sn.id;
-      }
-    }));
     subnetsChanged(s);
     refreshInspectorIfL3(s);
     schedSave(s);
@@ -625,16 +614,9 @@ function subnetRegistryAdd(s, cidr, name) {
 function subnetRegistryRemove(s, subnetId) {
   subnetId = String(subnetId);
   s.subnetRegistry = s.subnetRegistry.filter((sn) => String(sn.id) !== subnetId);
-  s.devices.forEach((d) => {
-    (d.interfaces || []).forEach((iface) => {
-      if (String(iface.subnetId) === subnetId) iface.subnetId = null;
-    });
-    (d.routes || []).forEach((r) => {
-      // Routes reference subnets only indirectly via destination CIDR / interface;
-      // nothing to detach here, but we leave routes untouched so the user keeps
-      // their hand-typed prefixes even if the subnet entry vanishes.
-    });
-  });
+  // Subnet membership is now derived from each interface's ip+prefix on the
+  // fly — no per-device backreferences to clean up. The auto-discover path
+  // will re-add the network if any interface still uses it.
 }
 
 function subnetByCidr(s, cidr) {
@@ -643,30 +625,37 @@ function subnetByCidr(s, cidr) {
   return s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === norm) || null;
 }
 
-// Auto-discover subnets from every dev.ip / interface IP that carries a
-// prefix. Called on hydrate; safe to invoke later (idempotent).
+// Auto-discover subnets from every device that has an IP + prefix configured.
+// Called on hydrate and after each L3 edit; idempotent. Skips /32 (host
+// route) and /31 (point-to-point) — those aren't usefully shown as subnets.
 function autoDiscoverSubnets(s) {
+  const cidrs = [];
   s.devices.forEach((d) => {
-    const ips = [];
-    if (d.ip) ips.push(d.ip);
-    (d.interfaces || []).forEach((iface) => { if (iface.ip) ips.push(iface.ip); });
-    ips.forEach((str) => {
-      const p = parseCidr(str);
-      if (!p) return;
-      // /32 host addresses on endpoints aren't subnets; skip them. A user can
-      // still add explicit /32s manually if they want a host-route entry.
-      if (p.prefix === 32) return;
-      const cidr = `${p.network}/${p.prefix}`;
-      subnetRegistryAdd(s, cidr, '');
-    });
+    if (isReference(d)) return;
+    if (isL3Type(d.type)) {
+      (d.interfaces || []).forEach((iface) => { const c = ifaceCidr(iface); if (c) cidrs.push(c); });
+    } else if (d.ip) {
+      cidrs.push(`${d.ip}/${d.prefix != null ? d.prefix : 24}`);
+    }
+  });
+  cidrs.forEach((str) => {
+    const p = parseCidr(str);
+    if (!p) return;
+    if (p.prefix >= 31) return;
+    subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
   });
 }
 
 function subnetsChanged(s) {
   recomputeSubnetIndex(s);
   renderSubnetLegend(s);
-  // Routing-view links depend on subnet membership colours.
-  if (s.activeLayer === 'routing') s.links.forEach((l) => redrawLink(s, l));
+  // Routing-view links depend on subnet membership AND on the BFS overlay
+  // map (which derives from device subnet memberships). Recompute the
+  // overlay map before redrawing or stale entries leak across edits.
+  if (s.activeLayer === 'routing') {
+    s._l3Overlays = computeL3PathOverlays(s);
+    s.links.forEach((l) => redrawLink(s, l));
+  }
 }
 
 // Refresh the inspector when a subnet add/remove changed the registry options.
@@ -676,6 +665,19 @@ function refreshInspectorIfL3(s) {
   if (s.selected?.kind !== 'device') return;
   const dev = s.devices.find((d) => d.id === s.selected.id);
   if (dev && isL3Type(dev.type)) openInspector(s);
+}
+
+// Default gateway suggestion for an IP + prefix pair. Routing convention:
+// the first usable address inside the subnet (network address + 1). For /31
+// (point-to-point) and /32 (host route) there is no meaningful gateway, so
+// we return an empty string and the inspector leaves the field blank.
+function defaultGatewayFor(ip, prefix) {
+  if (!ip) return '';
+  const pfx = Number(prefix);
+  if (!Number.isFinite(pfx) || pfx >= 31 || pfx < 0) return '';
+  const p = parseCidr(ip + '/' + pfx);
+  if (!p) return '';
+  return numToIp((p.netNum + 1) >>> 0);
 }
 
 // IP / CIDR utilities ---------------------------------------------------------
@@ -708,27 +710,26 @@ function ipInCidr(ip, cidr) {
   return ((a.ipNum & b.mask) >>> 0) === b.netNum;
 }
 
-// Resolve which subnet (if any) an interface belongs to. Resolution order:
-//   1. explicit subnetId pick
-//   2. exact CIDR match when the IP carries a prefix (10.0.0.1/24 → 10.0.0.0/24)
-//   3. CONTAINMENT match for bare IPs (10.0.0.10 with no /N → any registered
-//      subnet whose mask contains it; pick the longest-prefix winner)
-//   4. VLAN tag — subnet whose vlanId equals the interface's vlanId
+// Build a CIDR string from an interface's separated ip + prefix fields.
+// Tolerates legacy interfaces where ip still carries an embedded "/N".
+function ifaceCidr(iface) {
+  if (!iface || !iface.ip) return null;
+  const raw = String(iface.ip).trim();
+  if (raw.includes('/')) return raw;
+  const pfx = iface.prefix != null ? Number(iface.prefix) : 24;
+  if (!Number.isFinite(pfx)) return raw;
+  return `${raw}/${pfx}`;
+}
+
+// Resolve which subnet (if any) an interface belongs to. The interface no
+// longer carries an explicit subnetId — the subnet falls out of ip+prefix:
+//   1. exact network match against the registry (CIDR equality)
+//   2. containment match — if the registry holds a wider subnet, the host
+//      IP is treated as a member of it (bare IP / mismatched prefix UX)
 function ifaceSubnet(s, iface) {
-  if (!iface) return null;
-  if (iface.subnetId) {
-    const sn = s.subnetRegistry.find((x) => String(x.id) === String(iface.subnetId));
-    if (sn) return sn;
-  }
-  if (iface.ip) {
-    const sn = subnetForIp(s, iface.ip);
-    if (sn) return sn;
-  }
-  if (iface.vlanId) {
-    const byVlan = s.subnetRegistry.find((sn) => String(sn.vlanId || '') === String(iface.vlanId));
-    if (byVlan) return byVlan;
-  }
-  return null;
+  const cidr = ifaceCidr(iface);
+  if (!cidr) return null;
+  return subnetForIp(s, cidr);
 }
 
 // Match an IP (with or without a prefix) against the subnet registry. With a
@@ -774,30 +775,113 @@ function deviceSubnets(s, dev) {
   return out;
 }
 
-// True if the device acts as the default gateway for any subnet (i.e. has a
-// route with destination 0.0.0.0/0 OR has at least one interface plus a
-// route entry — heuristic for "this thing forwards packets onwards").
-function isDefaultGateway(dev) {
-  if (!dev || !Array.isArray(dev.routes)) return false;
-  return dev.routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0');
+// True if the device acts as the default gateway for any subnet. Two
+// signals: (a) explicit 0.0.0.0/0 route on the device's own routing table,
+// or (b) at least one OTHER device's interface gateway points at one of
+// this device's IPs (the device is referenced as next-hop). The second
+// signal is what naturally lights up routers as DGW once endpoints typed
+// their gateways in.
+function isDefaultGateway(s, dev) {
+  if (!dev) return false;
+  if (Array.isArray(dev.routes) && dev.routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0')) return true;
+  if (!s || !Array.isArray(s.devices)) return false;
+  const myIps = new Set();
+  if (isL3Type(dev.type)) {
+    (dev.interfaces || []).forEach((iface) => { if (iface.ip) myIps.add(iface.ip); });
+  } else if (dev.ip) {
+    myIps.add(dev.ip);
+  }
+  if (!myIps.size) return false;
+  for (const other of s.devices) {
+    if (other.id === dev.id) continue;
+    if (isReference(other)) continue;
+    if (isL3Type(other.type)) {
+      for (const iface of (other.interfaces || [])) {
+        if (iface.gateway && myIps.has(iface.gateway)) return true;
+      }
+    } else if (other.gateway && myIps.has(other.gateway)) {
+      return true;
+    }
+  }
+  return false;
 }
 
-// Subnet of a link, for the routing-view colouring. We pick the subnet that
-// both endpoints share (an L3 adjacency on a common broadcast domain). When
-// endpoints disagree, we return { mixed: true } so the renderer can paint a
-// transit edge instead.
-function linkRoutingSubnet(s, link) {
-  const a = s.devices.find((d) => d.id === link.from);
-  const b = s.devices.find((d) => d.id === link.to);
-  if (!a || !b) return null;
-  const aSubs = deviceSubnets(s, a).map((sn) => sn.id);
-  const bSubs = deviceSubnets(s, b).map((sn) => sn.id);
-  if (!aSubs.length || !bSubs.length) return null;
-  const shared = aSubs.filter((id) => bSubs.includes(id));
-  if (shared.length) {
-    return { subnet: s.subnetRegistry.find((sn) => sn.id === shared[0]) || null };
+// Compute L3 path overlays for the routing layer. For every subnet that has
+// at least two IP-configured devices in it, we BFS through the link graph
+// between each pair and mark every link on the shortest path as belonging to
+// that subnet. The result: in the routing layer the L3 connection lights up
+// over the entire L2 path (router → switch → switch → endpoint), even though
+// none of the L2 hops carry an IP themselves. Exactly the user's "logical L3
+// link travelling visually over the L2 infrastructure" requirement.
+//
+// Returns: Map<linkId, Array<{ subnetId }>>. A link can belong to multiple
+// subnets when several broadcast domains traverse the same physical wire
+// (e.g. a trunk between two switches connecting endpoints in different
+// subnets via routers on either end).
+function computeL3PathOverlays(s) {
+  const overlays = new Map();
+  if (!s.links?.length) return overlays;
+
+  // Build undirected adjacency once.
+  const adj = new Map();
+  s.devices.forEach((d) => adj.set(d.id, []));
+  s.links.forEach((l) => {
+    if (!adj.has(l.from)) adj.set(l.from, []);
+    if (!adj.has(l.to)) adj.set(l.to, []);
+    adj.get(l.from).push({ neighbor: l.to, linkId: l.id });
+    adj.get(l.to).push({ neighbor: l.from, linkId: l.id });
+  });
+
+  // Group L3 devices by subnet membership.
+  const groups = new Map();   // subnetId → [deviceId,...]
+  s.devices.forEach((d) => {
+    if (isReference(d)) return;
+    deviceSubnets(s, d).forEach((sn) => {
+      if (!groups.has(sn.id)) groups.set(sn.id, []);
+      groups.get(sn.id).push(d.id);
+    });
+  });
+
+  // For each subnet, find all-pairs shortest paths and mark links on them.
+  // Single-hop neighbours are still marked — the path is just one link long.
+  const addOverlay = (linkId, subnetId) => {
+    const list = overlays.get(linkId) || [];
+    if (!list.some((o) => o.subnetId === subnetId)) list.push({ subnetId });
+    overlays.set(linkId, list);
+  };
+
+  for (const [subnetId, devs] of groups) {
+    if (devs.length < 2) continue;
+    // BFS from each device, mark links on shortest paths to every other
+    // device in the same subnet.
+    for (let i = 0; i < devs.length; i++) {
+      const start = devs[i];
+      const parent = new Map();
+      const linkParent = new Map();
+      const visited = new Set([start]);
+      const queue = [start];
+      while (queue.length) {
+        const cur = queue.shift();
+        for (const { neighbor, linkId } of adj.get(cur) || []) {
+          if (visited.has(neighbor)) continue;
+          visited.add(neighbor);
+          parent.set(neighbor, cur);
+          linkParent.set(neighbor, linkId);
+          queue.push(neighbor);
+        }
+      }
+      for (let j = i + 1; j < devs.length; j++) {
+        const target = devs[j];
+        if (!parent.has(target)) continue;
+        let cur = target;
+        while (parent.has(cur)) {
+          addOverlay(linkParent.get(cur), subnetId);
+          cur = parent.get(cur);
+        }
+      }
+    }
   }
-  return { mixed: true };
+  return overlays;
 }
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [] };
@@ -1722,6 +1806,8 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     name: `${t.label}-${(s.devices.filter((d) => d.type === t.id).length + 1).toString().padStart(2, '0')}`,
     hostname: '',
     ip: '',
+    prefix: 24,
+    gateway: '',
     notes: '',
     vlans: [],
     lags: [],
@@ -1733,6 +1819,13 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     dev.refZoneId = null;
     dev.refMapId = null;
     dev.coupleId = null;
+  }
+  if (isL3Type(t.id)) {
+    // Routers/firewalls own the interfaces[] table directly; the dev.ip
+    // trio above is irrelevant for them and gets stripped during migrate
+    // anyway. Provision the empty arrays here so the inspector can bind.
+    dev.interfaces = [];
+    dev.routes = [];
   }
   s.devices.push(dev);
   drawDevice(s, dev);
@@ -1850,7 +1943,7 @@ function drawDevice(s, dev) {
   // Layer-aware data hooks. CSS dims data-l3="false" devices in the routing
   // layer so switches without an IP visibly recede.
   g.setAttribute('data-l3', isL3Device(dev) ? 'true' : 'false');
-  if (isDefaultGateway(dev)) g.setAttribute('data-gw', 'true');
+  if (isDefaultGateway(s, dev)) g.setAttribute('data-gw', 'true');
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
@@ -1879,7 +1972,7 @@ function drawDevice(s, dev) {
     const l3Label = isL3Type(dev.type) && ifaceCount
       ? `${ifaceCount} IF`
       : (dev.ip || '');
-    const gwBadge = isDefaultGateway(dev)
+    const gwBadge = isDefaultGateway(s, dev)
       ? `<g class="m002-dev-gw-badge"><rect x="${w/2 - 30}" y="${-h/2 + 4}" width="26" height="14" rx="2"/><text x="${w/2 - 17}" y="${-h/2 + 14}" text-anchor="middle">DGW</text></g>`
       : '';
     g.innerHTML = `
@@ -1982,11 +2075,20 @@ function handleLinkClick(s, deviceId) {
   // into new lanes — invalidate the slot cache and redraw every link that
   // shares this pair so existing edges fan out to make room for the new one.
   invalidateEdgeSlots(s);
-  const newKey = visualEndpointKey(s, link.from, link.to);
-  s.links.forEach((l) => {
-    if (l.id === link.id) return;
-    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
-  });
+  // Routing layer: a new edge can extend an existing L3 path or create a
+  // new one (e.g. router and endpoint were both configured but unconnected
+  // until now). Recompute the overlay map and redraw EVERY link, not just
+  // the new one — adjacency changed for everyone in this subnet.
+  if (s.activeLayer === 'routing') {
+    s._l3Overlays = computeL3PathOverlays(s);
+    s.links.forEach((l) => { if (l.id !== link.id) redrawLink(s, l); });
+  } else {
+    const newKey = visualEndpointKey(s, link.from, link.to);
+    s.links.forEach((l) => {
+      if (l.id === link.id) return;
+      if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+    });
+  }
   drawLink(s, link);
   updateStatus(s);
   s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
@@ -2721,44 +2823,53 @@ function drawLink(s, link) {
       inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
     }
   } else if (layer === 'routing') {
-    // L3 view. The link's role on this layer is determined by the subnet
-    // memberships of the two endpoints:
-    //   - shared subnet  → L2-adjacent within an L3 broadcast domain; paint
-    //                       in the subnet colour with the CIDR as label.
-    //   - mixed subnets  → cross-subnet adjacency (router-to-router or any
-    //                       link bridging two L3 islands); paint as a transit
-    //                       edge in accent orange.
-    //   - no L3 info     → pure L2 wiring (switch–switch, switch–endpoint
-    //                       without IP); paint dim dashed so the L3 layer
-    //                       still shows the underlying topology.
-    const role = linkRoutingSubnet(s, link);
+    // L3 view. Two-layer rendering:
+    //   1. The L2 base — every link gets a faint dashed underlay so the
+    //      physical topology stays visible regardless of L3 state.
+    //   2. The L3 overlay — for every subnet whose BFS path uses this link,
+    //      stack a colored glow + crisp line. A single switch sitting on the
+    //      shortest path between two L3 hosts therefore lights up exactly
+    //      like the direct link would. "Logical L3 over L2 infrastructure".
+    inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
+    const overlays = s._l3Overlays?.get(link.id) || [];
+    if (overlays.length && !bundleInfo?.members) {
+      // Stack lanes when multiple subnets traverse this wire.
+      const span = overlays.length > 1 ? 4 : 0;
+      overlays.forEach(({ subnetId }, i) => {
+        const sn = s.subnetRegistry.find((x) => x.id === subnetId);
+        if (!sn) return;
+        const c = subnetColor(s, sn.id);
+        const off = lane + (i - (overlays.length - 1) / 2) * span;
+        const op = orthPath(aPos, bPos, off);
+        inner += `<path class="m002-link-line m002-link-l3-glow" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="6"/>`;
+        inner += `<path class="m002-link-line m002-link-l3" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
+      });
+      // Single-subnet case → CIDR label; multi-subnet case → count badge to
+      // keep the canvas readable.
+      if (overlays.length === 1) {
+        const sn = s.subnetRegistry.find((x) => x.id === overlays[0].subnetId);
+        if (sn) {
+          const c = subnetColor(s, sn.id);
+          const lbl = sn.name ? `${sn.cidr} · ${sn.name}` : sn.cidr;
+          inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(lbl)}</text>`;
+        }
+      } else {
+        inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" fill="#e8e8ee" text-anchor="middle">${overlays.length}× L3</text>`;
+      }
+    }
     if (bundleInfo?.members) {
-      // LAG-bundle still gets the LAG double-line accent. Colour it by the
-      // shared subnet when there is one, otherwise neutral.
-      const stroke = role?.subnet ? subnetColor(s, role.subnet.id)
-                   : role?.mixed ? '#ffae00'
-                   : '#9aa0a8';
+      // LAG-bundles keep the double-line accent. Colour by the first
+      // overlaid subnet (if any), otherwise neutral.
+      const firstSubnetId = overlays[0]?.subnetId;
+      const sn = firstSubnetId ? s.subnetRegistry.find((x) => x.id === firstSubnetId) : null;
+      const stroke = sn ? subnetColor(s, sn.id) : '#9aa0a8';
       inner += lagDoubleLineHTML(aPos, bPos, { stroke, width: 2, lane });
       const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
       const lagB = findPortLag(s, b.id, link.toPort)?.lag;
       const aLbl = lagA?.name || '?';
       const bLbl = lagB?.name || '?';
-      const subTag = role?.subnet ? ` · ${role.subnet.cidr}` : (role?.mixed ? ' · TRANSIT' : '');
+      const subTag = sn ? ` · ${sn.cidr}` : '';
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}${subTag}`)}</text>`;
-    } else if (role?.subnet) {
-      const c = subnetColor(s, role.subnet.id);
-      // Render two stacked paths: a wider faint underlay (filter:drop-shadow
-      // doesn't bleed predictably across browsers, so we fake the glow by
-      // stacking) and the crisp top line. Cheap, looks alive.
-      inner += `<path class="m002-link-line m002-link-l3-glow" d="${base.d}" style="stroke:${c};color:${c}" stroke-width="6"/>`;
-      inner += `<path class="m002-link-line m002-link-l3" d="${base.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
-      const lbl = role.subnet.name ? `${role.subnet.cidr} · ${role.subnet.name}` : role.subnet.cidr;
-      inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(lbl)}</text>`;
-    } else if (role?.mixed) {
-      inner += `<path class="m002-link-line m002-link-transit" d="${base.d}" stroke="#ffae00" stroke-width="2" stroke-dasharray="6 3"/>`;
-      inner += `<text class="m002-link-label m002-link-transit-label" x="${base.lx}" y="${base.ly - 4}" fill="#ffae00" text-anchor="middle">TRANSIT</text>`;
-    } else {
-      inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
     }
   } else {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
@@ -3006,41 +3117,16 @@ function renderL3SectionsHTML(s, dev) {
   const open = s.inspectorL3Open !== false; // default open
   const ifaces = Array.isArray(dev.interfaces) ? dev.interfaces : [];
   const routes = Array.isArray(dev.routes) ? dev.routes : [];
-  const subnetOptions = (selectedId, autoSn) => {
-    const opts = [];
-    // Empty option label changes from "—" to "auto · CIDR" when the engine
-    // would resolve to that subnet implicitly. That way users see what the
-    // routing layer will use without forcing them to pick.
-    const emptyLbl = autoSn ? `auto · ${autoSn.cidr}` : '—';
-    opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>${escSvg(emptyLbl)}</option>`);
-    s.subnetRegistry.forEach((sn) => {
-      const sel = String(selectedId || '') === String(sn.id) ? 'selected' : '';
-      const lbl = sn.name ? `${sn.cidr} · ${sn.name}` : sn.cidr;
-      opts.push(`<option value="${escAttr(sn.id)}" ${sel}>${escSvg(lbl)}</option>`);
-    });
-    return opts.join('');
-  };
-  // Interface VLAN binding — represents an SVI / subinterface tied to one
-  // VLAN. Shows every VLAN on the device (or every registered VLAN if the
-  // device hasn't been put in any yet). "—" means a plain L3 port. When no
-  // VLANs are declared at all, the dropdown stays open with a single greyed
-  // hint so the user knows where to add one.
-  const vlanOptions = (selectedId) => {
-    const opts = [];
-    const list = (dev.vlans && dev.vlans.length) ? dev.vlans.map(String).sort(vlanSort) : (s.vlanList || []);
-    if (!list.length) {
-      opts.push(`<option value="" disabled>no VLANs — add in legend</option>`);
-      opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>—</option>`);
-    } else {
-      opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>—</option>`);
-      list.forEach((v) => {
-        const sel = String(selectedId || '') === String(v) ? 'selected' : '';
-        const entry = s.vlanRegistry.find((r) => String(r.id) === String(v));
-        const lbl = entry?.name ? `VLAN ${v} · ${entry.name}` : `VLAN ${v}`;
-        opts.push(`<option value="${escAttr(v)}" ${sel}>${escSvg(lbl)}</option>`);
-      });
+  // Prefix dropdown 0..32 — default 24 lives in the data, so just selection.
+  // Routing-relevant range is realistically /8..../32, but we expose the full
+  // legal range; users typing in lab scenarios sometimes want /0 (default).
+  const prefixOptions = (selected) => {
+    const sel = Number.isFinite(Number(selected)) ? Number(selected) : 24;
+    let html = '';
+    for (let i = 32; i >= 0; i--) {
+      html += `<option value="${i}" ${i === sel ? 'selected' : ''}>/${i}</option>`;
     }
-    return opts.join('');
+    return html;
   };
   const ifaceOptions = (selectedId) => {
     const opts = ['<option value="">—</option>'];
@@ -3055,9 +3141,9 @@ function renderL3SectionsHTML(s, dev) {
     ? `<div class="m002-iface-head">
          <span></span>
          <span>NAME</span>
-         <span>IP / CIDR</span>
-         <span>VLAN</span>
-         <span>SUBNET</span>
+         <span>IP</span>
+         <span>PREFIX</span>
+         <span>GATEWAY</span>
          <span></span>
        </div>`
     : '';
@@ -3065,16 +3151,13 @@ function renderL3SectionsHTML(s, dev) {
     ? ifaces.map((iface) => {
         const sn = ifaceSubnet(s, iface);
         const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
-        // When the user hasn't picked a subnet but one is auto-detectable
-        // from the typed IP, swap the leading "—" option for a labelled
-        // "auto · CIDR" so it's obvious the binding is happening implicitly.
-        const autoSn = !iface.subnetId && iface.ip ? subnetForIp(s, iface.ip) : null;
+        const gwHint = defaultGatewayFor(iface.ip, iface.prefix);
         return `<div class="m002-iface-row" data-iface-id="${escAttr(iface.id)}" style="--sc:${c}">
-          <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr + (autoSn && !iface.subnetId ? ' (auto)' : '')) : 'no subnet bound'}"></span>
+          <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet'}"></span>
           <input class="m002-iface-name" data-if-f="name" value="${escAttr(iface.name)}" placeholder="if0"/>
-          <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.1/24"/>
-          <select class="m002-iface-vlan" data-if-f="vlanId" title="bound VLAN (SVI / subinterface)">${vlanOptions(iface.vlanId)}</select>
-          <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet — leave empty for auto-match by IP">${subnetOptions(iface.subnetId, autoSn)}</select>
+          <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.10"/>
+          <select class="m002-iface-prefix" data-if-f="prefix" title="prefix length">${prefixOptions(iface.prefix)}</select>
+          <input class="m002-iface-gw" data-if-f="gateway" value="${escAttr(iface.gateway)}" placeholder="${escAttr(gwHint || '10.0.0.1')}" title="default gateway (auto-suggested from network IP + 1)"/>
           <button type="button" class="m002-iface-rm" data-if-rm title="Remove interface">×</button>
         </div>`;
       }).join('')
@@ -3146,25 +3229,38 @@ function bindL3Sections(s, dev, body) {
     if (!iface) return;
     row.querySelectorAll('[data-if-f]').forEach((el) => {
       const isSelect = el.tagName === 'SELECT';
-      // Apply the field change. For <select> we want the inspector to
-      // re-render (so any cross-row visuals — colour dot, dependent rows —
-      // update); for <input> we keep typing focus and rely on
-      // refreshSelfAndCanvas() alone.
+      // Commit a field edit. Two side-effects beyond the raw assignment:
+      //   - on ip / prefix change, auto-fill the gateway if the user hasn't
+      //     typed one (live "Vorgetippt = NetzIP + 1") and auto-register
+      //     the derived subnet in the legend so it shows up immediately
+      //   - rerender for selects so dependent UI (subnet legend, dot colour,
+      //     gateway placeholder) refreshes; inputs keep typing focus instead
       const apply = (rerender) => {
         const f = el.dataset.ifF;
         const val = el.value;
-        if (f === 'subnetId' || f === 'vlanId') {
-          iface[f] = val || null;
+        if (f === 'prefix') {
+          iface.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
           iface[f] = val;
         }
-        if (f === 'ip') {
-          // Auto-bind subnet if the IP belongs to a known network and the
-          // user hasn't picked one explicitly. No registry mutation here —
-          // the AUTO-DERIVE button is the explicit channel for that.
-          if (!iface.subnetId) {
-            const auto = ifaceSubnet(s, iface);
-            if (auto) iface.subnetId = auto.id;
+        if (f === 'ip' || f === 'prefix') {
+          // Auto-add the derived network to the subnet registry (idempotent).
+          const cidr = ifaceCidr(iface);
+          const p = parseCidr(cidr);
+          if (p && p.prefix < 31) {
+            subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
+          }
+          // Auto-fill gateway when empty — leaves user-typed gateways alone.
+          if (!iface.gateway) {
+            iface.gateway = defaultGatewayFor(iface.ip, iface.prefix);
+            const gwInput = row.querySelector('[data-if-f="gateway"]');
+            if (gwInput && document.activeElement !== gwInput) {
+              gwInput.value = iface.gateway;
+            }
+          } else {
+            // Refresh placeholder hint so user sees the suggested default.
+            const gwInput = row.querySelector('[data-if-f="gateway"]');
+            if (gwInput) gwInput.placeholder = defaultGatewayFor(iface.ip, iface.prefix) || '10.0.0.1';
           }
           subnetsChanged(s);
         }
@@ -3172,13 +3268,11 @@ function bindL3Sections(s, dev, body) {
         if (rerender) openInspector(s);
       };
       if (isSelect) {
-        // <select> reliably fires "change" across browsers; "input" support
-        // is uneven (esp. Firefox). Bind change so the picked value commits.
         el.addEventListener('change', () => apply(true));
       } else {
         el.addEventListener('input', () => apply(false));
         el.addEventListener('change', () => {
-          if (el.dataset.ifF === 'ip' || el.dataset.ifF === 'name') openInspector(s);
+          if (el.dataset.ifF === 'name') openInspector(s);
         });
       }
     });
@@ -3196,7 +3290,7 @@ function bindL3Sections(s, dev, body) {
     snapshot(s);
     if (!Array.isArray(dev.interfaces)) dev.interfaces = [];
     const idx = dev.interfaces.length;
-    dev.interfaces.push({ id: 'if_' + rid(), name: `if${idx}`, ip: '', subnetId: null });
+    dev.interfaces.push({ id: 'if_' + rid(), name: `if${idx}`, ip: '', prefix: 24, gateway: '' });
     refreshSelfAndCanvas();
     openInspector(s);
   });
@@ -3475,7 +3569,15 @@ function openInspector(s) {
       <details class="m002-insp-details"${s.inspectorDetailsOpen ? ' open' : ''}>
         <summary>// DETAILS</summary>
         <label class="m002-field"><span>HOSTNAME</span><input data-f="hostname" value="${escAttr(dev.hostname || '')}" placeholder="e.g. swhq-core-01.example.com"/></label>
-        <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
+        ${isL3Type(dev.type) ? '' : `
+        <div class="m002-field m002-field-l3-trio">
+          <span>L3 ADDRESS</span>
+          <div class="m002-l3-trio">
+            <input data-f="ip" value="${escAttr(dev.ip || '')}" placeholder="10.0.0.10" title="host IP (no prefix)"/>
+            <select data-f="prefix" title="prefix length">${(() => { let h=''; for (let i=32;i>=0;i--){ const sel = Number(dev.prefix ?? 24) === i ? 'selected' : ''; h += `<option value="${i}" ${sel}>/${i}</option>`; } return h; })()}</select>
+            <input data-f="gateway" value="${escAttr(dev.gateway || '')}" placeholder="${escAttr(defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1')}" title="default gateway"/>
+          </div>
+        </div>`}
         <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
       </details>
       ${isL3Type(dev.type) ? renderL3SectionsHTML(s, dev) : ''}
@@ -4017,6 +4119,16 @@ function updateDeviceField(s, dev, el) {
     }
     redrawDevice(s, dev);
     openInspector(s);
+  } else if (f === 'prefix') {
+    dev.prefix = Math.max(0, Math.min(32, Number(el.value)));
+    onL3DeviceFieldChanged(s, dev);
+  } else if (f === 'gateway') {
+    dev.gateway = el.value;
+    // Gateway change doesn't shift subnet membership; just save + refresh.
+    redrawDevice(s, dev);
+    if (s.activeLayer === 'routing') {
+      s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
+    }
   } else {
     dev[f] = el.value;
     if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
@@ -4024,19 +4136,37 @@ function updateDeviceField(s, dev, el) {
       // Counterpart text on other devices' inspector rows references this name
       s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
     }
-    if (f === 'ip') {
-      // Routing layer link colours depend on dev.ip → subnet membership for
-      // non-L3 hosts. Refresh the subnet legend (no auto-add of new subnets;
-      // user pulls them in via the legend's AUTO-DERIVE) and redraw incident
-      // links if we're on the routing layer.
-      subnetsChanged(s);
-      if (s.activeLayer === 'routing') {
-        s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
-      }
-    }
+    if (f === 'ip') onL3DeviceFieldChanged(s, dev);
   }
   schedSave(s);
   refreshDetailViewIfSettled(s);
+}
+
+// Shared post-edit logic for non-L3 device IP/prefix changes: auto-add the
+// derived subnet to the registry (so the legend lights up immediately),
+// auto-fill the gateway if blank, refresh the subnet legend + routing-layer
+// link visuals.
+function onL3DeviceFieldChanged(s, dev) {
+  if (isL3Type(dev.type) || isReference(dev)) return;
+  if (dev.ip) {
+    const cidr = `${dev.ip}/${dev.prefix != null ? dev.prefix : 24}`;
+    const p = parseCidr(cidr);
+    if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
+    if (!dev.gateway) {
+      dev.gateway = defaultGatewayFor(dev.ip, dev.prefix);
+      // Reflect into the open inspector input without clobbering focus.
+      const gwInput = s.inspector?.querySelector('[data-f="gateway"]');
+      if (gwInput && document.activeElement !== gwInput) gwInput.value = dev.gateway || '';
+    } else {
+      const gwInput = s.inspector?.querySelector('[data-f="gateway"]');
+      if (gwInput) gwInput.placeholder = defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1';
+    }
+  }
+  redrawDevice(s, dev);
+  subnetsChanged(s);
+  if (s.activeLayer === 'routing') {
+    s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
+  }
 }
 
 function updateLinkField(s, link, el) {
@@ -4643,6 +4773,10 @@ function render(s) {
   renderLegend(s);
   renderSubnetLegend(s);
   invalidateEdgeSlots(s);
+  // L3 path overlays — only compute when the routing layer is active.
+  // The map is consumed by drawLink's routing branch and cleared otherwise
+  // so partial redraws on other layers don't accidentally light up L3 paths.
+  s._l3Overlays = s.activeLayer === 'routing' ? computeL3PathOverlays(s) : null;
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
@@ -5498,19 +5632,30 @@ function migrate(s) {
     const devSet = new Set(d.vlans);
     d.ports.forEach((p) => { p.vlans = p.vlans.filter((v) => devSet.has(v)); });
 
-    // L3 fields. Routers and firewalls keep an interfaces[] and routes[]
-    // table; other devices stay with their single dev.ip and don't carry
-    // these arrays (avoids cluttering the inspector for endpoints/switches).
+    // L3 fields. Routers and firewalls own an interfaces[] table with
+    // ip/prefix/gateway fields per row; non-L3 devices terminate IP via the
+    // single dev.ip / dev.prefix / dev.gateway trio (one implicit interface).
+    // The legacy schema stored ip as a CIDR string and bound an explicit
+    // subnetId/vlanId — both fields are derived now and are stripped.
+    const splitCidr = (raw, fallbackPrefix) => {
+      const s = String(raw || '').trim();
+      const m = s.match(/^(.+?)\/(\d+)$/);
+      if (m) return { ip: m[1], prefix: Math.max(0, Math.min(32, Number(m[2]))) };
+      return { ip: s, prefix: Math.max(0, Math.min(32, Number(fallbackPrefix))) };
+    };
     if (isL3Type(d.type)) {
       if (!Array.isArray(d.interfaces)) d.interfaces = [];
       if (!Array.isArray(d.routes)) d.routes = [];
-      d.interfaces = d.interfaces.map((iface) => ({
-        id: iface.id || ('if_' + rid()),
-        name: String(iface.name || ''),
-        ip: String(iface.ip || ''),
-        subnetId: iface.subnetId || null,
-        vlanId: iface.vlanId != null && iface.vlanId !== '' ? String(iface.vlanId) : null,
-      }));
+      d.interfaces = d.interfaces.map((iface) => {
+        const split = splitCidr(iface.ip, iface.prefix != null ? iface.prefix : 24);
+        return {
+          id: iface.id || ('if_' + rid()),
+          name: String(iface.name || ''),
+          ip: split.ip,
+          prefix: Number.isFinite(split.prefix) ? split.prefix : 24,
+          gateway: String(iface.gateway || ''),
+        };
+      });
       d.routes = d.routes.map((r) => ({
         id: r.id || ('rt_' + rid()),
         dst: String(r.dst || ''),
@@ -5521,12 +5666,25 @@ function migrate(s) {
       // Bootstrap an interface from the legacy single-IP field — if a router
       // has dev.ip set but no interfaces, that IP becomes "if0".
       if (!d.interfaces.length && d.ip && String(d.ip).trim()) {
-        d.interfaces.push({ id: 'if_' + rid(), name: 'if0', ip: String(d.ip).trim(), subnetId: null });
+        const split = splitCidr(d.ip, d.prefix != null ? d.prefix : 24);
+        d.interfaces.push({
+          id: 'if_' + rid(), name: 'if0',
+          ip: split.ip, prefix: split.prefix,
+          gateway: defaultGatewayFor(split.ip, split.prefix),
+        });
       }
     } else {
-      // Strip stale L3 arrays from non-L3 devices in case the user changed type.
+      // Non-L3 devices: split the legacy CIDR field into ip + prefix and
+      // ensure a gateway slot exists. Strip any router-only arrays in case
+      // the type was changed away from router/firewall.
       delete d.interfaces;
       delete d.routes;
+      if (!isReference(d)) {
+        const split = splitCidr(d.ip, d.prefix != null ? d.prefix : 24);
+        d.ip = split.ip;
+        d.prefix = Number.isFinite(split.prefix) ? split.prefix : 24;
+        if (typeof d.gateway !== 'string') d.gateway = '';
+      }
     }
   });
   s.links.forEach((l) => {
@@ -5625,16 +5783,8 @@ function migrate(s) {
   // L3 — auto-discover subnets from every populated IP so a freshly-loaded
   // map already shows meaningful content in the routing layer. Idempotent.
   autoDiscoverSubnets(s);
-  // Drop orphan subnetIds / vlanIds on interfaces (registry entry was
-  // deleted between sessions). Same idea as the device.vlans constraint.
-  const liveSubnets = new Set(s.subnetRegistry.map((sn) => String(sn.id)));
-  const liveVlans = new Set(s.vlanRegistry.map((v) => String(v.id)));
-  s.devices.forEach((d) => {
-    (d.interfaces || []).forEach((iface) => {
-      if (iface.subnetId && !liveSubnets.has(String(iface.subnetId))) iface.subnetId = null;
-      if (iface.vlanId && !liveVlans.has(String(iface.vlanId))) iface.vlanId = null;
-    });
-  });
+  // Interfaces now derive their subnet from ip+prefix on the fly — no
+  // orphan-id sweep needed. Subnet registry just gets re-indexed.
   recomputeSubnetIndex(s);
 }
 
@@ -6067,9 +6217,9 @@ const MOD002_CSS = `
 .m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.5px;}
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
-.m002-iface-head{display:grid;grid-template-columns:8px 0.8fr 1.4fr 0.7fr 1.1fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
+.m002-iface-head{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
 .m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
-.m002-iface-row{display:grid;grid-template-columns:8px 0.8fr 1.4fr 0.7fr 1.1fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
+.m002-iface-row{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
 .m002-iface-dot{width:8px;height:8px;background:var(--sc);box-shadow:0 0 3px var(--sc);}
 .m002-iface-row input,.m002-iface-row select,.m002-route-row input,.m002-route-row select{background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:2px 4px;font-family:'Share Tech Mono',monospace;font-size:10px;outline:none;min-width:0;}
@@ -6095,6 +6245,12 @@ const MOD002_CSS = `
 .m002-dev-gw-badge text{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1px;font-weight:700;fill:#ffae00;}
 .m002-host[data-active-layer="routing"] .m002-dev-gw-badge{display:block;}
 .m002-action.small{padding:2px 8px;font-size:9px;}
+
+/* L3 trio for non-L3 device inspector (endpoint/cloud/switch) */
+.m002-field-l3-trio{display:flex;flex-direction:column;gap:4px;}
+.m002-l3-trio{display:grid;grid-template-columns:1.4fr 0.6fr 1.4fr;gap:4px;}
+.m002-l3-trio input,.m002-l3-trio select{background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;min-width:0;}
+.m002-l3-trio input:focus,.m002-l3-trio select:focus{border-color:#35ff7a;}
 
 .m002-vlan-legend-list::-webkit-scrollbar-thumb{background:#1a1a22;}
 .m002-vlan-legend-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
