@@ -1014,27 +1014,12 @@ function computeL3Paths(s) {
   return paths;
 }
 
-// Resolve the geometric waypoint for an L3-ribbon node. Differs from the
-// general effectivePos() in one important way: a member of a COLLAPSED
-// stack returns its OWN persisted x/y, not the stack centre. This is the
-// "treat as if expanded for line rendering, but visually keep collapsed"
-// behaviour the user asked for — the ribbon curves through where the
-// member would be if expanded, while the canvas still shows the tidy icon.
+// Geometric waypoint for an L3-ribbon node. Defers to effectivePos() so
+// members of a collapsed stack resolve to the stack centre (matching the
+// canvas), keeping the curve gliding through stack icons rather than
+// snaking out to where members would sit if expanded.
 function ribbonWaypoint(s, id) {
-  const stack = (s.stacks || []).find((st) => st.id === id);
-  if (stack) {
-    if (isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
-    const ms = (stack.members || []).map((mid) => s.devices.find((d) => d.id === mid)).filter(Boolean);
-    if (ms.length) {
-      return {
-        x: ms.reduce((sum, m) => sum + m.x, 0) / ms.length,
-        y: ms.reduce((sum, m) => sum + m.y, 0) / ms.length,
-      };
-    }
-    return { x: stack.x, y: stack.y };
-  }
-  const dev = s.devices.find((d) => d.id === id);
-  return dev ? { x: dev.x, y: dev.y } : null;
+  return effectivePos(s, id);
 }
 
 // Inserts a perpendicular midpoint between every pair of adjacent points.
@@ -1656,6 +1641,15 @@ function bindBoard(s) {
       return;
     }
 
+    const aggEl = e.target.closest('[data-agg-key]');
+    if (aggEl && e.button === 0) {
+      // Aggregate summary clicked — for now just nudge the user toward the
+      // LAG flow. Full "convert these N links into a LAG" UX comes next.
+      toast(s, 'LAG configurator coming soon — for now, expand the stack and create a LAG from the inspector');
+      e.preventDefault();
+      return;
+    }
+
     if (linkEl && e.button === 0) {
       select(s, 'link', linkEl.dataset.linkId);
       e.preventDefault();
@@ -1696,6 +1690,7 @@ function bindBoard(s) {
       // L3 ribbons follow device positions — redraw the entire path layer
       // while dragging so the smooth curves stay anchored to the moving node.
       if (s.activeLayer === 'routing') drawL3Paths(s);
+      refreshAggregates(s);
 
       // Drag-to-stack: highlight nearest valid merge candidate.
       // Skip when this device sits inside a stack (drag-to-merge across stacks
@@ -1779,6 +1774,7 @@ function bindBoard(s) {
       });
       st.members.forEach((mid) => updateLagPairsFor(s, mid));
       if (s.activeLayer === 'routing') drawL3Paths(s);
+      refreshAggregates(s);
     }
   };
   const onUp = () => {
@@ -2453,16 +2449,48 @@ function invalidateEdgeSlots(s) {
   s._edgeSlots = null;
 }
 
+// Aggregate every non-paired-LAG link between two collapsed stacks (or a
+// collapsed stack and a non-stack device) into a single summary group.
+// Result: Map<aggKey, { aSide, bSide, linkIds: [...] }>. aSide/bSide are
+// stack ids when collapsed, otherwise device ids. The renderer draws ONE
+// dim line per group instead of fanning N parallel stubs across the
+// canvas — cleaner, and the N value lets the user click through later
+// to configure a LAG over those wires.
+function computeStackPairAggregations(s, absorbed) {
+  const groups = new Map();
+  s.links.forEach((l) => {
+    if (absorbed.has(l.id)) return;
+    const stkA = findStack(s, l.from);
+    const stkB = findStack(s, l.to);
+    const aCollapsed = stkA && isStackCollapsed(s, stkA);
+    const bCollapsed = stkB && isStackCollapsed(s, stkB);
+    if (!aCollapsed && !bCollapsed) return;
+    // The other side must also be a collapsed-stack OR a non-stack device.
+    // An expanded stack on the other side keeps individual link rendering so
+    // the user sees which member port is involved.
+    const aSide = stkA ? (aCollapsed ? stkA.id : null) : l.from;
+    const bSide = stkB ? (bCollapsed ? stkB.id : null) : l.to;
+    if (!aSide || !bSide) return;
+    if (aSide === bSide) return;
+    const key = [aSide, bSide].sort().join('::');
+    if (!groups.has(key)) groups.set(key, { aSide, bSide, linkIds: [] });
+    groups.get(key).linkIds.push(l.id);
+  });
+  return groups;
+}
+
 function ensureEdgeSlots(s) {
   if (s._edgeSlots) return s._edgeSlots;
   const absorbed = computeAbsorbedLinkIds(s);
-  const bundle = s._bundleByLink || null;
+  const aggregations = computeStackPairAggregations(s, absorbed);
+  const aggregatedLinkIds = new Set();
+  aggregations.forEach((agg) => agg.linkIds.forEach((id) => aggregatedLinkIds.add(id)));
   const groups = new Map();
-  // Regular links — skip those absorbed into a LAG-pair line or a logical-layer
-  // bundle (those are not drawn as their own edge).
+  // Regular links — skip those absorbed into a LAG-pair line or rolled up
+  // into a stack-pair aggregation (those are not drawn as their own edge).
   s.links.forEach((l) => {
     if (absorbed.has(l.id)) return;
-    if (bundle?.get(l.id)?.absorbed) return;
+    if (aggregatedLinkIds.has(l.id)) return;
     const key = visualEndpointKey(s, l.from, l.to);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push({ kind: 'link', id: l.id, sortKey: 'link:' + l.id });
@@ -2483,6 +2511,17 @@ function ensureEdgeSlots(s) {
       groups.get(ep).push({ kind: 'lag', id: `${stA.id}|${lag.id}`, sortKey: 'lag:' + selfKey });
     });
   });
+  // Aggregated stack-pair summaries — one item per group, slotted alongside
+  // any LAG-pair / link items between the same visual endpoints.
+  aggregations.forEach((agg, key) => {
+    const stkA = (s.stacks || []).find((st) => st.id === agg.aSide);
+    const stkB = (s.stacks || []).find((st) => st.id === agg.bSide);
+    const epA = stkA ? `stack:${stkA.id}` : `device:${agg.aSide}`;
+    const epB = stkB ? `stack:${stkB.id}` : `device:${agg.bSide}`;
+    const ep = [epA, epB].sort().join('|');
+    if (!groups.has(ep)) groups.set(ep, []);
+    groups.get(ep).push({ kind: 'agg', id: key, sortKey: 'agg:' + key });
+  });
   const out = new Map();
   groups.forEach((items) => {
     items.sort((a, b) => (a.sortKey < b.sortKey ? -1 : a.sortKey > b.sortKey ? 1 : 0));
@@ -2498,6 +2537,9 @@ function ensureEdgeSlots(s) {
 
 function laneForLink(s, linkId) {
   return ensureEdgeSlots(s).get(`link:${linkId}`)?.lane || 0;
+}
+function laneForAgg(s, aggKey) {
+  return ensureEdgeSlots(s).get(`agg:${aggKey}`)?.lane || 0;
 }
 function laneForLag(s, stackAId, lagAId) {
   return ensureEdgeSlots(s).get(`lag:${stackAId}|${lagAId}`)?.lane || 0;
@@ -3034,6 +3076,45 @@ function drawLagLink(s, p) {
   // shape here so the injection has nothing to recompute. No idle <path> means
   // no Firefox SVG-pattern flicker around the cursor.
   g.setAttribute('data-flow-d', path.d);
+  s.gLinks.appendChild(g);
+}
+
+function aggEndpointPos(s, id) {
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack) return { x: stack.x, y: stack.y };
+  const dev = s.devices.find((d) => d.id === id);
+  if (dev) return { x: dev.x, y: dev.y };
+  return null;
+}
+
+// Wipe and re-render every stack-pair aggregate. Called from drag onMove
+// handlers — collapsed-stack icons or attached devices have moved, so the
+// aggregate dim line needs to follow. Cheap: typically a handful of <g>s.
+function refreshAggregates(s) {
+  if (!s.gLinks) return;
+  s.gLinks.querySelectorAll('[data-agg-key]').forEach((el) => el.remove());
+  const absorbed = computeAbsorbedLinkIds(s);
+  const aggs = computeStackPairAggregations(s, absorbed);
+  aggs.forEach((agg, key) => {
+    const aPos = aggEndpointPos(s, agg.aSide);
+    const bPos = aggEndpointPos(s, agg.bSide);
+    if (aPos && bPos) drawStackPairAggregate(s, key, agg, aPos, bPos);
+  });
+}
+
+// Single dim summary line replacing N parallel non-paired-LAG stubs between
+// two collapsed-stack (or stack + device) endpoints. Click target carries
+// the aggregation key so a future LAG-config flow can resolve the linkIds.
+function drawStackPairAggregate(s, key, agg, aPos, bPos) {
+  const lane = laneForAgg(s, key);
+  const path = orthPath(aPos, bPos, lane);
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-link m002-link-agg');
+  g.setAttribute('data-agg-key', key);
+  let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
+  inner += `<path class="m002-link-line m002-link-agg-line" d="${path.d}" stroke="#5a5f6e" stroke-dasharray="6 4" stroke-width="1.4"/>`;
+  inner += `<text class="m002-link-agg-label" x="${path.lx}" y="${path.ly - 4}" fill="#7a7f8e" text-anchor="middle">×${agg.linkIds.length} · click to LAG</text>`;
+  g.innerHTML = inner;
   s.gLinks.appendChild(g);
 }
 
@@ -5226,37 +5307,30 @@ function render(s) {
     });
   });
   const absorbed = computeAbsorbedLinkIds(s);
-
-  // Compute LAG bundles (only in logical layers, for non-paired LAGs). Per
-  // render pass we mark which links are absorbed into a bundle so we don't
-  // render them twice.
-  const bundleByLink = new Map();
-  if (s.activeLayer !== 'physical') {
-    const groups = new Map();
-    s.links.forEach((l) => {
-      if (absorbed.has(l.id)) return;
-      const key = lagBundleKey(s, l);
-      if (!key) return;
-      if (!groups.has(key)) groups.set(key, []);
-      groups.get(key).push(l);
-    });
-    groups.forEach((linksInGroup) => {
-      if (linksInGroup.length < 1) return;
-      const rep = linksInGroup[0];
-      bundleByLink.set(rep.id, { members: linksInGroup });
-      linksInGroup.slice(1).forEach((l) => bundleByLink.set(l.id, { absorbed: true }));
-    });
-  }
-  s._bundleByLink = bundleByLink;
+  // Stack-pair aggregations: every non-paired-LAG link involving at least
+  // one collapsed stack collapses into one summary line. Replaces the
+  // per-link / non-paired-LAG-bundle visuals between collapsed stacks.
+  const aggregations = computeStackPairAggregations(s, absorbed);
+  const aggregatedLinkIds = new Set();
+  aggregations.forEach((agg) => agg.linkIds.forEach((id) => aggregatedLinkIds.add(id)));
+  s._bundleByLink = null;
   s.links.forEach((l) => {
     if (absorbed.has(l.id)) return;
+    if (aggregatedLinkIds.has(l.id)) return;
     const a = s.devices.find((d) => d.id === l.from);
     const b = s.devices.find((d) => d.id === l.to);
     if (!a || !b) return;
     if (!inZone(a) || !inZone(b)) return;
     drawLink(s, l);
   });
-  s._bundleByLink = null;
+
+  // Stack-pair aggregation summary lines.
+  aggregations.forEach((agg, key) => {
+    const aPos = aggEndpointPos(s, agg.aSide);
+    const bPos = aggEndpointPos(s, agg.bSide);
+    if (!aPos || !bPos) return;
+    drawStackPairAggregate(s, key, agg, aPos, bPos);
+  });
 
   // Explicit LAG-pair links — drawn after regular links so they sit on top.
   // Skip when either side is expanded, so the user sees the underlying member
@@ -6584,6 +6658,14 @@ const MOD002_CSS = `
 .m002-port-lag-row{display:flex;gap:6px;align-items:center;flex-wrap:wrap;}
 .m002-port-lag-select{flex:1;background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
 .m002-link-bundle-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
+/* Stack-pair aggregate summary — replaces N parallel non-paired stubs
+   between two collapsed stacks (or stack + device). One faint dashed line
+   plus a "×N · click to LAG" badge. Hover lifts the line so it's clearly
+   actionable. */
+.m002-link-agg .m002-link-hit{stroke-width:14;cursor:pointer;}
+.m002-link-agg-line{transition:stroke .15s,opacity .15s;}
+.m002-link-agg:hover .m002-link-agg-line{stroke:#9aa0a8;}
+.m002-link-agg-label{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;}
 .m002-link-bundle .m002-link-hit{stroke-width:18;}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
