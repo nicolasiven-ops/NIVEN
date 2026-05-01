@@ -675,13 +675,21 @@ function refreshInspectorIfL3(s) {
 // the first usable address inside the subnet (network address + 1). For /31
 // (point-to-point) and /32 (host route) there is no meaningful gateway, so
 // we return an empty string and the inspector leaves the field blank.
+//
+// One special case: when the typed IP IS itself the would-be-gateway address
+// of its own subnet (the "x.x.x.1" of /24 etc.), the device is presumably
+// ACTING as a gateway rather than pointing at one. Returning '' suppresses
+// the auto-fill so the user doesn't end up with router.gateway === router.ip,
+// which would also poison the L3 ribbon flow-direction inference.
 function defaultGatewayFor(ip, prefix) {
   if (!ip) return '';
   const pfx = Number(prefix);
   if (!Number.isFinite(pfx) || pfx >= 31 || pfx < 0) return '';
   const p = parseCidr(ip + '/' + pfx);
   if (!p) return '';
-  return numToIp((p.netNum + 1) >>> 0);
+  const gw = numToIp((p.netNum + 1) >>> 0);
+  if (gw === p.ip) return '';
+  return gw;
 }
 
 // IP / CIDR utilities ---------------------------------------------------------
@@ -778,8 +786,12 @@ function subnetForIp(s, ip) {
 // the per-member IPs and produce phantom L3 ribbons into the stack interior.
 function deviceSubnets(s, dev) {
   if (!dev) return [];
-  const stack = findStack(s, dev.id);
-  if (stack && stackHasVip(stack)) return [];
+  // Stack members keep their own IPs as first-class L3 endpoints — each
+  // member is addressable directly. The stack-as-a-whole carries an
+  // independent VIP via stackSubnets() and shows up as an additional path
+  // destination for "going to the gateway"-style traffic. computeL3Paths()
+  // decides whether a given ribbon terminates at the member position or at
+  // the stack centre based on which entity sits at the path endpoint.
   const out = [];
   const seen = new Set();
   const add = (sn) => { if (sn && !seen.has(sn.id)) { seen.add(sn.id); out.push(sn); } };
@@ -921,6 +933,14 @@ function computeL3Paths(s) {
     });
   });
 
+  // What stack family does an entity id belong to? A stack itself returns
+  // its own id; a member returns its owning stack id; everything else null.
+  const familyOf = (id) => {
+    if (stackOfMember.has(id)) return stackOfMember.get(id);
+    if ((s.stacks || []).some((st) => st.id === id)) return id;
+    return null;
+  };
+
   for (const [subnetId, ents] of groups) {
     if (ents.length < 2) continue;
     for (let i = 0; i < ents.length; i++) {
@@ -940,18 +960,29 @@ function computeL3Paths(s) {
       for (let j = i + 1; j < ents.length; j++) {
         const target = ents[j];
         if (!parent.has(target)) continue;
+        // Skip intra-stack pairs: members or VIP within the same stack
+        // family don't generate ribbons — communication between them is
+        // internal to the stacking fabric and a visible line would just
+        // smear across the envelope.
+        const sFam = familyOf(start);
+        const tFam = familyOf(target);
+        if (sFam && tFam && sFam === tFam) continue;
         const ids = [target];
         let cur = target;
         while (parent.has(cur)) {
           cur = parent.get(cur);
           ids.unshift(cur);
         }
-        // Collapse member hops to their owning stack id, then dedupe
-        // consecutive runs of the same id. A path Endpoint → memberA →
-        // memberB → Endpoint becomes Endpoint → stackId → Endpoint.
+        // Collapse only TRANSIT member hops to the stack id. Endpoint members
+        // stay as members so the ribbon terminates at the actual member
+        // position. The stack centre is reserved for paths that genuinely
+        // end at the stack's own VIP (gateway traffic).
         const collapsed = [];
-        for (const id of ids) {
-          const eff = stackOfMember.has(id) ? stackOfMember.get(id) : id;
+        for (let k = 0; k < ids.length; k++) {
+          const id = ids[k];
+          const isEndpoint = (k === 0 || k === ids.length - 1);
+          const stkId = stackOfMember.get(id);
+          const eff = (!isEndpoint && stkId) ? stkId : id;
           if (collapsed[collapsed.length - 1] !== eff) collapsed.push(eff);
         }
         if (collapsed.length < 2) continue;
@@ -960,6 +991,31 @@ function computeL3Paths(s) {
     }
   }
   return paths;
+}
+
+// Inserts a perpendicular midpoint between every pair of adjacent points.
+// The midpoint is offset perpendicular to the segment by a fraction of its
+// length, capped — short segments stay subtle, long ones bow noticeably.
+// The offset alternates direction along the path (using the seed) so the
+// resulting curve has organic swing rather than a uniform arc, and so two
+// ribbons in the same subnet don't all bow the same way. Without this the
+// auto-collapsed routing layer produces nearly straight lines that lose
+// all the visual character the multi-hop physical path used to provide.
+function puffPath(pts, seed) {
+  if (!pts || pts.length < 2) return pts || [];
+  const out = [pts[0]];
+  for (let i = 0; i < pts.length - 1; i++) {
+    const a = pts[i], b = pts[i + 1];
+    const dx = b.x - a.x, dy = b.y - a.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 24) { out.push(b); continue; } // too short to bother
+    const nx = -dy / len, ny = dx / len;
+    const sign = ((seed >> i) & 1) ? 1 : -1;
+    const off = Math.min(len * 0.18, 70);
+    out.push({ x: (a.x + b.x) / 2 + nx * off * sign, y: (a.y + b.y) / 2 + ny * off * sign });
+    out.push(b);
+  }
+  return out;
 }
 
 // Catmull-Rom-to-Bezier smoothing through a list of points. Two-point paths
@@ -995,27 +1051,46 @@ function drawL3Paths(s) {
   const paths = computeL3Paths(s);
   if (!paths.length) return;
   let html = '';
+  // Cheap deterministic hash of the path id sequence — drives both the
+  // perpendicular-offset sign in puffPath() and ensures the same path keeps
+  // the same swing across renders (no jitter when redrawing).
+  const seedFor = (ids) => {
+    let h = 0;
+    for (const id of ids) for (let k = 0; k < id.length; k++) h = (h * 31 + id.charCodeAt(k)) | 0;
+    return h;
+  };
   paths.forEach((p) => {
     const sn = s.subnetRegistry.find((x) => x.id === p.subnetId);
     if (!sn) return;
     const c = subnetColor(s, sn.id);
     const pts = p.ids.map((id) => effectivePos(s, id)).filter(Boolean);
     if (pts.length < 2) return;
-    const d = smoothPath(pts);
+    const swung = puffPath(pts, seedFor(p.ids));
+    const d = smoothPath(swung);
     if (!d) return;
     // Flow direction: packets travel from the host that points AT a gateway
-    // to the host whose IP is the gateway. Detect by matching one endpoint's
-    // gateway field against the other endpoint's IPs. When both / neither
-    // qualify, default to forward (no asymmetry to convey).
+    // to the host whose IP IS the gateway — never the other way around. When
+    // both endpoints reference each other (rare: two devices acting as each
+    // other's gateway) we still pick "toward the side that actually has the
+    // matching IP" for the display direction. When NEITHER endpoint points
+    // at the other (peer-to-peer L3 with no gateway relationship), the
+    // ribbon gets data-flow-dir="none" and the renderer hides the pulse —
+    // there's no defensible direction to animate toward.
     const aId = p.ids[0], bId = p.ids[p.ids.length - 1];
     const aIps = entityIps(s, aId);
     const bIps = entityIps(s, bId);
     const aPointsAtB = entityGateways(s, aId).some((g) => bIps.includes(g));
     const bPointsAtA = entityGateways(s, bId).some((g) => aIps.includes(g));
-    const dir = bPointsAtA && !aPointsAtB ? 'reverse' : 'forward';
+    let dir;
+    if (aPointsAtB && !bPointsAtA) dir = 'forward';
+    else if (bPointsAtA && !aPointsAtB) dir = 'reverse';
+    else if (aPointsAtB && bPointsAtA) dir = 'forward'; // mutual — pick one
+    else dir = 'none';
     html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
     html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
-    html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="${dir}"/>`;
+    if (dir !== 'none') {
+      html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="${dir}"/>`;
+    }
   });
   s.gL3Paths.innerHTML = html;
 }
@@ -1079,13 +1154,18 @@ function startFlowTicker(s) {
     const phase = (t % PERIOD) / PERIOD;
     const fwd = (1 - phase) * SPAN;
     const rev = phase * SPAN;
-    // L2 link flow — only on incident links of the current selection.
-    const flows = s.gLinks?.querySelectorAll('.m002-link-flow');
-    if (flows && flows.length) {
-      flows.forEach((p) => {
-        const reverse = p.parentElement?.getAttribute('data-flow-from') === 'to';
-        p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
-      });
+    // L2 link flow — only on incident links of the current selection. The
+    // routing layer suppresses these entirely (CSS hides them) so the only
+    // animated thing in that view is the L3 ribbon pulse aimed at the
+    // gateway. No competing white pulse on the underlying L2 wires.
+    if (s.activeLayer !== 'routing') {
+      const flows = s.gLinks?.querySelectorAll('.m002-link-flow');
+      if (flows && flows.length) {
+        flows.forEach((p) => {
+          const reverse = p.parentElement?.getAttribute('data-flow-from') === 'to';
+          p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
+        });
+      }
     }
     // L3 ribbon flow — always on while the routing layer is active. Direction
     // points toward whichever endpoint is the other endpoint's default gateway.
@@ -6554,6 +6634,10 @@ const MOD002_CSS = `
    logical overlay rather than a re-skinned wire. fill:none keeps the curve
    transparent inside concave bends; pointer-events:none stops them from
    eating clicks meant for devices. */
+/* Routing layer: kill the L2 link-flow pulse so the only animated stream is
+   the L3 ribbon aimed at the gateway. Selection still highlights, but the
+   pulse on the underlying L2 wire would compete visually. */
+.m002-host[data-active-layer="routing"] .m002-link-flow{display:none;}
 .m002-l3-paths path{fill:none;pointer-events:none;}
 .m002-l3-path{stroke-width:2.5;opacity:.95;stroke-linecap:round;stroke-linejoin:round;}
 .m002-l3-path-glow{stroke-width:8;opacity:.22;filter:blur(2.5px);}
