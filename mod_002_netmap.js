@@ -625,9 +625,10 @@ function subnetByCidr(s, cidr) {
   return s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === norm) || null;
 }
 
-// Auto-discover subnets from every device that has an IP + prefix configured.
-// Called on hydrate and after each L3 edit; idempotent. Skips /32 (host
-// route) and /31 (point-to-point) — those aren't usefully shown as subnets.
+// Auto-discover subnets from every device + stack VIP that has an IP +
+// prefix configured. Called on hydrate and after each L3 edit; idempotent.
+// Skips /32 (host route) and /31 (point-to-point) — those aren't usefully
+// shown as subnets in the legend.
 function autoDiscoverSubnets(s) {
   const cidrs = [];
   s.devices.forEach((d) => {
@@ -637,6 +638,12 @@ function autoDiscoverSubnets(s) {
     } else if (d.ip) {
       cidrs.push(`${d.ip}/${d.prefix != null ? d.prefix : 24}`);
     }
+  });
+  (s.stacks || []).forEach((st) => {
+    (st.virtualInterfaces || []).forEach((vif) => {
+      if (!vif.ip) return;
+      cidrs.push(`${vif.ip}/${vif.prefix != null ? vif.prefix : 24}`);
+    });
   });
   cidrs.forEach((str) => {
     const p = parseCidr(str);
@@ -762,13 +769,63 @@ function subnetForIp(s, ip) {
 // works through subnetForIp containment, which is what makes a hand-typed
 // "10.0.0.10" on an endpoint actually count as a member of the registered
 // 10.0.0.0/24 in the routing layer.
+//
+// Stack-VIP semantics: when this device is a member of a stack that owns at
+// least one virtual interface, the L3 identity for routing belongs to the
+// stack's VIP — NOT to the member's own IP. The member's IP keeps its place
+// in the inspector (mgmt/console access) but is invisible to the path-
+// highlight engine. Otherwise endpoints aimed at the VIP would also "see"
+// the per-member IPs and produce phantom L3 ribbons into the stack interior.
 function deviceSubnets(s, dev) {
   if (!dev) return [];
+  const stack = findStack(s, dev.id);
+  if (stack && stackHasVip(stack)) return [];
   const out = [];
   const seen = new Set();
   const add = (sn) => { if (sn && !seen.has(sn.id)) { seen.add(sn.id); out.push(sn); } };
   (dev.interfaces || []).forEach((iface) => add(ifaceSubnet(s, iface)));
   if (dev.ip) add(subnetForIp(s, dev.ip));
+  return out;
+}
+
+function stackHasVip(stack) {
+  return Array.isArray(stack?.virtualInterfaces) && stack.virtualInterfaces.some((vif) => vif && vif.ip);
+}
+
+// IPs an entity (device or stack) terminates — for direction inference on
+// L3 ribbons. Stacks return their VIPs; routers/firewalls their interface
+// IPs; endpoints/clouds/switches their dev.ip.
+function entityIps(s, id) {
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack) return (stack.virtualInterfaces || []).map((vif) => vif.ip).filter(Boolean);
+  const dev = s.devices.find((d) => d.id === id);
+  if (!dev) return [];
+  if (isL3Type(dev.type)) return (dev.interfaces || []).map((iface) => iface.ip).filter(Boolean);
+  return dev.ip ? [dev.ip] : [];
+}
+
+// Gateway IPs configured on an entity — same shape as entityIps. Used to
+// match against the OTHER endpoint's IPs and decide flow direction.
+function entityGateways(s, id) {
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack) return (stack.virtualInterfaces || []).map((vif) => vif.gateway).filter(Boolean);
+  const dev = s.devices.find((d) => d.id === id);
+  if (!dev) return [];
+  if (isL3Type(dev.type)) return (dev.interfaces || []).map((iface) => iface.gateway).filter(Boolean);
+  return dev.gateway ? [dev.gateway] : [];
+}
+
+// Subnets a stack participates in via its virtual interfaces.
+function stackSubnets(s, stack) {
+  if (!stack) return [];
+  const out = [];
+  const seen = new Set();
+  (stack.virtualInterfaces || []).forEach((vif) => {
+    if (!vif.ip) return;
+    const cidr = `${vif.ip}/${vif.prefix != null ? vif.prefix : 24}`;
+    const sn = subnetForIp(s, cidr);
+    if (sn && !seen.has(sn.id)) { seen.add(sn.id); out.push(sn); }
+  });
   return out;
 }
 
@@ -803,31 +860,53 @@ function isDefaultGateway(s, dev) {
   return false;
 }
 
-// Compute L3 paths for the routing layer. Unlike the earlier link-overlay
-// approach (which painted each underlying L2 link in the subnet colour),
-// this returns the device-id sequence for every pair of L3 hosts in the
-// same subnet. The renderer then draws ONE smooth curve per pair, threaded
-// through the L2 transit nodes — visually decoupled from the L2 wiring so
-// awkward right-angle paths don't bleed through. Exactly the "loose line
-// that approximately follows the L2 path" the user asked for.
+// Compute L3 paths for the routing layer. Returns the entity-id sequence
+// (devices AND stacks-with-VIPs) for every pair of L3 endpoints in the
+// same subnet. The renderer draws ONE smooth curve per pair, threaded
+// through the L2 transit nodes — visually decoupled from the L2 wiring.
 //
-// Returns: Array<{ subnetId, deviceIds: [string,...] }>. deviceIds always
-// has length ≥ 2 (the two L3 endpoints) and may include any number of
-// transit hops (switches without IP) in between.
+// Stack handling:
+//   - A stack with a VIP is a first-class L3 endpoint. Its members are
+//     not endpoints (their IPs are mgmt-only and ignored for routing).
+//   - Adjacency adds a virtual edge between every stack and each of its
+//     members. BFS can therefore enter the stack via any member port.
+//   - After the path is reconstructed, any member-of-stack hop is rewritten
+//     to its owning stack id and consecutive duplicates are collapsed —
+//     so "endpoint → memberA → memberB → endpoint" becomes the visually
+//     sane "endpoint → stack → endpoint".
+//
+// Returns: Array<{ subnetId, ids: [entityId,...] }>. ids always has length
+// ≥ 2 (the two L3 endpoints, device or stack) and may include any number
+// of transit hops (L2 switches, L2-only stacks).
 function computeL3Paths(s) {
   const paths = [];
-  if (!s.links?.length) return paths;
+  if (!s.links?.length && !(s.stacks?.length)) return paths;
 
+  // Adjacency over the union of devices and stacks. Each stack is also a
+  // virtual node connected to all its members.
   const adj = new Map();
-  s.devices.forEach((d) => adj.set(d.id, []));
+  const ensure = (id) => { if (!adj.has(id)) adj.set(id, new Set()); };
+  s.devices.forEach((d) => ensure(d.id));
+  s.stacks.forEach((st) => ensure(st.id));
   s.links.forEach((l) => {
-    if (!adj.has(l.from)) adj.set(l.from, []);
-    if (!adj.has(l.to)) adj.set(l.to, []);
-    adj.get(l.from).push(l.to);
-    adj.get(l.to).push(l.from);
+    ensure(l.from); ensure(l.to);
+    adj.get(l.from).add(l.to);
+    adj.get(l.to).add(l.from);
+  });
+  s.stacks.forEach((st) => {
+    (st.members || []).forEach((mid) => {
+      ensure(mid);
+      adj.get(st.id).add(mid);
+      adj.get(mid).add(st.id);
+    });
   });
 
-  const groups = new Map();   // subnetId → [deviceId,...]
+  // Quick lookup: which stack does a given member id belong to?
+  const stackOfMember = new Map();
+  s.stacks.forEach((st) => (st.members || []).forEach((mid) => stackOfMember.set(mid, st.id)));
+
+  // Group L3 entities by subnet membership.
+  const groups = new Map();   // subnetId → [entityId,...]
   s.devices.forEach((d) => {
     if (isReference(d)) return;
     deviceSubnets(s, d).forEach((sn) => {
@@ -835,11 +914,17 @@ function computeL3Paths(s) {
       groups.get(sn.id).push(d.id);
     });
   });
+  s.stacks.forEach((st) => {
+    stackSubnets(s, st).forEach((sn) => {
+      if (!groups.has(sn.id)) groups.set(sn.id, []);
+      groups.get(sn.id).push(st.id);
+    });
+  });
 
-  for (const [subnetId, devs] of groups) {
-    if (devs.length < 2) continue;
-    for (let i = 0; i < devs.length; i++) {
-      const start = devs[i];
+  for (const [subnetId, ents] of groups) {
+    if (ents.length < 2) continue;
+    for (let i = 0; i < ents.length; i++) {
+      const start = ents[i];
       const parent = new Map();
       const visited = new Set([start]);
       const queue = [start];
@@ -852,16 +937,25 @@ function computeL3Paths(s) {
           queue.push(nb);
         }
       }
-      for (let j = i + 1; j < devs.length; j++) {
-        const target = devs[j];
+      for (let j = i + 1; j < ents.length; j++) {
+        const target = ents[j];
         if (!parent.has(target)) continue;
-        const deviceIds = [target];
+        const ids = [target];
         let cur = target;
         while (parent.has(cur)) {
           cur = parent.get(cur);
-          deviceIds.unshift(cur);
+          ids.unshift(cur);
         }
-        paths.push({ subnetId, deviceIds });
+        // Collapse member hops to their owning stack id, then dedupe
+        // consecutive runs of the same id. A path Endpoint → memberA →
+        // memberB → Endpoint becomes Endpoint → stackId → Endpoint.
+        const collapsed = [];
+        for (const id of ids) {
+          const eff = stackOfMember.has(id) ? stackOfMember.get(id) : id;
+          if (collapsed[collapsed.length - 1] !== eff) collapsed.push(eff);
+        }
+        if (collapsed.length < 2) continue;
+        paths.push({ subnetId, ids: collapsed });
       }
     }
   }
@@ -905,12 +999,23 @@ function drawL3Paths(s) {
     const sn = s.subnetRegistry.find((x) => x.id === p.subnetId);
     if (!sn) return;
     const c = subnetColor(s, sn.id);
-    const pts = p.deviceIds.map((id) => effectivePos(s, id)).filter(Boolean);
+    const pts = p.ids.map((id) => effectivePos(s, id)).filter(Boolean);
     if (pts.length < 2) return;
     const d = smoothPath(pts);
     if (!d) return;
+    // Flow direction: packets travel from the host that points AT a gateway
+    // to the host whose IP is the gateway. Detect by matching one endpoint's
+    // gateway field against the other endpoint's IPs. When both / neither
+    // qualify, default to forward (no asymmetry to convey).
+    const aId = p.ids[0], bId = p.ids[p.ids.length - 1];
+    const aIps = entityIps(s, aId);
+    const bIps = entityIps(s, bId);
+    const aPointsAtB = entityGateways(s, aId).some((g) => bIps.includes(g));
+    const bPointsAtA = entityGateways(s, bId).some((g) => aIps.includes(g));
+    const dir = bPointsAtA && !aPointsAtB ? 'reverse' : 'forward';
     html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
     html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
+    html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="${dir}"/>`;
   });
   s.gL3Paths.innerHTML = html;
 }
@@ -974,12 +1079,23 @@ function startFlowTicker(s) {
     const phase = (t % PERIOD) / PERIOD;
     const fwd = (1 - phase) * SPAN;
     const rev = phase * SPAN;
+    // L2 link flow — only on incident links of the current selection.
     const flows = s.gLinks?.querySelectorAll('.m002-link-flow');
-    if (!flows || !flows.length) return;
-    flows.forEach((p) => {
-      const reverse = p.parentElement?.getAttribute('data-flow-from') === 'to';
-      p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
-    });
+    if (flows && flows.length) {
+      flows.forEach((p) => {
+        const reverse = p.parentElement?.getAttribute('data-flow-from') === 'to';
+        p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
+      });
+    }
+    // L3 ribbon flow — always on while the routing layer is active. Direction
+    // points toward whichever endpoint is the other endpoint's default gateway.
+    const ribbons = s.gL3Paths?.querySelectorAll('.m002-l3-path-flow');
+    if (ribbons && ribbons.length) {
+      ribbons.forEach((p) => {
+        const reverse = p.getAttribute('data-flow-dir') === 'reverse';
+        p.style.strokeDashoffset = (reverse ? rev : fwd).toFixed(2);
+      });
+    }
   };
   s.flowFrame = requestAnimationFrame(tick);
 }
@@ -1268,8 +1384,35 @@ function buildDOM(s) {
     const pill = e.target.closest('[data-layer]');
     if (!pill) return;
     s.layerBar.querySelectorAll('.m002-layer-pill').forEach((p) => p.classList.toggle('active', p === pill));
+    const prev = s.activeLayer;
     s.activeLayer = pill.dataset.layer;
     s.host.setAttribute('data-active-layer', s.activeLayer);
+    // Routing-layer ergonomics: pure-L2 stacks (switches without a VIP) are
+    // visual noise on the routing layer — they're transit. Auto-collapse them
+    // on entry so the L3 ribbons read cleanly. We remember which stacks WE
+    // collapsed so leaving the layer can restore the user's prior layout
+    // without clobbering anything they collapsed manually.
+    if (s.activeLayer === 'routing' && prev !== 'routing') {
+      const collapsedByLayer = [];
+      (s.stacks || []).forEach((st) => {
+        const isL2Only = !stackHasVip(st) && !st.members.some((mid) => {
+          const m = s.devices.find((d) => d.id === mid);
+          return m && isL3Device(m);
+        });
+        if (isL2Only && st.expanded) {
+          st.expanded = false;
+          collapsedByLayer.push(st.id);
+        }
+      });
+      s._routingAutoCollapsed = collapsedByLayer;
+    } else if (prev === 'routing' && s.activeLayer !== 'routing' && Array.isArray(s._routingAutoCollapsed)) {
+      // Leaving routing — re-expand only the stacks we touched on entry.
+      s._routingAutoCollapsed.forEach((id) => {
+        const st = (s.stacks || []).find((x) => x.id === id);
+        if (st) st.expanded = true;
+      });
+      s._routingAutoCollapsed = null;
+    }
     render(s);
   });
   s.activeLayer = 'physical';
@@ -2149,11 +2292,27 @@ function isStackCollapsed(s, stack) {
 }
 // Where to anchor a link on this device — the device itself, or the stack icon
 // if the device sits inside a collapsed stack.
-function effectivePos(s, deviceId) {
-  const dev = s.devices.find((d) => d.id === deviceId);
+function effectivePos(s, id) {
+  // Stack id first — IDs are namespaced ("stk_..." / "x..." / "if_..." etc),
+  // so a hit here can't collide with a device. When the stack is expanded we
+  // pick the centroid of its visible members so a ribbon endpoint feels
+  // anchored to the cluster rather than a random corner.
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack) {
+    if (isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
+    const ms = (stack.members || []).map((mid) => s.devices.find((d) => d.id === mid)).filter(Boolean);
+    if (ms.length) {
+      return {
+        x: ms.reduce((sum, m) => sum + m.x, 0) / ms.length,
+        y: ms.reduce((sum, m) => sum + m.y, 0) / ms.length,
+      };
+    }
+    return { x: stack.x, y: stack.y };
+  }
+  const dev = s.devices.find((d) => d.id === id);
   if (!dev) return null;
-  const stack = findStack(s, deviceId);
-  if (stack && isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
+  const stk = findStack(s, id);
+  if (stk && isStackCollapsed(s, stk)) return { x: stk.x, y: stk.y };
   return { x: dev.x, y: dev.y };
 }
 
@@ -2371,6 +2530,7 @@ function createStack(s, deviceIds) {
     zone: s.activeZone,
     lags: [],
     stackLinks: [],
+    virtualInterfaces: [],
   };
   s.stacks.push(st);
   render(s);
@@ -2544,10 +2704,10 @@ function drawCollapsedStack(s, stack) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-stack-collapsed');
   g.setAttribute('data-stack-id', stack.id);
-  // L3 status mirrors the stack contents — if any member terminates IP, the
-  // collapsed icon stays opaque on the routing layer; otherwise it fades
-  // along with plain L2 switches.
-  const stackIsL3 = stack.members.some((mid) => {
+  // L3 status: the stack lights up on the routing layer when it owns a VIP
+  // (its own L3 identity) OR when any member terminates IP independently.
+  // A pure L2 switch-stack with no VIP fades along with regular switches.
+  const stackIsL3 = stackHasVip(stack) || stack.members.some((mid) => {
     const m = s.devices.find((d) => d.id === mid);
     return m && isL3Device(m);
   });
@@ -3354,6 +3514,80 @@ function bindL3Sections(s, dev, body) {
   });
 }
 
+// Wire the VIP rows on the stack inspector. Mirrors bindL3Sections but for
+// stack.virtualInterfaces. Live gateway suggestion + auto-discover the
+// derived subnet so the routing layer reflects the change immediately.
+function bindStackVipSection(s, stack, body) {
+  const refresh = () => {
+    schedSave(s);
+    if (s.activeLayer === 'routing') drawL3Paths(s);
+    // Stack icon may have just become L3 (or stopped being L3) — repaint.
+    if (isStackCollapsed(s, stack)) {
+      const old = s.gDevices.querySelector(`[data-stack-id="${stack.id}"]`);
+      old?.remove();
+      drawCollapsedStack(s, stack);
+      markSelected(s);
+    }
+  };
+
+  body.querySelectorAll('[data-vif-id]').forEach((row) => {
+    const vifId = row.dataset.vifId;
+    const vif = (stack.virtualInterfaces || []).find((x) => x.id === vifId);
+    if (!vif) return;
+    row.querySelectorAll('[data-vif-f]').forEach((el) => {
+      const isSelect = el.tagName === 'SELECT';
+      const apply = (rerender) => {
+        const f = el.dataset.vifF;
+        const val = el.value;
+        if (f === 'prefix') {
+          vif.prefix = Math.max(0, Math.min(32, Number(val)));
+        } else {
+          vif[f] = val;
+        }
+        if (f === 'ip' || f === 'prefix') {
+          // Auto-add the derived subnet to the registry so the legend lights
+          // up the moment the user types a VIP. Same UX as device interfaces.
+          const cidr = vif.ip ? `${vif.ip}/${vif.prefix != null ? vif.prefix : 24}` : null;
+          const p = cidr ? parseCidr(cidr) : null;
+          if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
+          if (!vif.gateway) {
+            vif.gateway = defaultGatewayFor(vif.ip, vif.prefix);
+            const gwInput = row.querySelector('[data-vif-f="gateway"]');
+            if (gwInput && document.activeElement !== gwInput) gwInput.value = vif.gateway;
+          } else {
+            const gwInput = row.querySelector('[data-vif-f="gateway"]');
+            if (gwInput) gwInput.placeholder = defaultGatewayFor(vif.ip, vif.prefix) || '10.0.0.1';
+          }
+          subnetsChanged(s);
+        }
+        refresh();
+        if (rerender) openInspector(s);
+      };
+      if (isSelect) el.addEventListener('change', () => apply(true));
+      else {
+        el.addEventListener('input', () => apply(false));
+        el.addEventListener('change', () => { if (el.dataset.vifF === 'name') openInspector(s); });
+      }
+    });
+    row.querySelector('[data-vif-rm]')?.addEventListener('click', () => {
+      snapshot(s);
+      stack.virtualInterfaces = (stack.virtualInterfaces || []).filter((x) => x.id !== vifId);
+      subnetsChanged(s);
+      refresh();
+      openInspector(s);
+    });
+  });
+
+  body.querySelector('[data-vif-add]')?.addEventListener('click', () => {
+    snapshot(s);
+    if (!Array.isArray(stack.virtualInterfaces)) stack.virtualInterfaces = [];
+    const idx = stack.virtualInterfaces.length;
+    stack.virtualInterfaces.push({ id: 'vif_' + rid(), name: `vip${idx}`, ip: '', prefix: 24, gateway: '' });
+    refresh();
+    openInspector(s);
+  });
+}
+
 function refreshToolHighlights(s) {
   const setActive = (sel, on) => s.host.querySelector(sel)?.classList.toggle('active', !!on);
   setActive('[data-tool="link"]',   s.linkMode);
@@ -3786,6 +4020,56 @@ function openInspector(s) {
       `;
     })();
 
+    // VIPs — virtual L3 interfaces that ride on the stack as a whole. Each
+    // row mirrors the device-interface form: NAME · IP · /PREFIX · GATEWAY.
+    // VRRP / HSRP / StackWise: endpoints in the subnet point at the VIP as
+    // their gateway and the VIP "floats" between member nodes during failover.
+    // Members keep their own mgmt IPs; those don't generate routing endpoints
+    // when a VIP is configured (see deviceSubnets()).
+    const vipsHTML = (() => {
+      const vifs = stack.virtualInterfaces || [];
+      const head = vifs.length
+        ? `<div class="m002-iface-head">
+             <span></span>
+             <span>NAME</span>
+             <span>IP</span>
+             <span>PREFIX</span>
+             <span>GATEWAY</span>
+             <span></span>
+           </div>`
+        : '';
+      const prefixOpts = (selected) => {
+        const sel = Number.isFinite(Number(selected)) ? Number(selected) : 24;
+        let html = '';
+        for (let i = 32; i >= 0; i--) html += `<option value="${i}" ${i === sel ? 'selected' : ''}>/${i}</option>`;
+        return html;
+      };
+      const rows = vifs.length
+        ? vifs.map((vif) => {
+            const cidr = vif.ip ? `${vif.ip}/${vif.prefix != null ? vif.prefix : 24}` : null;
+            const sn = cidr ? subnetForIp(s, cidr) : null;
+            const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
+            const gwHint = defaultGatewayFor(vif.ip, vif.prefix);
+            return `<div class="m002-iface-row" data-vif-id="${escAttr(vif.id)}" style="--sc:${c}">
+              <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet'}"></span>
+              <input class="m002-iface-name" data-vif-f="name" value="${escAttr(vif.name)}" placeholder="vip0"/>
+              <input class="m002-iface-ip" data-vif-f="ip" value="${escAttr(vif.ip)}" placeholder="10.0.0.1"/>
+              <select class="m002-iface-prefix" data-vif-f="prefix">${prefixOpts(vif.prefix)}</select>
+              <input class="m002-iface-gw" data-vif-f="gateway" value="${escAttr(vif.gateway)}" placeholder="${escAttr(gwHint || '10.0.0.1')}"/>
+              <button type="button" class="m002-iface-rm" data-vif-rm title="Remove VIP">×</button>
+            </div>`;
+          }).join('')
+        : `<span class="m002-vlan-empty">no VIPs — the stack has no L3 identity. Add one to make endpoints route through it.</span>`;
+      return `
+        <div class="m002-l3-block">
+          <div class="m002-l3-head">
+            <span>VIPS (${vifs.length})</span>
+            <button type="button" class="m002-action small" data-vif-add>+ ADD</button>
+          </div>
+          <div class="m002-iface-list">${head}${rows}</div>
+        </div>
+      `;
+    })();
     body.innerHTML = `
       <label class="m002-field"><span>NAME</span><input data-sf="name" value="${escAttr(stack.name)}"/></label>
       <div class="m002-field">
@@ -3798,6 +4082,7 @@ function openInspector(s) {
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="stack:${escAttr(stack.id)}"></div>
       </div>
+      ${vipsHTML}
       ${lagsHTML}
       ${stackLinksHTML}
       <div class="m002-field">
@@ -3850,6 +4135,7 @@ function openInspector(s) {
       row.querySelector('[data-sl-rm]')?.addEventListener('click', () => removeStackLink(s, stack.id, slId));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
+    bindStackVipSection(s, stack, body);
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'lag') {
     // LAG editor — symmetric, both sides are stacks. FROM LAG / TO LAG pick
@@ -5704,6 +5990,25 @@ function migrate(s) {
       if (!Array.isArray(st.members)) st.members = [];
       if (!Array.isArray(st.lags))    st.lags    = [];
       if (!Array.isArray(st.stackLinks)) st.stackLinks = [];
+      // Virtual IPs — the L3 identity of the stack as a whole. VRRP / HSRP /
+      // StackWise semantics: the VIP "floats" on top of the member nodes,
+      // endpoints in the subnet point at it as their next-hop. Members keep
+      // their own mgmt IPs (stored on the member device) but those don't
+      // generate L3 path endpoints when a VIP is set on the stack.
+      if (!Array.isArray(st.virtualInterfaces)) st.virtualInterfaces = [];
+      st.virtualInterfaces = st.virtualInterfaces.map((vif) => {
+        let ip = String(vif.ip || '').trim();
+        let prefix = vif.prefix != null ? Number(vif.prefix) : 24;
+        const m = ip.match(/^(.+?)\/(\d+)$/);
+        if (m) { ip = m[1]; prefix = Math.max(0, Math.min(32, Number(m[2]))); }
+        return {
+          id: vif.id || ('vif_' + rid()),
+          name: String(vif.name || ''),
+          ip,
+          prefix: Number.isFinite(prefix) ? Math.max(0, Math.min(32, prefix)) : 24,
+          gateway: String(vif.gateway || ''),
+        };
+      });
       if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
       delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
@@ -6252,6 +6557,10 @@ const MOD002_CSS = `
 .m002-l3-paths path{fill:none;pointer-events:none;}
 .m002-l3-path{stroke-width:2.5;opacity:.95;stroke-linecap:round;stroke-linejoin:round;}
 .m002-l3-path-glow{stroke-width:8;opacity:.22;filter:blur(2.5px);}
+/* Flow pulse — short bright dash riding along the ribbon. Direction is
+   driven from JS via data-flow-dir + the rAF ticker (CSS keyframes are
+   silenced under prefers-reduced-motion on corporate Windows profiles). */
+.m002-l3-path-flow{stroke-width:3.2;stroke-dasharray:6 92;opacity:.95;stroke-linecap:round;filter:drop-shadow(0 0 4px currentColor);}
 .m002-link-l3-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;font-weight:500;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-link-transit-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:2px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-dev-l3{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;fill:#35ff7a;display:none;}
