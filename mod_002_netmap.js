@@ -619,6 +619,9 @@ function buildDOM(s) {
           <button type="button" class="m002-pal-btn ghost" data-tool="recenter" title="Recenter (R)">
             <span class="m002-pal-glyph">◎</span><span>RECENTER</span>
           </button>
+          <button type="button" class="m002-pal-btn ghost" data-tool="export-png" title="Export current zone as PNG">
+            <span class="m002-pal-glyph">⤓</span><span>EXPORT</span>
+          </button>
         </div>
       </section>
 
@@ -800,6 +803,7 @@ function buildDOM(s) {
     if (tool.dataset.tool === 'delete') toggleDeleteMode(s);
     if (tool.dataset.tool === 'undo') undo(s);
     if (tool.dataset.tool === 'recenter') recenter(s);
+    if (tool.dataset.tool === 'export-png') exportPNG(s);
     refreshToolHighlights(s);
   });
 
@@ -1226,6 +1230,93 @@ function recenter(s) {
   applyView(s);
   schedSave(s);
   toast(s, 'Recenter');
+}
+
+// =============================================================================
+// PNG export — current zone, fits all devices/links/labels with padding.
+// Renders the live SVG into a Blob, paints onto a 2× canvas, downloads.
+// =============================================================================
+function exportPNG(s) {
+  const inZone = (e) => !s.activeZone || !e.zone || e.zone === s.activeZone;
+  const devs = (s.devices || []).filter(inZone);
+  if (!devs.length) { toast(s, 'Map is empty — nothing to export'); return; }
+
+  const PAD = 80;
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  devs.forEach((d) => {
+    minX = Math.min(minX, d.x - DEVICE_W / 2);
+    minY = Math.min(minY, d.y - DEVICE_H / 2);
+    maxX = Math.max(maxX, d.x + DEVICE_W / 2);
+    maxY = Math.max(maxY, d.y + DEVICE_H / 2);
+  });
+  minX -= PAD; minY -= PAD; maxX += PAD; maxY += PAD;
+  const w = maxX - minX, h = maxY - minY;
+  const SCALE = 2;
+
+  // Clone the live SVG, then strip / reset things we don't want in the export.
+  const clone = s.svg.cloneNode(true);
+  const world = clone.querySelector('.m002-world');
+  if (world) world.removeAttribute('transform');
+  clone.querySelectorAll('.m002-overlay').forEach((el) => { el.innerHTML = ''; });
+  clone.querySelectorAll('.m002-link-pending, .m002-stub-line, .m002-rubber').forEach((el) => el.remove());
+  clone.querySelectorAll('[class*="selected"], [class*="hover"]').forEach((el) => {
+    el.setAttribute('class', el.getAttribute('class').replace(/\s*m002-[^\s]*-(selected|hover)/g, ''));
+  });
+
+  // Inline the module's CSS so the SVG renders standalone in an Image element.
+  const styleSrc = document.getElementById('mod002-styles');
+  const defs = clone.querySelector('defs');
+  if (styleSrc && defs) {
+    const styleEl = document.createElementNS(SVG_NS, 'style');
+    styleEl.textContent = styleSrc.textContent;
+    defs.appendChild(styleEl);
+  }
+
+  // Solid background (board tint) painted under the grid so transparent areas
+  // outside the dotted pattern still get the dark sci-fi look.
+  const bg = document.createElementNS(SVG_NS, 'rect');
+  bg.setAttribute('x', minX); bg.setAttribute('y', minY);
+  bg.setAttribute('width', w); bg.setAttribute('height', h);
+  bg.setAttribute('fill', '#07070c');
+  if (world) world.insertBefore(bg, world.firstChild);
+
+  clone.setAttribute('xmlns', SVG_NS);
+  clone.setAttribute('viewBox', `${minX} ${minY} ${w} ${h}`);
+  clone.setAttribute('width', w);
+  clone.setAttribute('height', h);
+  clone.removeAttribute('style');
+
+  const ser = new XMLSerializer().serializeToString(clone);
+  const blob = new Blob([ser], { type: 'image/svg+xml;charset=utf-8' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(w * SCALE);
+    canvas.height = Math.round(h * SCALE);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#07070c';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    URL.revokeObjectURL(url);
+    canvas.toBlob((png) => {
+      if (!png) { toast(s, 'Export failed'); return; }
+      const a = document.createElement('a');
+      const dlUrl = URL.createObjectURL(png);
+      const zone = (s.zones?.find((z) => z.id === s.activeZone)?.name || 'map')
+        .replace(/[^a-z0-9_-]+/gi, '_').toLowerCase();
+      const ts = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 16);
+      a.href = dlUrl;
+      a.download = `niven-netmap-${zone}-${ts}.png`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(dlUrl), 1000);
+      toast(s, `Exported ${canvas.width}×${canvas.height} PNG`);
+    }, 'image/png');
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); toast(s, 'Export failed'); };
+  img.src = url;
 }
 
 // =============================================================================
@@ -2668,16 +2759,41 @@ function renderReferenceInspector(s, dev, body) {
 function showInspectorEmpty(s) {
   const body = s.inspector.querySelector('.m002-insp-body');
   const idEl = s.inspector.querySelector('.m002-insp-id');
-  idEl.textContent = '// INSPECT';
+  idEl.textContent = '// CONTROLS';
+  const row = (keys, label) => `
+    <div class="m002-cheat-row">
+      <div class="m002-cheat-keys">${keys.map((k) => `<kbd class="m002-kbd">${k}</kbd>`).join('<span class="m002-cheat-plus">+</span>')}</div>
+      <div class="m002-cheat-label">${label}</div>
+    </div>`;
   body.innerHTML = `
-    <div class="m002-insp-empty">
-      <div class="m002-insp-empty-title">SELECT A NODE</div>
-      <ul class="m002-insp-empty-hints">
-        <li>CLICK to select</li>
-        <li>DRAG to move</li>
-        <li>SHIFT+CLICK = multi-select</li>
-        <li>DRAG ONTO NODE = group</li>
-      </ul>
+    <div class="m002-cheat">
+      <div class="m002-cheat-hint">No selection — pick a node to inspect.</div>
+
+      <div class="m002-cheat-group">
+        <div class="m002-cheat-title">// FORGE</div>
+        ${row(['N'], 'spawn next device')}
+        ${row(['L'], 'toggle link mode')}
+        ${row(['R'], 'recenter view')}
+        ${row(['DEL'], 'delete selection')}
+        ${row(['ESC'], 'deselect / cancel')}
+      </div>
+
+      <div class="m002-cheat-group">
+        <div class="m002-cheat-title">// HISTORY</div>
+        ${row(['CTRL', 'Z'], 'undo')}
+        ${row(['CTRL', 'Y'], 'redo')}
+      </div>
+
+      <div class="m002-cheat-group">
+        <div class="m002-cheat-title">// POINTER</div>
+        ${row(['CLICK'], 'select node')}
+        ${row(['DRAG'], 'move node')}
+        ${row(['DBL'], 'enter detail / expand group')}
+        ${row(['SHIFT', 'CLICK'], 'multi-select')}
+        ${row(['DRAG&rarr;NODE'], 'group')}
+        ${row(['WHEEL'], 'zoom')}
+        ${row(['DRAG-BG'], 'pan')}
+      </div>
     </div>
   `;
 }
@@ -4876,6 +4992,15 @@ const MOD002_CSS = `
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
 .m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
+.m002-cheat{display:flex;flex-direction:column;gap:14px;padding:2px 0 6px;}
+.m002-cheat-hint{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;color:#5a5f6e;text-align:center;padding:6px 0 4px;border-bottom:1px dashed #1a1a22;}
+.m002-cheat-group{display:flex;flex-direction:column;gap:4px;}
+.m002-cheat-title{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:2px;color:#7a7f8e;margin-bottom:2px;}
+.m002-cheat-row{display:flex;align-items:center;gap:8px;padding:2px 0;}
+.m002-cheat-keys{display:flex;align-items:center;gap:3px;flex-shrink:0;min-width:96px;}
+.m002-cheat-plus{font-family:'Share Tech Mono',monospace;font-size:9px;color:#3a3f4e;}
+.m002-kbd{display:inline-flex;align-items:center;justify-content:center;min-width:18px;height:18px;padding:0 5px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;color:#cfd2d8;background:#0d0d12;border:1px solid #2a2f3a;border-bottom-color:#1a1d24;border-right-color:#1a1d24;border-radius:2px;box-shadow:0 1px 0 #050507,inset 0 1px 0 rgba(255,255,255,0.04);}
+.m002-cheat-label{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.2px;color:#8a8f9e;}
 .m002-rightpanel .m002-insp-head{display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #1a1a22;padding-bottom:8px;}
 .m002-host *{box-sizing:border-box}
 .m002-host [hidden]{display:none!important;}
