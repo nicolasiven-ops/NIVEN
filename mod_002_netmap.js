@@ -2702,7 +2702,16 @@ function openInspector(s) {
         <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
       </label>
       <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
-      <label class="m002-field"><span>PORTS</span><input data-f="ports" type="number" min="1" max="96" value="${dev.ports.length}"/></label>
+      <div class="m002-field m002-field-ports">
+        <span>PORTS</span>
+        <span class="m002-port-count">${dev.ports.length}</span>
+        <div class="m002-port-btns">
+          <button type="button" class="m002-pcount-btn preset" data-pcount-set="24">24</button>
+          <button type="button" class="m002-pcount-btn preset" data-pcount-set="48">48</button>
+          <button type="button" class="m002-pcount-btn step minus" data-pcount-step="-1" title="Remove a port">−</button>
+          <button type="button" class="m002-pcount-btn step plus" data-pcount-step="1" title="Add a port">+</button>
+        </div>
+      </div>
       <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
       <div class="m002-field">
         <span>VLANS</span>
@@ -2738,6 +2747,21 @@ function openInspector(s) {
         // mid-keystroke; 'type' already re-opens itself inside the handler.
         if (el.dataset.f === 'ports') openInspector(s);
       });
+    });
+    // Port-count buttons: 24 / 48 quick-presets and ± steppers. Each routes
+    // through updateDeviceField('ports') with a synthetic element so the
+    // existing port/link/LAG cleanup logic runs. openInspector() re-renders
+    // the form so the count display and port table reflect the new size.
+    const setPortCount = (n) => {
+      const clamped = Math.max(1, Math.min(96, n));
+      updateDeviceField(s, dev, { dataset: { f: 'ports' }, value: String(clamped) });
+      openInspector(s);
+    };
+    body.querySelectorAll('[data-pcount-set]').forEach((btn) => {
+      btn.addEventListener('click', () => setPortCount(parseInt(btn.dataset.pcountSet, 10)));
+    });
+    body.querySelectorAll('[data-pcount-step]').forEach((btn) => {
+      btn.addEventListener('click', () => setPortCount(dev.ports.length + parseInt(btn.dataset.pcountStep, 10)));
     });
     body.querySelectorAll('[data-port]').forEach((el) => {
       el.addEventListener('input', () => {
@@ -4971,6 +4995,20 @@ const MOD002_CSS = `
 .m002-field span{font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.5px;}
 .m002-field input,.m002-field select,.m002-field textarea{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:5px 8px;font-family:'Rajdhani',sans-serif;font-size:13px;outline:none;}
 .m002-field input:focus,.m002-field select:focus,.m002-field textarea:focus{border-color:#ff003c;}
+/* Port-count row: label + count + 24/48/-/+ buttons inline. The count uses
+   the heading font so it reads as a value, not a control. Buttons hug the
+   right edge via margin-left:auto on the group. */
+.m002-field-ports{flex-direction:row;align-items:center;gap:10px;flex-wrap:wrap;}
+.m002-field-ports>span:first-child{flex:0 0 auto;}
+.m002-field-ports .m002-port-count{font-family:'Rajdhani',sans-serif;font-size:18px;font-weight:600;color:#e8e8ee;letter-spacing:.5px;min-width:24px;text-align:left;line-height:1;}
+.m002-port-btns{display:flex;gap:6px;margin-left:auto;}
+.m002-pcount-btn{background:transparent;border:1px solid;padding:4px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;font-weight:600;letter-spacing:1.4px;cursor:pointer;transition:.15s;min-width:32px;line-height:1;}
+.m002-pcount-btn.preset{border-color:#00d4ff;color:#00d4ff;}
+.m002-pcount-btn.preset:hover{background:rgba(0,212,255,0.12);}
+.m002-pcount-btn.step.plus{border-color:#35ff7a;color:#35ff7a;}
+.m002-pcount-btn.step.plus:hover{background:rgba(53,255,122,0.12);}
+.m002-pcount-btn.step.minus{border-color:#ff003c;color:#ff003c;}
+.m002-pcount-btn.step.minus:hover{background:rgba(255,0,60,0.12);}
 .m002-row2{display:grid;grid-template-columns:1fr 1fr;gap:8px;}
 .m002-link-summary{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:8px;background:#0a0a10;border:1px solid #1a1a22;}
 .m002-link-end{font-weight:600;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
