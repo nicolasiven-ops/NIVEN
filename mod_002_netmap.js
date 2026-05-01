@@ -3397,9 +3397,10 @@ function openPortModal(s, deviceId, portN) {
           if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
         });
         // A port is "occupied" if some link other than the current one (link)
-        // already wires it. We keep occupied ports visible (the user wants to
-        // see the full picture) but mark them disabled and sort them after the
-        // available ports so the picker is unambiguous about what's free.
+        // already wires it. We keep occupied ports visible *and* selectable —
+        // the user may legitimately want to repurpose one — but mark them as
+        // "— in use", style them grey via the .is-occupied class, and sort
+        // them after the available ports so the picker is unambiguous.
         const isPortOccupied = (devId, portN) => s.links.some((l) =>
           l !== link && (
             (l.from === devId && Number(l.fromPort) === portN) ||
@@ -3471,7 +3472,7 @@ function openPortModal(s, deviceId, portN) {
             const occupied = o.occupied && !isCurrent;
             const label = `${o.devName} · ${o.portN}${o.portName ? ' · ' + o.portName : ''}${o.via ? ' (via ' + o.via.peerName + '⇄)' : ''}${occupied ? ' — in use' : ''}`;
             const data = o.via ? ` data-via-jump="${escAttr(o.via.jumpId)}" data-far-link="${escAttr(o.via.farLinkId)}" data-far-dev="${escAttr(o.devId)}" data-far-port="${escAttr(o.portN)}"` : '';
-            return `<option value="${escAttr(key)}"${data} ${isCurrent ? 'selected' : ''}${occupied ? ' disabled' : ''}>${escSvg(label)}</option>`;
+            return `<option value="${escAttr(key)}"${data} ${isCurrent ? 'selected' : ''}${occupied ? ' class="is-occupied"' : ''}>${escSvg(label)}</option>`;
           }).join('')}
         </select>`;
       })()}
@@ -5019,6 +5020,7 @@ const MOD002_CSS = `
 .m002-vlan-input:focus{border-color:#ff003c;}
 .m002-vlan-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:5px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;}
 .m002-vlan-add-btn:hover{background:rgba(255,0,60,0.1);}
+.m002-pmodal-cp option.is-occupied{color:#5a5f6e;}
 .m002-port-actions{display:flex;flex-direction:column;gap:6px;margin-top:4px;}
 .m002-action{display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:7px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;transition:.15s;}
 .m002-action:hover{border-color:#9aa0a8;}
