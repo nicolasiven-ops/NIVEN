@@ -2990,16 +2990,24 @@ function renderL3SectionsHTML(s, dev) {
   };
   // Interface VLAN binding — represents an SVI / subinterface tied to one
   // VLAN. Shows every VLAN on the device (or every registered VLAN if the
-  // device hasn't been put in any yet). "—" means a plain L3 port.
+  // device hasn't been put in any yet). "—" means a plain L3 port. When no
+  // VLANs are declared at all, the dropdown stays open with a single greyed
+  // hint so the user knows where to add one.
   const vlanOptions = (selectedId) => {
-    const opts = ['<option value="">—</option>'];
+    const opts = [];
     const list = (dev.vlans && dev.vlans.length) ? dev.vlans.map(String).sort(vlanSort) : (s.vlanList || []);
-    list.forEach((v) => {
-      const sel = String(selectedId || '') === String(v) ? 'selected' : '';
-      const entry = s.vlanRegistry.find((r) => String(r.id) === String(v));
-      const lbl = entry?.name ? `${v} · ${entry.name}` : v;
-      opts.push(`<option value="${escAttr(v)}" ${sel}>${escSvg(lbl)}</option>`);
-    });
+    if (!list.length) {
+      opts.push(`<option value="" disabled>no VLANs — add in legend</option>`);
+      opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>—</option>`);
+    } else {
+      opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>—</option>`);
+      list.forEach((v) => {
+        const sel = String(selectedId || '') === String(v) ? 'selected' : '';
+        const entry = s.vlanRegistry.find((r) => String(r.id) === String(v));
+        const lbl = entry?.name ? `VLAN ${v} · ${entry.name}` : `VLAN ${v}`;
+        opts.push(`<option value="${escAttr(v)}" ${sel}>${escSvg(lbl)}</option>`);
+      });
+    }
     return opts.join('');
   };
   const ifaceOptions = (selectedId) => {
@@ -3011,20 +3019,39 @@ function renderL3SectionsHTML(s, dev) {
     });
     return opts.join('');
   };
+  const ifaceHeader = ifaces.length
+    ? `<div class="m002-iface-head">
+         <span></span>
+         <span>NAME</span>
+         <span>IP / CIDR</span>
+         <span>VLAN</span>
+         <span>SUBNET</span>
+         <span></span>
+       </div>`
+    : '';
   const ifaceRows = ifaces.length
     ? ifaces.map((iface) => {
         const sn = ifaceSubnet(s, iface);
         const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
         return `<div class="m002-iface-row" data-iface-id="${escAttr(iface.id)}" style="--sc:${c}">
-          <span class="m002-iface-dot"></span>
+          <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet bound'}"></span>
           <input class="m002-iface-name" data-if-f="name" value="${escAttr(iface.name)}" placeholder="if0"/>
           <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.1/24"/>
           <select class="m002-iface-vlan" data-if-f="vlanId" title="bound VLAN (SVI / subinterface)">${vlanOptions(iface.vlanId)}</select>
-          <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet">${subnetOptions(iface.subnetId)}</select>
+          <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet (auto-detected from IP if empty)">${subnetOptions(iface.subnetId)}</select>
           <button type="button" class="m002-iface-rm" data-if-rm title="Remove interface">×</button>
         </div>`;
       }).join('')
     : `<span class="m002-vlan-empty">no interfaces — add one to terminate IP traffic on this device</span>`;
+  const routeHeader = routes.length
+    ? `<div class="m002-route-head">
+         <span>DESTINATION</span>
+         <span>NEXT-HOP</span>
+         <span>OUT IF</span>
+         <span>METRIC</span>
+         <span></span>
+       </div>`
+    : '';
   const routeRows = routes.length
     ? routes.map((r) => {
         const isDefault = cidrNormalize(r.dst) === '0.0.0.0/0';
@@ -3046,7 +3073,7 @@ function renderL3SectionsHTML(s, dev) {
           <span>INTERFACES (${ifaces.length})</span>
           <button type="button" class="m002-action small" data-if-add>+ ADD</button>
         </div>
-        <div class="m002-iface-list">${ifaceRows}</div>
+        <div class="m002-iface-list">${ifaceHeader}${ifaceRows}</div>
       </div>
       <div class="m002-l3-block">
         <div class="m002-l3-head">
@@ -3056,7 +3083,7 @@ function renderL3SectionsHTML(s, dev) {
             <button type="button" class="m002-action small" data-rt-add>+ ADD</button>
           </span>
         </div>
-        <div class="m002-route-list">${routeRows}</div>
+        <div class="m002-route-list">${routeHeader}${routeRows}</div>
       </div>
     </details>
   `;
@@ -6004,6 +6031,8 @@ const MOD002_CSS = `
 .m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.5px;}
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
+.m002-iface-head{display:grid;grid-template-columns:8px 0.8fr 1.4fr 0.7fr 1.1fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
+.m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
 .m002-iface-row{display:grid;grid-template-columns:8px 0.8fr 1.4fr 0.7fr 1.1fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
 .m002-iface-dot{width:8px;height:8px;background:var(--sc);box-shadow:0 0 3px var(--sc);}
