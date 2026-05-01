@@ -2748,6 +2748,7 @@ function openInspector(s) {
         s.links.filter((l) => (l.from === dev.id && Number(l.fromPort) === p.n) || (l.to === dev.id && Number(l.toPort) === p.n))
               .forEach((l) => redrawLink(s, l));
         schedSave(s);
+        refreshDetailViewIfSettled(s);
       });
       // Don't open the port modal when the user clicks INTO the input
       el.addEventListener('click', (ev) => ev.stopPropagation());
@@ -3215,6 +3216,7 @@ function updateDeviceField(s, dev, el) {
     }
   }
   schedSave(s);
+  refreshDetailViewIfSettled(s);
 }
 
 function updateLinkField(s, link, el) {
@@ -3394,6 +3396,16 @@ function openPortModal(s, deviceId, portN) {
           else if (l.to === deviceId) other = s.devices.find((d) => d.id === l.from);
           if (other && !linkedDevs.has(other.id)) linkedDevs.set(other.id, other);
         });
+        // A port is "occupied" if some link other than the current one (link)
+        // already wires it. We keep occupied ports visible (the user wants to
+        // see the full picture) but mark them disabled and sort them after the
+        // available ports so the picker is unambiguous about what's free.
+        const isPortOccupied = (devId, portN) => s.links.some((l) =>
+          l !== link && (
+            (l.from === devId && Number(l.fromPort) === portN) ||
+            (l.to   === devId && Number(l.toPort)   === portN)
+          )
+        );
         const opts = [];
         linkedDevs.forEach((d) => {
           if (isReference(d)) {
@@ -3412,13 +3424,20 @@ function openPortModal(s, deviceId, portN) {
                   devId: farDev.id, devName: farDev.name,
                   portN: p.n, portName: p.name,
                   via: { jumpId: d.id, peerName: peer.name, farLinkId: farLink.id },
+                  occupied: isPortOccupied(farDev.id, p.n),
                 });
               });
             });
           } else {
-            (d.ports || []).forEach((p) => opts.push({ devId: d.id, devName: d.name, portN: p.n, portName: p.name }));
+            (d.ports || []).forEach((p) => opts.push({
+              devId: d.id, devName: d.name, portN: p.n, portName: p.name,
+              occupied: isPortOccupied(d.id, p.n),
+            }));
           }
         });
+        // Available first, occupied last; preserve original order within each
+        // group via a stable sort.
+        opts.sort((a, b) => Number(a.occupied) - Number(b.occupied));
         // Determine current selection key for highlighting.
         let curKey = '';
         if (link) {
@@ -3445,9 +3464,14 @@ function openPortModal(s, deviceId, portN) {
             const key = o.via
               ? 'hub:' + o.devId + ':' + o.portN + ':' + o.via.farLinkId
               : o.devId + ':' + o.portN;
-            const label = `${o.devName} · ${o.portN}${o.portName ? ' · ' + o.portName : ''}${o.via ? ' (via ' + o.via.peerName + '⇄)' : ''}`;
+            const isCurrent = curKey === key;
+            // The currently-selected counterpart for THIS port reads as
+            // "occupied" (its link is in use) but it must remain selectable —
+            // the user is looking at it. Only mark *other* occupied ports.
+            const occupied = o.occupied && !isCurrent;
+            const label = `${o.devName} · ${o.portN}${o.portName ? ' · ' + o.portName : ''}${o.via ? ' (via ' + o.via.peerName + '⇄)' : ''}${occupied ? ' — in use' : ''}`;
             const data = o.via ? ` data-via-jump="${escAttr(o.via.jumpId)}" data-far-link="${escAttr(o.via.farLinkId)}" data-far-dev="${escAttr(o.devId)}" data-far-port="${escAttr(o.portN)}"` : '';
-            return `<option value="${escAttr(key)}"${data} ${curKey === key ? 'selected' : ''}>${escSvg(label)}</option>`;
+            return `<option value="${escAttr(key)}"${data} ${isCurrent ? 'selected' : ''}${occupied ? ' disabled' : ''}>${escSvg(label)}</option>`;
           }).join('')}
         </select>`;
       })()}
@@ -3590,6 +3614,7 @@ function openPortModal(s, deviceId, portN) {
           .forEach((l) => redrawLink(s, l));
     const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
     if (row) row.value = port.name;
+    refreshDetailViewIfSettled(s);
   });
 
   body.querySelector('[data-pact="unlink"]')?.addEventListener('click', () => {
@@ -3877,6 +3902,20 @@ function render(s) {
   markSelected(s);
   updateStatus(s);
   renderMinimap(s);
+  refreshDetailViewIfSettled(s);
+}
+
+// Re-render the Detail-View overlay if it's open AND past its choreographed
+// entry (~1100ms after enterDetailView). Called from render() and from live
+// input handlers in the inspector so edits propagate without the user having
+// to close and reopen detail. Pre-settled, the entry animation is still in
+// flight and rerendering would restart it — we skip.
+function refreshDetailViewIfSettled(s) {
+  if (!s.detailDeviceId) return;
+  const overlay = s.host?.querySelector('.m002-detail-overlay');
+  if (overlay?.classList.contains('m002-detail-overlay-settled')) {
+    renderDetailView(s);
+  }
 }
 
 function updateStatus(s) {
@@ -3923,6 +3962,7 @@ function enterDetailView(s, deviceId) {
   animateView(s, { x: targetX, y: targetY, zoom: targetZoom }, DETAIL_ANIM_MS);
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
+    overlay.classList.remove('m002-detail-overlay-settled');
     renderDetailView(s);
     overlay.hidden = false;
     // Force a style/layout flush before flipping the show class so the
@@ -3930,6 +3970,13 @@ function enterDetailView(s, deviceId) {
     // backgrounded; reading offsetHeight is reliable in every environment).
     void overlay.offsetHeight;
     overlay.classList.add('m002-detail-overlay-show');
+    // After the choreographed entry finishes (~1050ms), mark the overlay as
+    // "settled" so subsequent edits anywhere can rerender the detail body
+    // without re-triggering the entry animation.
+    if (s._detailSettleTimer) clearTimeout(s._detailSettleTimer);
+    s._detailSettleTimer = setTimeout(() => {
+      if (s.detailDeviceId === deviceId) overlay.classList.add('m002-detail-overlay-settled');
+    }, 1100);
   }
   setMode(s, 'DETAIL');
 }
@@ -3937,9 +3984,11 @@ function enterDetailView(s, deviceId) {
 function exitDetailView(s) {
   if (!s.detailDeviceId) return;
   s.detailDeviceId = null;
+  if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
     overlay.classList.remove('m002-detail-overlay-show');
+    overlay.classList.remove('m002-detail-overlay-settled');
     // Snappier exit than entry — feels responsive when the user wants out.
     setTimeout(() => { if (!s.detailDeviceId) overlay.hidden = true; }, DETAIL_FADE_OUT_MS);
   }
@@ -5150,6 +5199,12 @@ const MOD002_CSS = `
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1070ms);}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,1070ms) + 175ms);}
+/* Settled state — applied ~1100ms after entry. Lets render(s) re-render the
+   detail body during edits without re-running the choreographed entry. */
+.m002-detail-overlay-settled .m002-detail-device-inner,
+.m002-detail-overlay-settled .m002-detail-port-inner{animation:none!important;transform:none!important;opacity:1!important;}
+.m002-detail-overlay-settled .m002-detail-dev-bg{animation:none!important;fill:#0a0a10!important;}
+.m002-detail-overlay-settled .m002-detail-stub{animation:none!important;opacity:1!important;}
 .m002-detail-device{cursor:pointer;}
 .m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
 .m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
