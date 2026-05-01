@@ -649,9 +649,9 @@ function buildDOM(s) {
               <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
             </filter>
           </defs>
-          <rect class="m002-grid-bg" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid)"/>
-          <rect class="m002-grid-bg2" x="-5000" y="-5000" width="10000" height="10000" fill="url(#m002-grid-major)"/>
           <g class="m002-world">
+            <rect class="m002-grid-bg" x="-50000" y="-50000" width="100000" height="100000" fill="url(#m002-grid)"/>
+            <rect class="m002-grid-bg2" x="-50000" y="-50000" width="100000" height="100000" fill="url(#m002-grid-major)"/>
             <g class="m002-stacks-bg"></g>
             <g class="m002-links"></g>
             <g class="m002-devices"></g>
