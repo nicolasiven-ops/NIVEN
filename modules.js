@@ -55,6 +55,11 @@
   // Cards that have already played their entry animation in this session.
   // Re-renders (edits, deletes) won't re-animate cards the user has already seen.
   const animatedCardIds = new Set();
+  // Signature of the last archive render — lets us skip a redundant re-render
+  // (the auth boot fires getSession + onAuthStateChange almost simultaneously,
+  // each calling load() → renderArchive(), which would otherwise tear down
+  // mid-animation cards and kill the entry animation before it shows.)
+  let lastArchiveSig = '';
 
   // --- Utilities ---
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -101,6 +106,19 @@
   }
 
   function renderArchive() {
+    // Skip identical re-renders — preserves running entry animations across
+    // the duplicate boot calls described above.
+    const sig = JSON.stringify(projects.map((p) => ({
+      id: p.id, code: p.code, status: p.status, title: p.title,
+      domain: p.domain, description: p.description, tags: p.tags, url: p.url,
+    })));
+    if (sig === lastArchiveSig && grid.querySelector('.card:not(.card-empty)')) {
+      if (nextCodeEl) nextCodeEl.textContent = nextCode();
+      updateStats();
+      return;
+    }
+    lastArchiveSig = sig;
+
     grid.querySelectorAll('.card:not(.card-empty)').forEach((el) => el.remove());
     const html = projects.map(cardHTML).join('');
     if (html) emptyCard.insertAdjacentHTML('beforebegin', html);
