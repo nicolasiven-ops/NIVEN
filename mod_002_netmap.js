@@ -992,9 +992,22 @@ function computeL3Paths(s) {
       cur = parent.get(cur);
       ids.unshift(cur);
     }
+    // When a stack id appears in the path (target or transit), drop any
+    // member-of-that-stack hops from the same path. BFS often inserts a
+    // member as transit between an external link and the stack-virtual-node,
+    // which visually routes the ribbon through the member's position
+    // before bending into the stack centre. Filtering those out makes the
+    // ribbon glide PAST the members directly to the stack — matching the
+    // "an den Membern des Default-Gateway-Stacks vorbei" requirement.
+    const stackIdsInPath = new Set();
+    for (const id of ids) if ((s.stacks || []).some((st) => st.id === id)) stackIdsInPath.add(id);
+    const filtered = ids.filter((id) => {
+      const owningStackId = stackOfMember.get(id);
+      return !owningStackId || !stackIdsInPath.has(owningStackId);
+    });
     // Dedupe consecutive duplicates (stack-virtual-node BFS can cause them).
     const trimmed = [];
-    for (const id of ids) if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
+    for (const id of filtered) if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
     if (trimmed.length < 2) continue;
     paths.push({ subnetId: sn.id, ids: trimmed });
   }
