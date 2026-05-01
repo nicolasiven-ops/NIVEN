@@ -4123,7 +4123,7 @@ function renderDetailBody(s, dev, t) {
   inner += `
     <g class="m002-detail-device ${devSelected ? 'is-selected' : ''}" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
       <g class="m002-detail-device-inner" style="${devInnerStyle}">
-        <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4"/>
+        <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>
         <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
         <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
         ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
@@ -5111,21 +5111,30 @@ const MOD002_CSS = `
    visible at frame 0 before the keyframe animation overrides on .show.
    Note: the *inner* wrappers carry the scale; the outer groups keep their
    SVG translate untouched so the port grid stays in place. */
-.m002-detail-device-inner{transform:scale(0.01,0.06);opacity:0;}
+.m002-detail-device-inner{transform:scale(0.005,0.02);opacity:0;}
 .m002-detail-overlay .m002-detail-port-inner{transform:scale(0.6);opacity:0;}
 .m002-detail-overlay .m002-detail-stub{opacity:0;}
 
 /* Element entry choreography (1500ms total, 80ms lead-in delay):
      0–500ms   point appears, then vertical line grows to full height
-     500–700ms HOLD — same scale, no motion (200ms breath)
-     700–1500ms horizontal expansion to full width (800ms)
-   Percentages map 33%→500ms, 47%→700ms, 100%→1500ms. */
+     500–600ms HOLD — same scale, no motion (100ms breath)
+     600–1500ms horizontal expansion to full width (900ms)
+   Percentages map 33%→500ms, 40%→600ms, 100%→1500ms.
+   Initial scale(0.005,0.02): 720×0.005=3.6 wide, 180×0.02=3.6 tall — a
+   roughly square point. The fill animation (m002-detail-elem-fill) keeps
+   the rect accent-coloured during the point/line phase so it reads as a
+   clean blue line, then crossfades to the dark fill during horizontal
+   expansion. */
 @keyframes m002-detail-elem-emerge{
-  0%   {transform:scale(0.01,0.06);opacity:0;}
-  5%   {transform:scale(0.01,0.06);opacity:1;}
-  33%  {transform:scale(0.01,1);   opacity:1;}
-  47%  {transform:scale(0.01,1);   opacity:1;}
-  100% {transform:scale(1,1);      opacity:1;}
+  0%   {transform:scale(0.005,0.02);opacity:0;}
+  5%   {transform:scale(0.005,0.02);opacity:1;}
+  33%  {transform:scale(0.005,1);   opacity:1;}
+  40%  {transform:scale(0.005,1);   opacity:1;}
+  100% {transform:scale(1,1);       opacity:1;}
+}
+@keyframes m002-detail-elem-fill{
+  0%,40%   {fill:var(--accent);}
+  60%,100% {fill:#0a0a10;}
 }
 @keyframes m002-detail-port-pop{
   0%   {transform:scale(0.6); opacity:0;}
@@ -5138,6 +5147,7 @@ const MOD002_CSS = `
 }
 
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1500ms cubic-bezier(0.4,0,0.2,1) 80ms forwards;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1500ms cubic-bezier(0.4,0,0.2,1) 80ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 320ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1600ms);}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 380ms ease-out forwards;animation-delay:calc(var(--enter-delay,1600ms) + 260ms);}
 .m002-detail-device{cursor:pointer;}
@@ -5157,7 +5167,7 @@ const MOD002_CSS = `
 .m002-detail-stub{pointer-events:none;}
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}
   .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head{transform:none!important;opacity:1!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
