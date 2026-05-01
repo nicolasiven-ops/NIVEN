@@ -1263,6 +1263,9 @@ function unmount() {
   stopFlowTicker(state);
   for (const off of state.cleanups) { try { off(); } catch (_) {} }
   state.host?.remove();
+  // Drop the tool-cursor classes we stamped on body — other modules
+  // shouldn't inherit them.
+  document.body.classList.remove('m002-tool-select', 'm002-tool-link', 'm002-tool-delete');
   state = null;
 }
 
@@ -4131,6 +4134,14 @@ function refreshToolHighlights(s) {
   setActive('[data-tool="link"]',   s.linkMode);
   setActive('[data-tool="delete"]', s.deleteMode);
   setActive('[data-tool="select"]', !s.linkMode && !s.deleteMode);
+  // Tool-aware cursor recolour. CSS scoped to body classes so the global
+  // N.IVEN cursor (red brackets + red dot) shifts to the active tool's hue
+  // while staying in the same shape.
+  const body = document.body;
+  body.classList.remove('m002-tool-select', 'm002-tool-link', 'm002-tool-delete');
+  if (s.linkMode) body.classList.add('m002-tool-link');
+  else if (s.deleteMode) body.classList.add('m002-tool-delete');
+  else body.classList.add('m002-tool-select');
 }
 
 function renderReferenceInspector(s, dev, body) {
@@ -7300,6 +7311,20 @@ const MOD002_CSS = `
   .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head{transform:none!important;opacity:1!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
+
+/* Tool-aware cursor recolour. The N.IVEN custom cursor (red brackets +
+   red dot) keeps its shape but shifts hue to match the active MOD_002
+   tool. Body classes set in refreshToolHighlights drive this. */
+body.m002-tool-select .cur-bracket{border-color:#ffffff !important;}
+body.m002-tool-select .cursor-dot{background:#ffffff !important;box-shadow:0 0 10px #ffffff,0 0 3px #fff !important;}
+body.m002-tool-link .cur-bracket{border-color:#35ff7a !important;}
+body.m002-tool-link .cursor-dot{background:#35ff7a !important;box-shadow:0 0 10px #35ff7a,0 0 3px #fff !important;}
+/* Delete tool: keeps the red brackets but swaps the centre dot for an X. */
+body.m002-tool-delete .cursor-dot{display:none;}
+body.m002-tool-delete .cursor::before,
+body.m002-tool-delete .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#ff003c;box-shadow:0 0 6px #ff003c;}
+body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45deg);}
+body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
 `;
 
 // =============================================================================
