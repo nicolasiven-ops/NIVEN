@@ -874,24 +874,24 @@ function isDefaultGateway(s, dev) {
   return false;
 }
 
-// Compute L3 paths for the routing layer. Returns the entity-id sequence
-// (devices AND stacks-with-VIPs) for every pair of L3 endpoints in the
-// same subnet. The renderer draws ONE smooth curve per pair, threaded
-// through the L2 transit nodes — visually decoupled from the L2 wiring.
+// Compute L3 paths for the routing layer. ONE ribbon per L3 entity that
+// has a default gateway configured — sourcing from the entity, terminating
+// at whichever entity owns the gateway IP. No all-pairs explosion. No
+// peer-to-peer paths between same-subnet hosts. Only "this thing routes
+// outbound through that thing" relationships, which is what the routing
+// view is really showing.
 //
 // Stack handling:
-//   - A stack with a VIP is a first-class L3 endpoint. Its members are
-//     not endpoints (their IPs are mgmt-only and ignored for routing).
-//   - Adjacency adds a virtual edge between every stack and each of its
-//     members. BFS can therefore enter the stack via any member port.
-//   - After the path is reconstructed, any member-of-stack hop is rewritten
-//     to its owning stack id and consecutive duplicates are collapsed —
-//     so "endpoint → memberA → memberB → endpoint" becomes the visually
-//     sane "endpoint → stack → endpoint".
+//   - A stack with a VIP is a first-class L3 destination — endpoints whose
+//     gateway field equals one of the stack's VIPs route TO the stack.
+//   - Members of a stack with VIP don't generate their own gateway paths;
+//     the stack speaks for them. Members of a non-VIP stack still do.
+//   - Self-targeting is suppressed: a member whose gateway happens to be
+//     its own stack's VIP doesn't get a phantom ribbon to the stack centre
+//     it lives inside.
 //
 // Returns: Array<{ subnetId, ids: [entityId,...] }>. ids always has length
-// ≥ 2 (the two L3 endpoints, device or stack) and may include any number
-// of transit hops (L2 switches, L2-only stacks).
+// ≥ 2 (source + target) and may include any number of transit hops.
 function computeL3Paths(s) {
   const paths = [];
   if (!s.links?.length && !(s.stacks?.length)) return paths;
@@ -919,77 +919,84 @@ function computeL3Paths(s) {
   const stackOfMember = new Map();
   s.stacks.forEach((st) => (st.members || []).forEach((mid) => stackOfMember.set(mid, st.id)));
 
-  // Group L3 entities by subnet membership.
-  const groups = new Map();   // subnetId → [entityId,...]
+  // Build an IP → owning entity index so a gateway IP resolves to whatever
+  // device/stack actually terminates it. Stacks with VIPs win over their
+  // members (the VIP IS the stack's L3 face).
+  const ownerOfIp = new Map();
   s.devices.forEach((d) => {
     if (isReference(d)) return;
-    deviceSubnets(s, d).forEach((sn) => {
-      if (!groups.has(sn.id)) groups.set(sn.id, []);
-      groups.get(sn.id).push(d.id);
-    });
+    if (isL3Type(d.type)) {
+      (d.interfaces || []).forEach((iface) => { if (iface.ip) ownerOfIp.set(iface.ip, d.id); });
+    } else if (d.ip) {
+      ownerOfIp.set(d.ip, d.id);
+    }
   });
   s.stacks.forEach((st) => {
-    stackSubnets(s, st).forEach((sn) => {
-      if (!groups.has(sn.id)) groups.set(sn.id, []);
-      groups.get(sn.id).push(st.id);
-    });
+    (st.virtualInterfaces || []).forEach((vif) => { if (vif.ip) ownerOfIp.set(vif.ip, st.id); });
   });
 
-  // What stack family does an entity id belong to? A stack itself returns
-  // its own id; a member returns its owning stack id; everything else null.
-  const familyOf = (id) => {
-    if (stackOfMember.has(id)) return stackOfMember.get(id);
-    if ((s.stacks || []).some((st) => st.id === id)) return id;
-    return null;
-  };
+  // Enumerate every L3 source that has a gateway pointing somewhere. For
+  // each, find the owning entity of that gateway IP, BFS the link graph,
+  // and emit one path. No peer-to-peer paths — only "X routes through Y".
+  const sources = []; // { srcId, gateway }
+  s.devices.forEach((d) => {
+    if (isReference(d)) return;
+    // Skip device's own gateways when the device is a VIP'd-stack member —
+    // the stack speaks for them.
+    const stk = stackOfMember.get(d.id);
+    if (stk) {
+      const stack = s.stacks.find((st) => st.id === stk);
+      if (stack && stackHasVip(stack)) return;
+    }
+    entityGateways(s, d.id).forEach((g) => sources.push({ srcId: d.id, gateway: g }));
+  });
+  s.stacks.forEach((st) => {
+    if (!stackHasVip(st)) return;
+    entityGateways(s, st.id).forEach((g) => sources.push({ srcId: st.id, gateway: g }));
+  });
 
-  for (const [subnetId, ents] of groups) {
-    if (ents.length < 2) continue;
-    for (let i = 0; i < ents.length; i++) {
-      const start = ents[i];
-      const parent = new Map();
-      const visited = new Set([start]);
-      const queue = [start];
-      while (queue.length) {
-        const cur = queue.shift();
-        for (const nb of adj.get(cur) || []) {
-          if (visited.has(nb)) continue;
-          visited.add(nb);
-          parent.set(nb, cur);
-          queue.push(nb);
-        }
-      }
-      for (let j = i + 1; j < ents.length; j++) {
-        const target = ents[j];
-        if (!parent.has(target)) continue;
-        // Skip intra-stack pairs: members or VIP within the same stack
-        // family don't generate ribbons — communication between them is
-        // internal to the stacking fabric and a visible line would just
-        // smear across the envelope.
-        const sFam = familyOf(start);
-        const tFam = familyOf(target);
-        if (sFam && tFam && sFam === tFam) continue;
-        const ids = [target];
-        let cur = target;
-        while (parent.has(cur)) {
-          cur = parent.get(cur);
-          ids.unshift(cur);
-        }
-        // Drop adjacent stack-virtual-node hops — BFS sometimes inserts the
-        // stack id between two members of the same stack (because the stack
-        // node is adjacent to all members). Visually a redundant hop. Keep
-        // member ids as separate waypoints so the ribbon curves through the
-        // real member positions for swing — see ribbonWaypoint() which
-        // returns each member's actual coords even when the stack is
-        // visually collapsed.
-        const trimmed = [];
-        for (const id of ids) {
-          if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
-        }
-        if (trimmed.length < 2) continue;
-        paths.push({ subnetId, ids: trimmed });
+  for (const { srcId, gateway } of sources) {
+    const targetId = ownerOfIp.get(gateway);
+    if (!targetId) continue;
+    if (targetId === srcId) continue;
+    // Skip when the gateway IP is owned by the source's own stack (a member
+    // pointing at its containing stack's VIP). Drawing a ribbon from a
+    // collapsed-stack member to the stack centre it lives inside is the
+    // self-targeting "Linie ins eigene Stack-Innere" the user flagged.
+    if (stackOfMember.get(srcId) === targetId) continue;
+    if (stackOfMember.get(targetId) === srcId) continue;
+    // Resolve the subnet — bare gateway IP, containment match.
+    const sn = subnetForIp(s, gateway);
+    if (!sn) continue;
+
+    // BFS the link graph for the shortest path between source and target
+    // entities (devices or stack ids; stack-as-virtual-node bridges members).
+    const parent = new Map();
+    const visited = new Set([srcId]);
+    const queue = [srcId];
+    let found = false;
+    while (queue.length) {
+      const cur = queue.shift();
+      if (cur === targetId) { found = true; break; }
+      for (const nb of adj.get(cur) || []) {
+        if (visited.has(nb)) continue;
+        visited.add(nb);
+        parent.set(nb, cur);
+        queue.push(nb);
       }
     }
+    if (!found && !parent.has(targetId)) continue;
+    const ids = [targetId];
+    let cur = targetId;
+    while (parent.has(cur)) {
+      cur = parent.get(cur);
+      ids.unshift(cur);
+    }
+    // Dedupe consecutive duplicates (stack-virtual-node BFS can cause them).
+    const trimmed = [];
+    for (const id of ids) if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
+    if (trimmed.length < 2) continue;
+    paths.push({ subnetId: sn.id, ids: trimmed });
   }
   return paths;
 }
@@ -1086,29 +1093,12 @@ function drawL3Paths(s) {
     if (pts.length < 2) return;
     const d = smoothPath(pts);
     if (!d) return;
-    // Flow direction: packets travel from the host that points AT a gateway
-    // to the host whose IP IS the gateway — never the other way around. When
-    // both endpoints reference each other (rare: two devices acting as each
-    // other's gateway) we still pick "toward the side that actually has the
-    // matching IP" for the display direction. When NEITHER endpoint points
-    // at the other (peer-to-peer L3 with no gateway relationship), the
-    // ribbon gets data-flow-dir="none" and the renderer hides the pulse —
-    // there's no defensible direction to animate toward.
-    const aId = p.ids[0], bId = p.ids[p.ids.length - 1];
-    const aIps = entityIps(s, aId);
-    const bIps = entityIps(s, bId);
-    const aPointsAtB = entityGateways(s, aId).some((g) => bIps.includes(g));
-    const bPointsAtA = entityGateways(s, bId).some((g) => aIps.includes(g));
-    let dir;
-    if (aPointsAtB && !bPointsAtA) dir = 'forward';
-    else if (bPointsAtA && !aPointsAtB) dir = 'reverse';
-    else if (aPointsAtB && bPointsAtA) dir = 'forward'; // mutual — pick one
-    else dir = 'none';
+    // Paths are sourced from "entity → its gateway", so the geometric path
+    // already runs in the right direction (start = source, end = gateway).
+    // The pulse always animates forward.
     html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
     html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
-    if (dir !== 'none') {
-      html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="${dir}"/>`;
-    }
+    html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="forward"/>`;
   });
   s.gL3Paths.innerHTML = html;
 }
