@@ -3905,18 +3905,26 @@ function openInspector(s) {
       <details class="m002-insp-details"${s.inspectorDetailsOpen ? ' open' : ''}>
         <summary>// DETAILS</summary>
         <label class="m002-field"><span>HOSTNAME</span><input data-f="hostname" value="${escAttr(dev.hostname || '')}" placeholder="e.g. swhq-core-01.example.com"/></label>
-        ${isL3Type(dev.type) ? '' : `
-        <div class="m002-field m002-field-l3-trio">
-          <span>L3 ADDRESS</span>
-          <div class="m002-l3-trio">
-            <input data-f="ip" value="${escAttr(dev.ip || '')}" placeholder="10.0.0.10" title="host IP (no prefix)"/>
-            <select data-f="prefix" title="prefix length">${(() => { let h=''; for (let i=32;i>=0;i--){ const sel = Number(dev.prefix ?? 24) === i ? 'selected' : ''; h += `<option value="${i}" ${sel}>/${i}</option>`; } return h; })()}</select>
-            <input data-f="gateway" value="${escAttr(dev.gateway || '')}" placeholder="${escAttr(defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1')}" title="default gateway"/>
-          </div>
-        </div>`}
         <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
       </details>
-      ${isL3Type(dev.type) ? renderL3SectionsHTML(s, dev) : ''}
+      ${isL3Type(dev.type) ? renderL3SectionsHTML(s, dev) : `
+      <details class="m002-insp-l3" open>
+        <summary>// L3</summary>
+        <div class="m002-iface-head m002-iface-head--single">
+          <span></span>
+          <span>IP</span>
+          <span>PREFIX</span>
+          <span>GATEWAY</span>
+          <span></span>
+        </div>
+        <div class="m002-iface-row m002-iface-row--single">
+          <span class="m002-iface-dot"></span>
+          <input data-f="ip" value="${escAttr(dev.ip || '')}" placeholder="10.0.0.10"/>
+          <select data-f="prefix">${(() => { let h=''; for (let i=32;i>=0;i--){ const sel = Number(dev.prefix ?? 24) === i ? 'selected' : ''; h += `<option value="${i}" ${sel}>/${i}</option>`; } return h; })()}</select>
+          <input data-f="gateway" value="${escAttr(dev.gateway || '')}" placeholder="${escAttr(defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1')}"/>
+          <span></span>
+        </div>
+      </details>`}
       <div class="m002-field">
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
@@ -6625,6 +6633,9 @@ const MOD002_CSS = `
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
 .m002-iface-head{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
+/* Endpoint / cloud / switch single-row L3 trio — same grid, no NAME column */
+.m002-iface-row--single{grid-template-columns:8px 1.2fr 0.5fr 1.2fr 18px !important;}
+.m002-iface-head--single{grid-template-columns:8px 1.2fr 0.5fr 1.2fr 18px !important;}
 .m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
 .m002-iface-row{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
