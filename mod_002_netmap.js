@@ -1700,6 +1700,29 @@ function ensureStyles() {
 function bindBoard(s) {
   const svg = s.svg;
 
+  // Custom-cursor hover state. The N.IVEN cursor's .active class scales the
+  // brackets up — we trigger it on every interactive SVG target inside the
+  // module so the cursor itself signals "this is clickable" instead of the
+  // OS swapping in a hand or move glyph.
+  const cursorEl = document.querySelector('.cursor');
+  const interactiveSel = '[data-device-id], [data-stack-id], [data-link-id], [data-laglink-id], [data-agg-key], .m002-link-hit, .m002-stack-collapsed, .m002-stack-envelope';
+  const onHoverIn = (e) => {
+    if (!cursorEl) return;
+    if (e.target.closest(interactiveSel)) cursorEl.classList.add('active');
+  };
+  const onHoverOut = (e) => {
+    if (!cursorEl) return;
+    if (e.relatedTarget && e.relatedTarget.closest(interactiveSel)) return;
+    cursorEl.classList.remove('active');
+  };
+  s.host.addEventListener('mouseover', onHoverIn);
+  s.host.addEventListener('mouseout', onHoverOut);
+  s.cleanups.push(() => {
+    s.host.removeEventListener('mouseover', onHoverIn);
+    s.host.removeEventListener('mouseout', onHoverOut);
+    cursorEl?.classList.remove('active');
+  });
+
   // Wheel zoom
   const onWheel = (e) => {
     e.preventDefault();
@@ -1801,7 +1824,6 @@ function bindBoard(s) {
         refreshToolHighlights(s);
       }
       s.drag = { kind: 'pan', startX: e.clientX, startY: e.clientY, vx: s.view.x, vy: s.view.y };
-      svg.style.cursor = 'grabbing';
       e.preventDefault();
     }
   };
@@ -1933,7 +1955,6 @@ function bindBoard(s) {
       s.dragStackTarget = null;
       s.dragStackTargetCompat = null;
       s.drag = null;
-      svg.style.cursor = '';
       if (!compat) {
         toast(s, 'Stack only allowed between same device types');
         return;
@@ -1958,7 +1979,6 @@ function bindBoard(s) {
       s.dragStackTargetCompat = null;
     }
     if (s.drag) {
-      svg.style.cursor = '';
       // True background click (mousedown→mouseup with no real pan) → deselect.
       // Threshold filters out tiny tremors so pan-drags never clear the inspector.
       if (s.drag.kind === 'pan' && !s.linkMode) {
@@ -6800,10 +6820,11 @@ const MOD002_CSS = `
 .m002-tint{position:absolute;inset:0;background:radial-gradient(ellipse at center,transparent 50%,rgba(255,0,60,0.04) 100%);pointer-events:none;}
 
 .m002-board{position:absolute;inset:0;}
-.m002-svg{width:100%;height:100%;display:block;cursor:grab;}
-.m002-host.m002-linking .m002-svg{cursor:crosshair;}
-.m002-host.m002-deleting .m002-svg{cursor:not-allowed;}
-.m002-svg:active{cursor:grabbing;}
+.m002-svg{width:100%;height:100%;display:block;}
+/* Hide the OS cursor everywhere inside the module — the N.IVEN custom
+   cursor (corner brackets + dot) carries the affordance on its own and
+   the OS grab/move/crosshair glyphs clash with the sci-fi style. */
+.m002-host,.m002-host *{cursor:none !important;}
 
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
 
