@@ -1791,6 +1791,15 @@ function bindBoard(s) {
     }
 
     if (onBg || e.button === 1) {
+      // Background click with link / delete tool active drops back to
+      // SELECT. Cleaner than forcing the user to hit the toolbar pill or
+      // ESC. Middle-click skips this so power-users can pan without
+      // losing their active tool.
+      if (e.button === 0 && (s.linkMode || s.deleteMode)) {
+        if (s.linkMode) toggleLinkMode(s);
+        if (s.deleteMode) toggleDeleteMode(s);
+        refreshToolHighlights(s);
+      }
       s.drag = { kind: 'pan', startX: e.clientX, startY: e.clientY, vx: s.view.x, vy: s.view.y };
       svg.style.cursor = 'grabbing';
       e.preventDefault();
