@@ -1283,6 +1283,7 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     x: Math.round(wx / GRID) * GRID,
     y: Math.round(wy / GRID) * GRID,
     name: `${t.label}-${(s.devices.filter((d) => d.type === t.id).length + 1).toString().padStart(2, '0')}`,
+    hostname: '',
     ip: '',
     notes: '',
     vlans: [],
@@ -2697,22 +2698,23 @@ function openInspector(s) {
     idEl.textContent = `// ${t.label}`;
     if (isReference(dev)) { renderReferenceInspector(s, dev, body); return; }
     body.innerHTML = `
-      <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
-      <label class="m002-field"><span>TYPE</span>
-        <select data-f="type">${DEVICE_TYPES.map((tt) => `<option value="${tt.id}" ${tt.id === dev.type ? 'selected' : ''}>${tt.label}</option>`).join('')}</select>
-      </label>
-      <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
+      <label class="m002-field"><span>ALIAS</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
       <div class="m002-field m002-field-ports">
         <span>PORTS</span>
         <span class="m002-port-count">${dev.ports.length}</span>
         <div class="m002-port-btns">
           <button type="button" class="m002-pcount-btn preset" data-pcount-set="24">24</button>
           <button type="button" class="m002-pcount-btn preset" data-pcount-set="48">48</button>
-          <button type="button" class="m002-pcount-btn step minus" data-pcount-step="-1" title="Remove a port">−</button>
           <button type="button" class="m002-pcount-btn step plus" data-pcount-step="1" title="Add a port">+</button>
+          <button type="button" class="m002-pcount-btn step minus" data-pcount-step="-1" title="Remove a port">−</button>
         </div>
       </div>
-      <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
+      <details class="m002-insp-details"${s.inspectorDetailsOpen ? ' open' : ''}>
+        <summary>// DETAILS</summary>
+        <label class="m002-field"><span>HOSTNAME</span><input data-f="hostname" value="${escAttr(dev.hostname || '')}" placeholder="e.g. swhq-core-01.example.com"/></label>
+        <label class="m002-field"><span>IP / CIDR</span><input data-f="ip" value="${escAttr(dev.ip)}" placeholder="10.0.0.1/24"/></label>
+        <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes)}</textarea></label>
+      </details>
       <div class="m002-field">
         <span>VLANS</span>
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
@@ -2747,6 +2749,12 @@ function openInspector(s) {
         // mid-keystroke; 'type' already re-opens itself inside the handler.
         if (el.dataset.f === 'ports') openInspector(s);
       });
+    });
+    // Persist the //DETAILS open/closed state across inspector re-renders so
+    // a +/− click (or any other rerender) doesn't surprise the user by
+    // collapsing the panel they had just expanded.
+    body.querySelector('.m002-insp-details')?.addEventListener('toggle', (e) => {
+      s.inspectorDetailsOpen = e.target.open;
     });
     // Port-count buttons: 24 / 48 quick-presets and ± steppers. Each routes
     // through updateDeviceField('ports') with a synthetic element so the
@@ -5059,6 +5067,19 @@ const MOD002_CSS = `
 .m002-vlan-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:5px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;}
 .m002-vlan-add-btn:hover{background:rgba(255,0,60,0.1);}
 .m002-pmodal-cp option.is-occupied{color:#5a5f6e;}
+/* Collapsible details block in the device inspector — wraps HOSTNAME, IP and
+   NOTES so the inspector stays tidy by default but the metadata is one click
+   away. Mirrors the .m002-ref-fallback summary treatment. */
+.m002-insp-details{margin:2px 0 6px;border:1px solid #1a1a22;background:rgba(10,10,16,0.6);}
+.m002-insp-details>summary{cursor:pointer;padding:6px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.6px;list-style:none;user-select:none;transition:.15s;}
+.m002-insp-details>summary::-webkit-details-marker{display:none;}
+.m002-insp-details>summary::before{content:'▸ ';color:#5a5f6e;}
+.m002-insp-details[open]>summary{color:#ff003c;border-bottom:1px solid #1a1a22;}
+.m002-insp-details[open]>summary::before{content:'▾ ';color:#ff003c;}
+.m002-insp-details>summary:hover{color:#ff003c;}
+.m002-insp-details>.m002-field{padding:0 10px;}
+.m002-insp-details>.m002-field:first-of-type{padding-top:8px;}
+.m002-insp-details>.m002-field:last-of-type{padding-bottom:10px;}
 .m002-port-actions{display:flex;flex-direction:column;gap:6px;margin-top:4px;}
 .m002-action{display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:7px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;transition:.15s;}
 .m002-action:hover{border-color:#9aa0a8;}
