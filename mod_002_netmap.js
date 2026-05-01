@@ -707,7 +707,7 @@ function autoCreateDefaultRoute(routes, ip, prefix, interfaceId) {
     dst: '0.0.0.0/0',
     nextHop: gw,
     interfaceId: interfaceId || null,
-    metric: null,
+    metric: 1,
   });
   return true;
 }
@@ -3830,14 +3830,14 @@ function bindRoutesSection(s, host, body, refreshFn) {
   body.querySelector('[data-rt-add]')?.addEventListener('click', () => {
     snapshot(s);
     if (!Array.isArray(host.routes)) host.routes = [];
-    host.routes.push({ id: 'rt_' + rid(), dst: '', nextHop: '', interfaceId: null, metric: null });
+    host.routes.push({ id: 'rt_' + rid(), dst: '', nextHop: '', interfaceId: null, metric: 1 });
     refresh();
     openInspector(s);
   });
   body.querySelector('[data-rt-add-default]')?.addEventListener('click', () => {
     snapshot(s);
     if (!Array.isArray(host.routes)) host.routes = [];
-    host.routes.push({ id: 'rt_' + rid(), dst: '0.0.0.0/0', nextHop: '', interfaceId: null, metric: null });
+    host.routes.push({ id: 'rt_' + rid(), dst: '0.0.0.0/0', nextHop: '', interfaceId: null, metric: 1 });
     refresh();
     openInspector(s);
   });
