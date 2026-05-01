@@ -52,6 +52,9 @@
   let mountedRuntime = null; // { code, def }
   let sessionReady = false;
   let isAuthed = false;
+  // Cards that have already played their entry animation in this session.
+  // Re-renders (edits, deletes) won't re-animate cards the user has already seen.
+  const animatedCardIds = new Set();
 
   // --- Utilities ---
   const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -101,6 +104,26 @@
     grid.querySelectorAll('.card:not(.card-empty)').forEach((el) => el.remove());
     const html = projects.map(cardHTML).join('');
     if (html) emptyCard.insertAdjacentHTML('beforebegin', html);
+
+    // Stagger entry animation for cards we haven't shown yet.
+    // The empty "+" slot animates last so the deal feels complete.
+    const slots = [];
+    grid.querySelectorAll('.card:not(.card-empty)').forEach((el) => {
+      const id = el.dataset.id;
+      if (id && !animatedCardIds.has(id)) slots.push({ el, id });
+    });
+    if (emptyCard && !animatedCardIds.has('__empty__')) slots.push({ el: emptyCard, id: '__empty__' });
+    slots.forEach(({ el, id }, i) => {
+      el.style.setProperty('--card-enter-delay', `${i * 70}ms`);
+      el.classList.add('card-enter');
+      animatedCardIds.add(id);
+      el.addEventListener('animationend', function onEnd(ev) {
+        if (ev.animationName !== 'card-enter') return;
+        el.classList.remove('card-enter');
+        el.style.removeProperty('--card-enter-delay');
+        el.removeEventListener('animationend', onEnd);
+      });
+    });
 
     if (nextCodeEl) nextCodeEl.textContent = nextCode();
     updateStats();

@@ -345,6 +345,66 @@ main {
   width: 22px; height: 22px;
 }
 
+/* Card entry animation — sci-fi reveal sweep */
+.card.card-enter {
+  animation: card-enter 0.7s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  animation-delay: var(--card-enter-delay, 0ms);
+}
+.card.card-enter .card-corners::before,
+.card.card-enter .card-corners::after {
+  animation: card-corner-pop 0.5s cubic-bezier(0.2, 0.9, 0.3, 1.2) both;
+  animation-delay: calc(var(--card-enter-delay, 0ms) + 280ms);
+}
+.card.card-enter::before {
+  /* Reuse the existing top-line pseudo as a sweep flash on entry. */
+  opacity: 1;
+  animation: card-flashline 0.7s ease-out both;
+  animation-delay: var(--card-enter-delay, 0ms);
+}
+
+@keyframes card-enter {
+  0% {
+    opacity: 0;
+    transform: translateY(14px);
+    clip-path: inset(0 100% 0 0);
+    filter: blur(2px);
+  }
+  35% {
+    opacity: 1;
+    filter: blur(0);
+  }
+  60% {
+    transform: translateY(-2px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+    clip-path: inset(0 0 0 0);
+    filter: blur(0);
+  }
+}
+
+@keyframes card-corner-pop {
+  0%   { opacity: 0; width: 4px; height: 4px; }
+  60%  { opacity: 1; width: 28px; height: 28px; }
+  100% { opacity: 1; width: 14px; height: 14px; }
+}
+
+@keyframes card-flashline {
+  0%   { opacity: 0; transform: scaleX(0.1); transform-origin: left; }
+  40%  { opacity: 1; transform: scaleX(1);   transform-origin: left; }
+  100% { opacity: 0; transform: scaleX(1);   transform-origin: left; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.card-enter,
+  .card.card-enter .card-corners::before,
+  .card.card-enter .card-corners::after,
+  .card.card-enter::before {
+    animation: none;
+  }
+}
+
 .card-status {
   display: inline-flex;
   align-items: center;
