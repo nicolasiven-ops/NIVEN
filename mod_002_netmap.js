@@ -1722,9 +1722,10 @@ function bindBoard(s) {
 
     const aggEl = e.target.closest('[data-agg-key]');
     if (aggEl && e.button === 0) {
-      // Aggregate summary clicked — for now just nudge the user toward the
-      // LAG flow. Full "convert these N links into a LAG" UX comes next.
-      toast(s, 'LAG configurator coming soon — for now, expand the stack and create a LAG from the inspector');
+      // Aggregate summary clicked — open the LAG configurator inline in the
+      // inspector. The selection kind 'agg' carries the aggregate key so the
+      // form can resolve the constituent links.
+      select(s, 'agg', aggEl.dataset.aggKey);
       e.preventDefault();
       return;
     }
@@ -3913,6 +3914,158 @@ function bindStackVipSection(s, stack, body) {
   });
 }
 
+// Aggregate inspector — opens when the user clicks the dim "×N · click to
+// LAG" summary line between two collapsed stacks (or stack + device). Lists
+// the constituent links and lets the user create a LAG (or LAG-pair when
+// both sides are stacks) covering them in one shot.
+function renderAggInspector(s, body, idEl) {
+  const key = s.selected.id;
+  const aggregations = computeStackPairAggregations(s, computeAbsorbedLinkIds(s));
+  const agg = aggregations.get(key);
+  if (!agg) { deselect(s); return; }
+
+  const stkA = (s.stacks || []).find((st) => st.id === agg.aSide);
+  const stkB = (s.stacks || []).find((st) => st.id === agg.bSide);
+  const sideName = (id, stk) => stk ? stk.name : (s.devices.find((d) => d.id === id)?.name || id);
+
+  // Resolve which port lives on which side per constituent link. The link's
+  // .from might align with either aSide or bSide depending on creation order.
+  const linkRows = agg.linkIds.map((lid) => {
+    const l = s.links.find((x) => x.id === lid);
+    if (!l) return null;
+    const fromStack = findStack(s, l.from);
+    const fromMatchesA = (fromStack && fromStack.id === agg.aSide) || l.from === agg.aSide;
+    const aDevId = fromMatchesA ? l.from : l.to;
+    const bDevId = fromMatchesA ? l.to : l.from;
+    const aPort = fromMatchesA ? l.fromPort : l.toPort;
+    const bPort = fromMatchesA ? l.toPort : l.fromPort;
+    const aDev = s.devices.find((d) => d.id === aDevId);
+    const bDev = s.devices.find((d) => d.id === bDevId);
+    return { l, aDev, bDev, aPort, bPort };
+  }).filter(Boolean);
+
+  idEl.textContent = `// LAG · ×${agg.linkIds.length}`;
+
+  const lagOptions = (stack) => {
+    if (!stack) return '';
+    const opts = ['<option value="__new">+ NEW LAG</option>'];
+    (stack.lags || []).forEach((lag) => {
+      opts.push(`<option value="${escAttr(lag.id)}">${escSvg(lag.name)}</option>`);
+    });
+    return opts.join('');
+  };
+
+  const sideBlock = (label, side, stack) => {
+    if (!stack) {
+      return `<div class="m002-l3-block">
+        <div class="m002-l3-head"><span>${label}</span></div>
+        <div class="m002-vlan-empty">${escSvg(sideName(side, null))} is not a stack — LAG will only be created on the other side.</div>
+      </div>`;
+    }
+    const defaultName = `Po${(stack.lags || []).length + 1}`;
+    return `<div class="m002-l3-block">
+      <div class="m002-l3-head">
+        <span>${label} · ${escSvg(stack.name)}</span>
+      </div>
+      <div class="m002-agg-side">
+        <select class="m002-agg-lagpick" data-agg-side="${side}" data-agg-f="lagId">${lagOptions(stack)}</select>
+        <input class="m002-agg-lagname" data-agg-side="${side}" data-agg-f="name" value="${escAttr(defaultName)}" placeholder="LAG name (e.g. Po1)"/>
+      </div>
+    </div>`;
+  };
+
+  const linksTable = `
+    <div class="m002-l3-block">
+      <div class="m002-l3-head"><span>LINKS (×${linkRows.length})</span></div>
+      <div class="m002-agg-links">
+        ${linkRows.map((r) => `<div class="m002-agg-link-row">
+          <span class="m002-agg-port">${escSvg((r.aDev?.name || '?') + (r.aPort ? ` · p${r.aPort}` : ''))}</span>
+          <span class="m002-agg-arrow">⇄</span>
+          <span class="m002-agg-port">${escSvg((r.bDev?.name || '?') + (r.bPort ? ` · p${r.bPort}` : ''))}</span>
+        </div>`).join('')}
+      </div>
+    </div>
+  `;
+
+  body.innerHTML = `
+    <p class="m002-link-hint">×${agg.linkIds.length} link${agg.linkIds.length === 1 ? '' : 's'} between <b>${escSvg(sideName(agg.aSide, stkA))}</b> and <b>${escSvg(sideName(agg.bSide, stkB))}</b>. Configure a LAG to bundle them.</p>
+    ${sideBlock('SIDE A', agg.aSide, stkA)}
+    ${sideBlock('SIDE B', agg.bSide, stkB)}
+    ${linksTable}
+    <button type="button" class="m002-action" data-agg-create>CREATE LAG${(stkA && stkB) ? '-PAIR' : ''}</button>
+    <p class="m002-link-hint">Tip: a "LAG-pair" creates and counterparts a LAG on each stack so the bundle visually reads as a single double-line afterwards.</p>
+  `;
+
+  // Toggle name input visibility when picking existing vs new
+  body.querySelectorAll('[data-agg-side]').forEach((el) => {
+    el.addEventListener('input', () => syncAggSide(body));
+    el.addEventListener('change', () => syncAggSide(body));
+  });
+  syncAggSide(body);
+
+  body.querySelector('[data-agg-create]')?.addEventListener('click', () => {
+    snapshot(s);
+    const sideAChoice = body.querySelector('[data-agg-side="' + agg.aSide + '"][data-agg-f="lagId"]')?.value;
+    const sideAName = body.querySelector('[data-agg-side="' + agg.aSide + '"][data-agg-f="name"]')?.value || '';
+    const sideBChoice = body.querySelector('[data-agg-side="' + agg.bSide + '"][data-agg-f="lagId"]')?.value;
+    const sideBName = body.querySelector('[data-agg-side="' + agg.bSide + '"][data-agg-f="name"]')?.value || '';
+    const lagA = stkA ? resolveOrCreateLag(stkA, sideAChoice, sideAName) : null;
+    const lagB = stkB ? resolveOrCreateLag(stkB, sideBChoice, sideBName) : null;
+    // Add the constituent ports to each side's LAG.
+    linkRows.forEach((r) => {
+      if (lagA && r.aDev && r.aPort) {
+        const portN = Number(r.aPort);
+        if (!lagA.ports.some((p) => p.deviceId === r.aDev.id && Number(p.portN) === portN)) {
+          lagA.ports.push({ deviceId: r.aDev.id, portN });
+        }
+      }
+      if (lagB && r.bDev && r.bPort) {
+        const portN = Number(r.bPort);
+        if (!lagB.ports.some((p) => p.deviceId === r.bDev.id && Number(p.portN) === portN)) {
+          lagB.ports.push({ deviceId: r.bDev.id, portN });
+        }
+      }
+    });
+    // LAG-pair: counterpart link both sides.
+    if (lagA && lagB && stkA && stkB) {
+      lagA.counterpart = { stackId: stkB.id, lagId: lagB.id };
+      lagB.counterpart = { stackId: stkA.id, lagId: lagA.id };
+    }
+    toast(s, lagA && lagB ? `LAG-pair created: ${lagA.name} ⇄ ${lagB.name}` : (lagA ? `LAG ${lagA.name} created` : `LAG ${lagB?.name} created`));
+    render(s);
+    schedSave(s);
+    if (lagA && stkA) select(s, 'lag', `${stkA.id}|${lagA.id}`);
+    else if (lagB && stkB) select(s, 'lag', `${stkB.id}|${lagB.id}`);
+    else deselect(s);
+  });
+}
+
+function syncAggSide(body) {
+  body.querySelectorAll('.m002-agg-side').forEach((row) => {
+    const pick = row.querySelector('[data-agg-f="lagId"]');
+    const nameInput = row.querySelector('[data-agg-f="name"]');
+    if (!pick || !nameInput) return;
+    const isNew = pick.value === '__new';
+    nameInput.style.display = isNew ? '' : 'none';
+  });
+}
+
+function resolveOrCreateLag(stack, lagId, defaultName) {
+  if (!Array.isArray(stack.lags)) stack.lags = [];
+  if (lagId && lagId !== '__new') {
+    const existing = stack.lags.find((l) => l.id === lagId);
+    if (existing) return existing;
+  }
+  const newLag = {
+    id: 'lag_' + rid(),
+    name: (defaultName || 'Po' + (stack.lags.length + 1)).trim(),
+    ports: [],
+    vlans: [],
+  };
+  stack.lags.push(newLag);
+  return newLag;
+}
+
 function refreshToolHighlights(s) {
   const setActive = (sel, on) => s.host.querySelector(sel)?.classList.toggle('active', !!on);
   setActive('[data-tool="link"]',   s.linkMode);
@@ -4475,6 +4628,8 @@ function openInspector(s) {
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
     bindStackVipSection(s, stack, body);
     renderInspectorVlanPickers(s);
+  } else if (s.selected.kind === 'agg') {
+    renderAggInspector(s, body, idEl);
   } else if (s.selected.kind === 'lag') {
     // LAG editor — symmetric, both sides are stacks. FROM LAG / TO LAG pick
     // sibling and peer LAGs; per-side blocks edit each stack's own NAME and
@@ -6805,6 +6960,15 @@ const MOD002_CSS = `
 .m002-link-agg-line{transition:stroke .15s,opacity .15s;}
 .m002-link-agg:hover .m002-link-agg-line{stroke:#9aa0a8;}
 .m002-link-agg-label{font-size:9px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;}
+/* Aggregate inspector — LAG-pair configurator that opens when the user
+   clicks the dim summary line between two collapsed stacks. */
+.m002-agg-side{display:flex;gap:6px;align-items:center;}
+.m002-agg-lagpick,.m002-agg-lagname{flex:1 1 0;min-width:0;background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
+.m002-agg-lagpick:focus,.m002-agg-lagname:focus{border-color:#35ff7a;}
+.m002-agg-links{display:flex;flex-direction:column;gap:3px;}
+.m002-agg-link-row{display:grid;grid-template-columns:1fr 18px 1fr;gap:6px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;}
+.m002-agg-port{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
+.m002-agg-arrow{text-align:center;color:#5a5f6e;}
 .m002-link-bundle .m002-link-hit{stroke-width:18;}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
