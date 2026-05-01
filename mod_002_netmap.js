@@ -692,6 +692,26 @@ function defaultGatewayFor(ip, prefix) {
   return gw;
 }
 
+// Drop a default route into a routes[] table when one isn't already there
+// and the host's IP/prefix yield a usable next-hop suggestion. Returns true
+// if a route was added — callers use that to know they should refresh the
+// inspector. Once present, the user owns the entry; we never overwrite it.
+function autoCreateDefaultRoute(routes, ip, prefix, interfaceId) {
+  if (!Array.isArray(routes)) return false;
+  if (!ip) return false;
+  if (routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0')) return false;
+  const gw = defaultGatewayFor(ip, prefix);
+  if (!gw) return false;
+  routes.push({
+    id: 'rt_' + rid(),
+    dst: '0.0.0.0/0',
+    nextHop: gw,
+    interfaceId: interfaceId || null,
+    metric: null,
+  });
+  return true;
+}
+
 // IP / CIDR utilities ---------------------------------------------------------
 function parseCidr(str) {
   if (str == null) return null;
@@ -818,15 +838,20 @@ function entityIps(s, id) {
   return dev.ip ? [dev.ip] : [];
 }
 
-// Gateway IPs configured on an entity — same shape as entityIps. Used to
-// match against the OTHER endpoint's IPs and decide flow direction.
+// Gateway IPs configured on an entity. Source of truth is the entity's
+// routes[] table — every entry whose destination is the default route
+// (0.0.0.0/0) contributes its next-hop. Routers, endpoints, and stacks
+// share this shape now that gateway is no longer a per-interface field.
 function entityGateways(s, id) {
+  const fromRoutes = (routes) => (routes || [])
+    .filter((r) => cidrNormalize(r.dst) === '0.0.0.0/0')
+    .map((r) => r.nextHop)
+    .filter(Boolean);
   const stack = (s.stacks || []).find((st) => st.id === id);
-  if (stack) return (stack.virtualInterfaces || []).map((vif) => vif.gateway).filter(Boolean);
+  if (stack) return fromRoutes(stack.routes);
   const dev = s.devices.find((d) => d.id === id);
   if (!dev) return [];
-  if (isL3Type(dev.type)) return (dev.interfaces || []).map((iface) => iface.gateway).filter(Boolean);
-  return dev.gateway ? [dev.gateway] : [];
+  return fromRoutes(dev.routes);
 }
 
 // Subnets a stack participates in via its virtual interfaces.
@@ -843,35 +868,63 @@ function stackSubnets(s, stack) {
   return out;
 }
 
-// True if the device acts as the default gateway for any subnet. Two
-// signals: (a) explicit 0.0.0.0/0 route on the device's own routing table,
-// or (b) at least one OTHER device's interface gateway points at one of
-// this device's IPs (the device is referenced as next-hop). The second
-// signal is what naturally lights up routers as DGW once endpoints typed
-// their gateways in.
+// Vote-based default-gateway resolution. Every default route's next-hop in
+// the map counts as a vote for whichever entity terminates that IP. Per
+// subnet, the IP with the most votes wins the "default gateway" title and
+// its owning entity gets the DGW badge.
+//
+// Cached per-render via s._dgwWinners (a Set of winning IPs) so isDefault
+// Gateway() stays cheap when called from drawDevice / drawCollapsedStack
+// in a single pass.
+function dgwWinningIps(s) {
+  if (s._dgwWinners) return s._dgwWinners;
+  const counts = new Map(); // subnetCidrNorm → Map<nextHopIp, count>
+  const collect = (routes) => {
+    (routes || []).forEach((r) => {
+      if (cidrNormalize(r.dst) !== '0.0.0.0/0') return;
+      if (!r.nextHop) return;
+      const sn = subnetForIp(s, r.nextHop);
+      if (!sn) return;
+      const sub = cidrNormalize(sn.cidr);
+      if (!counts.has(sub)) counts.set(sub, new Map());
+      const m = counts.get(sub);
+      m.set(r.nextHop, (m.get(r.nextHop) || 0) + 1);
+    });
+  };
+  s.devices.forEach((d) => collect(d.routes));
+  s.stacks.forEach((st) => collect(st.routes));
+  const winners = new Set();
+  counts.forEach((m) => {
+    let best = null, bestCount = 0;
+    m.forEach((c, ip) => { if (c > bestCount) { best = ip; bestCount = c; } });
+    if (best) winners.add(best);
+  });
+  s._dgwWinners = winners;
+  return winners;
+}
+
 function isDefaultGateway(s, dev) {
-  if (!dev) return false;
-  if (Array.isArray(dev.routes) && dev.routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0')) return true;
-  if (!s || !Array.isArray(s.devices)) return false;
-  const myIps = new Set();
+  if (!dev || !s) return false;
+  const winners = dgwWinningIps(s);
+  if (!winners.size) return false;
+  // Stack: any VIP IP that's a winning gateway IP counts.
+  // Otherwise: device's interface IPs (router/firewall) or dev.ip (rest).
+  const myIps = [];
   if (isL3Type(dev.type)) {
-    (dev.interfaces || []).forEach((iface) => { if (iface.ip) myIps.add(iface.ip); });
+    (dev.interfaces || []).forEach((iface) => { if (iface.ip) myIps.push(iface.ip); });
   } else if (dev.ip) {
-    myIps.add(dev.ip);
+    myIps.push(dev.ip);
   }
-  if (!myIps.size) return false;
-  for (const other of s.devices) {
-    if (other.id === dev.id) continue;
-    if (isReference(other)) continue;
-    if (isL3Type(other.type)) {
-      for (const iface of (other.interfaces || [])) {
-        if (iface.gateway && myIps.has(iface.gateway)) return true;
-      }
-    } else if (other.gateway && myIps.has(other.gateway)) {
-      return true;
-    }
-  }
-  return false;
+  return myIps.some((ip) => winners.has(ip));
+}
+
+// Stack version — VIPs are the stack's L3 face, so any VIP being a winning
+// next-hop puts the DGW badge on the collapsed stack icon.
+function stackIsDefaultGateway(s, stack) {
+  if (!stack) return false;
+  const winners = dgwWinningIps(s);
+  if (!winners.size) return false;
+  return (stack.virtualInterfaces || []).some((vif) => vif.ip && winners.has(vif.ip));
 }
 
 // Compute L3 paths for the routing layer. ONE ribbon per L3 entity that
@@ -896,19 +949,30 @@ function computeL3Paths(s) {
   const paths = [];
   if (!s.links?.length && !(s.stacks?.length)) return paths;
 
-  // Adjacency over the union of devices and stacks. Each stack is also a
-  // virtual node connected to all its members.
+  // Zone gate: an entity counts as in-scope when it has no zone, no zone is
+  // active, or its zone matches the active one. Without this, ribbons from
+  // a different zone bleed through into the current view.
+  const inZone = (entity) => !s.activeZone || !entity?.zone || entity.zone === s.activeZone;
+  const devInZone = new Set(s.devices.filter(inZone).map((d) => d.id));
+  const stackInZone = new Set(s.stacks.filter(inZone).map((st) => st.id));
+  const idInZone = (id) => devInZone.has(id) || stackInZone.has(id);
+
+  // Adjacency over the in-zone union of devices and stacks. Each stack is
+  // also a virtual node connected to its in-zone members.
   const adj = new Map();
   const ensure = (id) => { if (!adj.has(id)) adj.set(id, new Set()); };
-  s.devices.forEach((d) => ensure(d.id));
-  s.stacks.forEach((st) => ensure(st.id));
+  s.devices.forEach((d) => { if (devInZone.has(d.id)) ensure(d.id); });
+  s.stacks.forEach((st) => { if (stackInZone.has(st.id)) ensure(st.id); });
   s.links.forEach((l) => {
+    if (!idInZone(l.from) || !idInZone(l.to)) return;
     ensure(l.from); ensure(l.to);
     adj.get(l.from).add(l.to);
     adj.get(l.to).add(l.from);
   });
   s.stacks.forEach((st) => {
+    if (!stackInZone.has(st.id)) return;
     (st.members || []).forEach((mid) => {
+      if (!devInZone.has(mid)) return;
       ensure(mid);
       adj.get(st.id).add(mid);
       adj.get(mid).add(st.id);
@@ -941,6 +1005,7 @@ function computeL3Paths(s) {
   const sources = []; // { srcId, gateway }
   s.devices.forEach((d) => {
     if (isReference(d)) return;
+    if (!devInZone.has(d.id)) return;
     // Skip device's own gateways when the device is a VIP'd-stack member —
     // the stack speaks for them.
     const stk = stackOfMember.get(d.id);
@@ -951,6 +1016,7 @@ function computeL3Paths(s) {
     entityGateways(s, d.id).forEach((g) => sources.push({ srcId: d.id, gateway: g }));
   });
   s.stacks.forEach((st) => {
+    if (!stackInZone.has(st.id)) return;
     if (!stackHasVip(st)) return;
     entityGateways(s, st.id).forEach((g) => sources.push({ srcId: st.id, gateway: g }));
   });
@@ -959,6 +1025,7 @@ function computeL3Paths(s) {
     const targetId = ownerOfIp.get(gateway);
     if (!targetId) continue;
     if (targetId === srcId) continue;
+    if (!idInZone(targetId)) continue;
     // Skip when the gateway IP is owned by the source's own stack (a member
     // pointing at its containing stack's VIP). Drawing a ribbon from a
     // collapsed-stack member to the stack centre it lives inside is the
@@ -1478,31 +1545,43 @@ function buildDOM(s) {
     if (!s.view || typeof s.view !== 'object') s.view = { ...DEFAULT_VIEW };
     s.view.activeLayer = s.activeLayer;
     schedSave(s);
-    // Routing-layer ergonomics: pure-L2 stacks (switches without a VIP) are
-    // visual noise on the routing layer — they're transit. Auto-collapse them
-    // on entry so the L3 ribbons read cleanly. We remember which stacks WE
-    // collapsed so leaving the layer can restore the user's prior layout
-    // without clobbering anything they collapsed manually.
+    // Routing-layer ergonomics:
+    //   - L3 stacks (VIPs or L3 members) auto-EXPAND so the user can see
+    //     the individual L3 entities inside them.
+    //   - Pure-L2 stacks auto-COLLAPSE — they're transit, no L3 to show.
+    // We remember which stacks we touched so leaving the layer restores
+    // the user's prior layout without clobbering manual changes.
     if (s.activeLayer === 'routing' && prev !== 'routing') {
       const collapsedByLayer = [];
+      const expandedByLayer = [];
       (s.stacks || []).forEach((st) => {
-        const isL2Only = !stackHasVip(st) && !st.members.some((mid) => {
+        const isL3 = stackHasVip(st) || st.members.some((mid) => {
           const m = s.devices.find((d) => d.id === mid);
           return m && isL3Device(m);
         });
-        if (isL2Only && st.expanded) {
+        if (isL3 && !st.expanded) {
+          st.expanded = true;
+          expandedByLayer.push(st.id);
+        } else if (!isL3 && st.expanded) {
           st.expanded = false;
           collapsedByLayer.push(st.id);
         }
       });
       s._routingAutoCollapsed = collapsedByLayer;
-    } else if (prev === 'routing' && s.activeLayer !== 'routing' && Array.isArray(s._routingAutoCollapsed)) {
-      // Leaving routing — re-expand only the stacks we touched on entry.
-      s._routingAutoCollapsed.forEach((id) => {
+      s._routingAutoExpanded = expandedByLayer;
+    } else if (prev === 'routing' && s.activeLayer !== 'routing') {
+      // Leaving routing — restore stacks we touched on entry to their prior
+      // states.
+      (s._routingAutoCollapsed || []).forEach((id) => {
         const st = (s.stacks || []).find((x) => x.id === id);
         if (st) st.expanded = true;
       });
+      (s._routingAutoExpanded || []).forEach((id) => {
+        const st = (s.stacks || []).find((x) => x.id === id);
+        if (st) st.expanded = false;
+      });
       s._routingAutoCollapsed = null;
+      s._routingAutoExpanded = null;
     }
     render(s);
   });
@@ -2101,10 +2180,10 @@ function spawnDeviceAt(s, typeId, wx, wy) {
     hostname: '',
     ip: '',
     prefix: 24,
-    gateway: '',
     notes: '',
     vlans: [],
     lags: [],
+    routes: [],
     zone: s.activeZone,
     ports: Array.from({ length: t.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] })),
   };
@@ -2458,16 +2537,18 @@ function invalidateEdgeSlots(s) {
 // to configure a LAG over those wires.
 function computeStackPairAggregations(s, absorbed) {
   const groups = new Map();
+  const zoneOk = (entity) => !s.activeZone || !entity?.zone || entity.zone === s.activeZone;
   s.links.forEach((l) => {
     if (absorbed.has(l.id)) return;
+    const a = s.devices.find((d) => d.id === l.from);
+    const b = s.devices.find((d) => d.id === l.to);
+    if (!a || !b) return;
+    if (!zoneOk(a) || !zoneOk(b)) return;
     const stkA = findStack(s, l.from);
     const stkB = findStack(s, l.to);
     const aCollapsed = stkA && isStackCollapsed(s, stkA);
     const bCollapsed = stkB && isStackCollapsed(s, stkB);
     if (!aCollapsed && !bCollapsed) return;
-    // The other side must also be a collapsed-stack OR a non-stack device.
-    // An expanded stack on the other side keeps individual link rendering so
-    // the user sees which member port is involved.
     const aSide = stkA ? (aCollapsed ? stkA.id : null) : l.from;
     const bSide = stkB ? (bCollapsed ? stkB.id : null) : l.to;
     if (!aSide || !bSide) return;
@@ -2691,6 +2772,7 @@ function createStack(s, deviceIds) {
     lags: [],
     stackLinks: [],
     virtualInterfaces: [],
+    routes: [],
   };
   s.stacks.push(st);
   render(s);
@@ -2872,9 +2954,13 @@ function drawCollapsedStack(s, stack) {
     return m && isL3Device(m);
   });
   g.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
+  if (stackIsDefaultGateway(s, stack)) g.setAttribute('data-gw', 'true');
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
+  const gwBadge = stackIsDefaultGateway(s, stack)
+    ? `<g class="m002-dev-gw-badge"><rect x="${w/2 - 30}" y="${-h/2 + 4}" width="26" height="14" rx="2"/><text x="${w/2 - 17}" y="${-h/2 + 14}" text-anchor="middle">DGW</text></g>`
+    : '';
   // Two ghost rects behind to suggest depth — capped at 2 visible layers
   g.innerHTML = `
     <rect class="m002-stack-ghost" x="${-w/2 + 6}" y="${-h/2 - 6}" width="${w}" height="${h}" rx="3"/>
@@ -2884,6 +2970,7 @@ function drawCollapsedStack(s, stack) {
     <text class="m002-dev-name"   x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(stack.name)}</text>
     <text class="m002-stack-badge" x="${w/2 - 10}"  y="${-h/2 + 18}" text-anchor="end">×${memberCount}</text>
     <text class="m002-dev-notes"  x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(memberCount + ' members')}</text>
+    ${gwBadge}
   `;
   s.gDevices.appendChild(g);
 }
@@ -3372,6 +3459,11 @@ function deselect(s) {
   s.portModalOpen = null;
   s.host.querySelectorAll('.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
   clearMultiSelection(s);
+  // Strip the incident-flow pulse — it was anchored to the prior selection
+  // and would otherwise keep animating after the user clicked into empty
+  // canvas. applyIncidentFlow() with no selection set is a no-op apart
+  // from the cleanup pass at its top.
+  applyIncidentFlow(s);
   showInspectorEmpty(s);
 }
 
@@ -3513,7 +3605,6 @@ function renderL3SectionsHTML(s, dev) {
          <span>NAME</span>
          <span>IP</span>
          <span>PREFIX</span>
-         <span>GATEWAY</span>
          <span></span>
        </div>`
     : '';
@@ -3521,39 +3612,15 @@ function renderL3SectionsHTML(s, dev) {
     ? ifaces.map((iface) => {
         const sn = ifaceSubnet(s, iface);
         const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
-        const gwHint = defaultGatewayFor(iface.ip, iface.prefix);
         return `<div class="m002-iface-row" data-iface-id="${escAttr(iface.id)}" style="--sc:${c}">
           <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet'}"></span>
           <input class="m002-iface-name" data-if-f="name" value="${escAttr(iface.name)}" placeholder="if0"/>
           <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.10"/>
           <select class="m002-iface-prefix" data-if-f="prefix" title="prefix length">${prefixOptions(iface.prefix)}</select>
-          <input class="m002-iface-gw" data-if-f="gateway" value="${escAttr(iface.gateway)}" placeholder="${escAttr(gwHint || '10.0.0.1')}" title="default gateway (auto-suggested from network IP + 1)"/>
           <button type="button" class="m002-iface-rm" data-if-rm title="Remove interface">×</button>
         </div>`;
       }).join('')
     : `<span class="m002-vlan-empty">no interfaces — add one to terminate IP traffic on this device</span>`;
-  const routeHeader = routes.length
-    ? `<div class="m002-route-head">
-         <span>DESTINATION</span>
-         <span>NEXT-HOP</span>
-         <span>OUT IF</span>
-         <span>METRIC</span>
-         <span></span>
-       </div>`
-    : '';
-  const routeRows = routes.length
-    ? routes.map((r) => {
-        const isDefault = cidrNormalize(r.dst) === '0.0.0.0/0';
-        return `<div class="m002-route-row ${isDefault ? 'is-default' : ''}" data-route-id="${escAttr(r.id)}">
-          <input class="m002-route-dst" data-rt-f="dst" value="${escAttr(r.dst)}" placeholder="0.0.0.0/0"/>
-          <input class="m002-route-nexthop" data-rt-f="nextHop" value="${escAttr(r.nextHop)}" placeholder="next-hop IP"/>
-          <select class="m002-route-iface" data-rt-f="interfaceId" title="outgoing interface">${ifaceOptions(r.interfaceId)}</select>
-          <input class="m002-route-metric" data-rt-f="metric" value="${escAttr(r.metric ?? '')}" placeholder="metric" inputmode="numeric"/>
-          <button type="button" class="m002-route-rm" data-rt-rm title="Remove route">×</button>
-        </div>`;
-      }).join('')
-    : `<span class="m002-vlan-empty">no routes — add 0.0.0.0/0 to mark this device as a default gateway</span>`;
-  const hasDefault = routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0');
   return `
     <details class="m002-insp-l3"${open ? ' open' : ''}>
       <summary>// L3</summary>
@@ -3564,17 +3631,63 @@ function renderL3SectionsHTML(s, dev) {
         </div>
         <div class="m002-iface-list">${ifaceHeader}${ifaceRows}</div>
       </div>
-      <div class="m002-l3-block">
-        <div class="m002-l3-head">
-          <span>ROUTES (${routes.length})</span>
-          <span class="m002-l3-head-actions">
-            ${hasDefault ? '' : '<button type="button" class="m002-action small" data-rt-add-default>+ DEFAULT</button>'}
-            <button type="button" class="m002-action small" data-rt-add>+ ADD</button>
-          </span>
-        </div>
-        <div class="m002-route-list">${routeHeader}${routeRows}</div>
-      </div>
+      ${renderRoutesBlockHTML(s, dev)}
     </details>
+  `;
+}
+
+// Routes table block — shared between routers/firewalls (where it sits next
+// to the interfaces table), non-L3 devices (single implicit interface), and
+// stacks (with the VIP list as the "interface" surface). The OUT IF column
+// only renders when the entity has multiple interfaces to pick from.
+function renderRoutesBlockHTML(s, host) {
+  const routes = Array.isArray(host?.routes) ? host.routes : [];
+  const ifaces = Array.isArray(host?.interfaces) ? host.interfaces
+                : Array.isArray(host?.virtualInterfaces) ? host.virtualInterfaces
+                : [];
+  const hasIfaceCol = ifaces.length > 0;
+  const ifaceOptions = (selectedId) => {
+    const opts = ['<option value="">—</option>'];
+    ifaces.forEach((iface) => {
+      const sel = String(selectedId || '') === String(iface.id) ? 'selected' : '';
+      const lbl = (iface.name || '') + (iface.ip ? ` · ${iface.ip}` : '');
+      opts.push(`<option value="${escAttr(iface.id)}" ${sel}>${escSvg(lbl)}</option>`);
+    });
+    return opts.join('');
+  };
+  const head = routes.length
+    ? `<div class="m002-route-head ${hasIfaceCol ? '' : 'm002-route-head--no-iface'}">
+         <span>DESTINATION</span>
+         <span>NEXT-HOP</span>
+         ${hasIfaceCol ? '<span>OUT IF</span>' : ''}
+         <span>METRIC</span>
+         <span></span>
+       </div>`
+    : '';
+  const rows = routes.length
+    ? routes.map((r) => {
+        const isDefault = cidrNormalize(r.dst) === '0.0.0.0/0';
+        return `<div class="m002-route-row ${isDefault ? 'is-default' : ''} ${hasIfaceCol ? '' : 'm002-route-row--no-iface'}" data-route-id="${escAttr(r.id)}">
+          <input class="m002-route-dst" data-rt-f="dst" value="${escAttr(r.dst)}" placeholder="0.0.0.0/0"/>
+          <input class="m002-route-nexthop" data-rt-f="nextHop" value="${escAttr(r.nextHop)}" placeholder="next-hop IP"/>
+          ${hasIfaceCol ? `<select class="m002-route-iface" data-rt-f="interfaceId" title="outgoing interface">${ifaceOptions(r.interfaceId)}</select>` : ''}
+          <input class="m002-route-metric" data-rt-f="metric" value="${escAttr(r.metric ?? '')}" placeholder="metric" inputmode="numeric"/>
+          <button type="button" class="m002-route-rm" data-rt-rm title="Remove route">×</button>
+        </div>`;
+      }).join('')
+    : `<span class="m002-vlan-empty">no routes — type an IP on the interface above and a default route appears here automatically</span>`;
+  const hasDefault = routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0');
+  return `
+    <div class="m002-l3-block">
+      <div class="m002-l3-head">
+        <span>ROUTES (${routes.length})</span>
+        <span class="m002-l3-head-actions">
+          ${hasDefault ? '' : '<button type="button" class="m002-action small" data-rt-add-default>+ DEFAULT</button>'}
+          <button type="button" class="m002-action small" data-rt-add>+ ADD</button>
+        </span>
+      </div>
+      <div class="m002-route-list">${head}${rows}</div>
+    </div>
   `;
 }
 
@@ -3620,19 +3733,13 @@ function bindL3Sections(s, dev, body) {
           if (p && p.prefix < 31) {
             subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
           }
-          // Auto-fill gateway when empty — leaves user-typed gateways alone.
-          if (!iface.gateway) {
-            iface.gateway = defaultGatewayFor(iface.ip, iface.prefix);
-            const gwInput = row.querySelector('[data-if-f="gateway"]');
-            if (gwInput && document.activeElement !== gwInput) {
-              gwInput.value = iface.gateway;
-            }
-          } else {
-            // Refresh placeholder hint so user sees the suggested default.
-            const gwInput = row.querySelector('[data-if-f="gateway"]');
-            if (gwInput) gwInput.placeholder = defaultGatewayFor(iface.ip, iface.prefix) || '10.0.0.1';
-          }
+          // First IP on a router/firewall: drop in a default route so the
+          // gateway is visible and editable in the routes table without the
+          // user having to add it manually. The next-hop is .1-of-the-net,
+          // suppressed when the iface IS .1 (defaultGatewayFor handles that).
+          const added = autoCreateDefaultRoute(dev.routes, iface.ip, iface.prefix, iface.id);
           subnetsChanged(s);
+          if (added) { refreshSelfAndCanvas(); openInspector(s); return; }
         }
         refreshSelfAndCanvas();
         if (rerender) openInspector(s);
@@ -3660,15 +3767,26 @@ function bindL3Sections(s, dev, body) {
     snapshot(s);
     if (!Array.isArray(dev.interfaces)) dev.interfaces = [];
     const idx = dev.interfaces.length;
-    dev.interfaces.push({ id: 'if_' + rid(), name: `if${idx}`, ip: '', prefix: 24, gateway: '' });
+    dev.interfaces.push({ id: 'if_' + rid(), name: `if${idx}`, ip: '', prefix: 24 });
     refreshSelfAndCanvas();
     openInspector(s);
   });
 
-  // Route rows
+  bindRoutesSection(s, dev, body, refreshSelfAndCanvas);
+}
+
+// Wire the routes table on any host (device or stack). Refreshes the canvas
+// + redraws L3 ribbons via the supplied refreshFn so vote-based DGW visuals
+// update as the user edits next-hops.
+function bindRoutesSection(s, host, body, refreshFn) {
+  const refresh = () => {
+    schedSave(s);
+    if (typeof refreshFn === 'function') refreshFn();
+    if (s.activeLayer === 'routing') drawL3Paths(s);
+  };
   body.querySelectorAll('.m002-route-row').forEach((row) => {
     const rid_ = row.dataset.routeId;
-    const route = (dev.routes || []).find((x) => x.id === rid_);
+    const route = (host.routes || []).find((x) => x.id === rid_);
     if (!route) return;
     row.querySelectorAll('[data-rt-f]').forEach((el) => {
       const isSelect = el.tagName === 'SELECT';
@@ -3682,39 +3800,38 @@ function bindL3Sections(s, dev, body) {
         } else {
           route[f] = el.value;
         }
-        refreshSelfAndCanvas();
+        refresh();
         if (rerender) openInspector(s);
       };
-      if (isSelect) {
-        el.addEventListener('change', () => apply(false));
-      } else {
+      if (isSelect) el.addEventListener('change', () => apply(false));
+      else {
         el.addEventListener('input', () => apply(false));
         el.addEventListener('change', () => {
-          if (el.dataset.rtF === 'dst') openInspector(s); // gateway-state may change
+          // Editing the destination might flip the route between default
+          // and not-default — re-render so the +DEFAULT button toggles.
+          if (el.dataset.rtF === 'dst' || el.dataset.rtF === 'nextHop') openInspector(s);
         });
       }
     });
     row.querySelector('[data-rt-rm]')?.addEventListener('click', () => {
       snapshot(s);
-      dev.routes = (dev.routes || []).filter((x) => x.id !== rid_);
-      refreshSelfAndCanvas();
+      host.routes = (host.routes || []).filter((x) => x.id !== rid_);
+      refresh();
       openInspector(s);
     });
   });
-
   body.querySelector('[data-rt-add]')?.addEventListener('click', () => {
     snapshot(s);
-    if (!Array.isArray(dev.routes)) dev.routes = [];
-    dev.routes.push({ id: 'rt_' + rid(), dst: '', nextHop: '', interfaceId: null, metric: null });
-    refreshSelfAndCanvas();
+    if (!Array.isArray(host.routes)) host.routes = [];
+    host.routes.push({ id: 'rt_' + rid(), dst: '', nextHop: '', interfaceId: null, metric: null });
+    refresh();
     openInspector(s);
   });
-
   body.querySelector('[data-rt-add-default]')?.addEventListener('click', () => {
     snapshot(s);
-    if (!Array.isArray(dev.routes)) dev.routes = [];
-    dev.routes.push({ id: 'rt_' + rid(), dst: '0.0.0.0/0', nextHop: '', interfaceId: null, metric: null });
-    refreshSelfAndCanvas();
+    if (!Array.isArray(host.routes)) host.routes = [];
+    host.routes.push({ id: 'rt_' + rid(), dst: '0.0.0.0/0', nextHop: '', interfaceId: null, metric: null });
+    refresh();
     openInspector(s);
   });
 }
@@ -3749,24 +3866,17 @@ function bindStackVipSection(s, stack, body) {
         } else {
           vif[f] = val;
         }
+        let routeAdded = false;
         if (f === 'ip' || f === 'prefix') {
-          // Auto-add the derived subnet to the registry so the legend lights
-          // up the moment the user types a VIP. Same UX as device interfaces.
           const cidr = vif.ip ? `${vif.ip}/${vif.prefix != null ? vif.prefix : 24}` : null;
           const p = cidr ? parseCidr(cidr) : null;
           if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
-          if (!vif.gateway) {
-            vif.gateway = defaultGatewayFor(vif.ip, vif.prefix);
-            const gwInput = row.querySelector('[data-vif-f="gateway"]');
-            if (gwInput && document.activeElement !== gwInput) gwInput.value = vif.gateway;
-          } else {
-            const gwInput = row.querySelector('[data-vif-f="gateway"]');
-            if (gwInput) gwInput.placeholder = defaultGatewayFor(vif.ip, vif.prefix) || '10.0.0.1';
-          }
+          if (!Array.isArray(stack.routes)) stack.routes = [];
+          routeAdded = autoCreateDefaultRoute(stack.routes, vif.ip, vif.prefix, vif.id);
           subnetsChanged(s);
         }
         refresh();
-        if (rerender) openInspector(s);
+        if (rerender || routeAdded) openInspector(s);
       };
       if (isSelect) el.addEventListener('change', () => apply(true));
       else {
@@ -3787,9 +3897,19 @@ function bindStackVipSection(s, stack, body) {
     snapshot(s);
     if (!Array.isArray(stack.virtualInterfaces)) stack.virtualInterfaces = [];
     const idx = stack.virtualInterfaces.length;
-    stack.virtualInterfaces.push({ id: 'vif_' + rid(), name: `vip${idx}`, ip: '', prefix: 24, gateway: '' });
+    stack.virtualInterfaces.push({ id: 'vif_' + rid(), name: `vip${idx}`, ip: '', prefix: 24 });
     refresh();
     openInspector(s);
+  });
+
+  // Stack also owns a routes table — wire its row events.
+  bindRoutesSection(s, stack, body, () => {
+    if (isStackCollapsed(s, stack)) {
+      const old = s.gDevices.querySelector(`[data-stack-id="${stack.id}"]`);
+      old?.remove();
+      drawCollapsedStack(s, stack);
+      markSelected(s);
+    }
   });
 }
 
@@ -4018,20 +4138,21 @@ function openInspector(s) {
       ${isL3Type(dev.type) ? renderL3SectionsHTML(s, dev) : `
       <details class="m002-insp-l3" open>
         <summary>// L3</summary>
-        <div class="m002-iface-head m002-iface-head--single">
-          <span></span>
-          <span>IP</span>
-          <span>PREFIX</span>
-          <span>GATEWAY</span>
-          <span></span>
+        <div class="m002-l3-block">
+          <div class="m002-iface-head m002-iface-head--non-l3">
+            <span></span>
+            <span>IP</span>
+            <span>PREFIX</span>
+            <span></span>
+          </div>
+          <div class="m002-iface-row m002-iface-row--non-l3">
+            <span class="m002-iface-dot"></span>
+            <input data-f="ip" value="${escAttr(dev.ip || '')}" placeholder="10.0.0.10"/>
+            <select data-f="prefix">${(() => { let h=''; for (let i=32;i>=0;i--){ const sel = Number(dev.prefix ?? 24) === i ? 'selected' : ''; h += `<option value="${i}" ${sel}>/${i}</option>`; } return h; })()}</select>
+            <span></span>
+          </div>
         </div>
-        <div class="m002-iface-row m002-iface-row--single">
-          <span class="m002-iface-dot"></span>
-          <input data-f="ip" value="${escAttr(dev.ip || '')}" placeholder="10.0.0.10"/>
-          <select data-f="prefix">${(() => { let h=''; for (let i=32;i>=0;i--){ const sel = Number(dev.prefix ?? 24) === i ? 'selected' : ''; h += `<option value="${i}" ${sel}>/${i}</option>`; } return h; })()}</select>
-          <input data-f="gateway" value="${escAttr(dev.gateway || '')}" placeholder="${escAttr(defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1')}"/>
-          <span></span>
-        </div>
+        ${renderRoutesBlockHTML(s, dev)}
       </details>`}
       <div class="m002-field">
         <span>VLANS</span>
@@ -4107,7 +4228,13 @@ function openInspector(s) {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
-    bindL3Sections(s, dev, body);
+    if (isL3Type(dev.type)) {
+      bindL3Sections(s, dev, body);
+    } else if (!isReference(dev)) {
+      // Non-L3 devices get a routes block too — wire it up so the user can
+      // edit / remove / add the default route surfaced from their dev.ip.
+      bindRoutesSection(s, dev, body, () => redrawDevice(s, dev));
+    }
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
@@ -4247,7 +4374,6 @@ function openInspector(s) {
              <span>NAME</span>
              <span>IP</span>
              <span>PREFIX</span>
-             <span>GATEWAY</span>
              <span></span>
            </div>`
         : '';
@@ -4262,13 +4388,11 @@ function openInspector(s) {
             const cidr = vif.ip ? `${vif.ip}/${vif.prefix != null ? vif.prefix : 24}` : null;
             const sn = cidr ? subnetForIp(s, cidr) : null;
             const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
-            const gwHint = defaultGatewayFor(vif.ip, vif.prefix);
             return `<div class="m002-iface-row" data-vif-id="${escAttr(vif.id)}" style="--sc:${c}">
               <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet'}"></span>
               <input class="m002-iface-name" data-vif-f="name" value="${escAttr(vif.name)}" placeholder="vip0"/>
               <input class="m002-iface-ip" data-vif-f="ip" value="${escAttr(vif.ip)}" placeholder="10.0.0.1"/>
               <select class="m002-iface-prefix" data-vif-f="prefix">${prefixOpts(vif.prefix)}</select>
-              <input class="m002-iface-gw" data-vif-f="gateway" value="${escAttr(vif.gateway)}" placeholder="${escAttr(gwHint || '10.0.0.1')}"/>
               <button type="button" class="m002-iface-rm" data-vif-rm title="Remove VIP">×</button>
             </div>`;
           }).join('')
@@ -4281,6 +4405,7 @@ function openInspector(s) {
           </div>
           <div class="m002-iface-list">${head}${rows}</div>
         </div>
+        ${renderRoutesBlockHTML(s, stack)}
       `;
     })();
     body.innerHTML = `
@@ -4609,30 +4734,27 @@ function updateDeviceField(s, dev, el) {
       dev.ports = Array.from({ length: t2.ports }, (_, i) => ({ n: i + 1, name: '', vlans: [] }));
     }
     // L3 fields follow the type. Becoming a router/firewall provisions
-    // interfaces[]/routes[] and bootstraps an interface from dev.ip; leaving
-    // those types strips the arrays so non-L3 inspectors stay clean.
+    // interfaces[] and bootstraps if0 from dev.ip+prefix. Leaving the L3
+    // type drops interfaces[] but keeps routes[] — non-L3 hosts have a
+    // single implicit interface and a routes table all the same.
     if (isL3Type(dev.type)) {
       if (!Array.isArray(dev.interfaces)) dev.interfaces = [];
       if (!Array.isArray(dev.routes)) dev.routes = [];
       if (!dev.interfaces.length && dev.ip && String(dev.ip).trim()) {
-        dev.interfaces.push({ id: 'if_' + rid(), name: 'if0', ip: String(dev.ip).trim(), subnetId: null });
+        const split = String(dev.ip).match(/^(.+?)\/(\d+)$/);
+        const ip = split ? split[1] : String(dev.ip).trim();
+        const prefix = split ? Number(split[2]) : (dev.prefix != null ? Number(dev.prefix) : 24);
+        dev.interfaces.push({ id: 'if_' + rid(), name: 'if0', ip, prefix });
       }
     } else {
       delete dev.interfaces;
-      delete dev.routes;
+      if (!Array.isArray(dev.routes)) dev.routes = [];
     }
     redrawDevice(s, dev);
     openInspector(s);
   } else if (f === 'prefix') {
     dev.prefix = Math.max(0, Math.min(32, Number(el.value)));
     onL3DeviceFieldChanged(s, dev);
-  } else if (f === 'gateway') {
-    dev.gateway = el.value;
-    // Gateway change doesn't shift subnet membership; just save + refresh.
-    redrawDevice(s, dev);
-    if (s.activeLayer === 'routing') {
-      s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
-    }
   } else {
     dev[f] = el.value;
     if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
@@ -4652,25 +4774,22 @@ function updateDeviceField(s, dev, el) {
 // link visuals.
 function onL3DeviceFieldChanged(s, dev) {
   if (isL3Type(dev.type) || isReference(dev)) return;
+  let routeAdded = false;
   if (dev.ip) {
     const cidr = `${dev.ip}/${dev.prefix != null ? dev.prefix : 24}`;
     const p = parseCidr(cidr);
     if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
-    if (!dev.gateway) {
-      dev.gateway = defaultGatewayFor(dev.ip, dev.prefix);
-      // Reflect into the open inspector input without clobbering focus.
-      const gwInput = s.inspector?.querySelector('[data-f="gateway"]');
-      if (gwInput && document.activeElement !== gwInput) gwInput.value = dev.gateway || '';
-    } else {
-      const gwInput = s.inspector?.querySelector('[data-f="gateway"]');
-      if (gwInput) gwInput.placeholder = defaultGatewayFor(dev.ip, dev.prefix) || '10.0.0.1';
-    }
+    if (!Array.isArray(dev.routes)) dev.routes = [];
+    routeAdded = autoCreateDefaultRoute(dev.routes, dev.ip, dev.prefix, null);
   }
   redrawDevice(s, dev);
   subnetsChanged(s);
   if (s.activeLayer === 'routing') {
     s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
   }
+  // The routes section just sprouted a new row — rebuild the inspector so
+  // the user sees their default route appear without a manual refresh.
+  if (routeAdded) openInspector(s);
 }
 
 function updateLinkField(s, link, el) {
@@ -5277,6 +5396,7 @@ function render(s) {
   renderLegend(s);
   renderSubnetLegend(s);
   invalidateEdgeSlots(s);
+  s._dgwWinners = null;
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
@@ -6150,7 +6270,6 @@ function migrate(s) {
           name: String(iface.name || ''),
           ip: split.ip,
           prefix: Number.isFinite(split.prefix) ? split.prefix : 24,
-          gateway: String(iface.gateway || ''),
         };
       });
       d.routes = d.routes.map((r) => ({
@@ -6171,16 +6290,26 @@ function migrate(s) {
         });
       }
     } else {
-      // Non-L3 devices: split the legacy CIDR field into ip + prefix and
-      // ensure a gateway slot exists. Strip any router-only arrays in case
-      // the type was changed away from router/firewall.
+      // Non-L3 devices: split the legacy CIDR field into ip + prefix. Drop
+      // the legacy gateway field — gateways live in the routes[] table now.
+      // Provision a routes[] so the inspector can render a routes section
+      // and the auto-default-route can pin its first entry there.
       delete d.interfaces;
-      delete d.routes;
       if (!isReference(d)) {
         const split = splitCidr(d.ip, d.prefix != null ? d.prefix : 24);
         d.ip = split.ip;
         d.prefix = Number.isFinite(split.prefix) ? split.prefix : 24;
-        if (typeof d.gateway !== 'string') d.gateway = '';
+        delete d.gateway;
+        if (!Array.isArray(d.routes)) d.routes = [];
+        d.routes = d.routes.map((r) => ({
+          id: r.id || ('rt_' + rid()),
+          dst: String(r.dst || ''),
+          nextHop: String(r.nextHop || ''),
+          interfaceId: r.interfaceId || null,
+          metric: r.metric != null ? Number(r.metric) : null,
+        }));
+      } else {
+        delete d.routes;
       }
     }
   });
@@ -6212,9 +6341,19 @@ function migrate(s) {
           name: String(vif.name || ''),
           ip,
           prefix: Number.isFinite(prefix) ? Math.max(0, Math.min(32, prefix)) : 24,
-          gateway: String(vif.gateway || ''),
         };
       });
+      // Stacks gain a routes[] table so they can carry their own default
+      // route (just like routers). The route's next-hop is what the vote
+      // counter sees as "this stack votes for IP X as gateway".
+      if (!Array.isArray(st.routes)) st.routes = [];
+      st.routes = st.routes.map((r) => ({
+        id: r.id || ('rt_' + rid()),
+        dst: String(r.dst || ''),
+        nextHop: String(r.nextHop || ''),
+        interfaceId: r.interfaceId || null,
+        metric: r.metric != null ? Number(r.metric) : null,
+      }));
       if (!st.zone || !validZoneIds.has(st.zone)) st.zone = fallbackZone;
       delete st.vlans;
       st.members = st.members.filter((m) => live.has(m));
