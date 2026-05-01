@@ -465,8 +465,12 @@ function renderLegend(s) {
 }
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [] };
-const DEVICE_W = 120;
-const DEVICE_H = 72;
+// Both dimensions are multiples of 2*GRID so half-w / half-h are whole-cell
+// values. This keeps the device's *corners* (and centre) on grid dots when
+// dev.x / dev.y are snapped to GRID — without this the corners landed at
+// cell centres (5×3 cells, half = 2.5×1.5) and the box read as offset.
+const DEVICE_W = 144;
+const DEVICE_H = 96;
 const GRID = 24;
 // Spacing between parallel lanes when multiple distinct links share the same
 // pair of visual endpoints (multi-link UX). Within a single lane VLAN stripes
