@@ -480,11 +480,18 @@ function renderSubnetLegend(s) {
     }
     return String(a.cidr).localeCompare(String(b.cidr));
   });
+  const filterSet = new Set((s.view?.subnetFilter || []).map(String));
+  const isFiltered = filterSet.size > 0;
   const rows = sorted.length
     ? `<div class="m002-subnet-legend-list">${sorted.map((sn) => {
         const c = subnetColor(s, sn.id);
         const vlanTag = sn.vlanId ? ` · VLAN ${escSvg(sn.vlanId)}` : '';
-        return `<div class="m002-subnet-row" style="--sc:${c}" data-subnet-id="${escAttr(sn.id)}">
+        const solo = filterSet.has(String(sn.id));
+        const cls = 'm002-subnet-row'
+          + (solo ? ' is-solo' : '')
+          + (isFiltered && !solo ? ' is-dimmed' : '');
+        const title = solo ? 'Click to remove from solo filter' : 'Click to solo this subnet';
+        return `<div class="${cls}" style="--sc:${c}" data-subnet-id="${escAttr(sn.id)}" data-ssolo="${escAttr(sn.id)}" title="${title}">
           <span class="m002-subnet-row-dot"></span>
           <span class="m002-subnet-row-cidr">${escSvg(sn.cidr)}</span>
           <input class="m002-subnet-row-name" value="${escAttr(sn.name || '')}" placeholder="name${vlanTag}" data-sname="${escAttr(sn.id)}"/>
@@ -493,7 +500,15 @@ function renderSubnetLegend(s) {
       }).join('')}</div>`
     : `<span class="m002-subnet-legend-empty">no subnets declared yet</span>`;
 
+  const filterBar = isFiltered
+    ? `<div class="m002-vlan-legend-filter">
+        <span class="m002-vlan-legend-filter-label">SOLO · ${filterSet.size}</span>
+        <button type="button" class="m002-vlan-legend-clear" data-sclear>CLEAR</button>
+      </div>`
+    : '';
+
   body.innerHTML = `
+    ${filterBar}
     ${rows}
     <form class="m002-subnet-legend-add">
       <input class="m002-subnet-legend-input" placeholder="CIDR (e.g. 10.0.0.0/24)"/>
@@ -512,12 +527,42 @@ function renderSubnetLegend(s) {
     });
   });
   body.querySelectorAll('[data-sname]').forEach((inp) => {
+    inp.addEventListener('click', (e) => e.stopPropagation());
     inp.addEventListener('input', () => {
       const entry = s.subnetRegistry.find((r) => String(r.id) === inp.dataset.sname);
       if (!entry) return;
       entry.name = inp.value;
       schedSave(s);
     });
+  });
+  body.querySelectorAll('[data-ssolo]').forEach((row) => {
+    row.addEventListener('click', () => {
+      const id = String(row.dataset.ssolo);
+      if (!Array.isArray(s.view.subnetFilter)) s.view.subnetFilter = [];
+      const idx = s.view.subnetFilter.findIndex((x) => String(x) === id);
+      if (idx >= 0) s.view.subnetFilter.splice(idx, 1);
+      else s.view.subnetFilter.push(id);
+      s._subnetHover = null;
+      render(s);
+      schedSave(s);
+    });
+    row.addEventListener('mouseenter', () => {
+      const id = String(row.dataset.ssolo);
+      if (s._subnetHover === id) return;
+      s._subnetHover = id;
+      if (s.activeLayer === 'routing') drawL3Paths(s);
+    });
+    row.addEventListener('mouseleave', () => {
+      if (s._subnetHover == null) return;
+      s._subnetHover = null;
+      if (s.activeLayer === 'routing') drawL3Paths(s);
+    });
+  });
+  body.querySelector('[data-sclear]')?.addEventListener('click', (e) => {
+    e.stopPropagation();
+    s.view.subnetFilter = [];
+    render(s);
+    schedSave(s);
   });
   const form = body.querySelector('.m002-subnet-legend-add');
   const input = form.querySelector('input');
@@ -1146,8 +1191,17 @@ function drawL3Paths(s) {
   if (s.activeLayer !== 'routing') return;
   const paths = computeL3Paths(s);
   if (!paths.length) return;
+  // Subnet solo: persisted filter + transient hover preview from the legend
+  // mouseenter. When set, only paths whose subnet is in the filter render —
+  // others fade out entirely so the user can isolate one subnet at a time.
+  const persisted = (s.view?.subnetFilter || []).map(String);
+  const hover = s._subnetHover != null ? String(s._subnetHover) : null;
+  const filter = hover && !persisted.includes(hover) ? [...persisted, hover] : persisted;
+  const filterSet = new Set(filter);
+  const isFiltered = filterSet.size > 0;
   let html = '';
   paths.forEach((p) => {
+    if (isFiltered && !filterSet.has(String(p.subnetId))) return;
     const sn = s.subnetRegistry.find((x) => x.id === p.subnetId);
     if (!sn) return;
     const c = subnetColor(s, sn.id);
@@ -1168,7 +1222,7 @@ function drawL3Paths(s) {
   s.gL3Paths.innerHTML = html;
 }
 
-const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [] };
+const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [], subnetFilter: [] };
 // Both dimensions are multiples of 2*GRID so half-w / half-h are whole-cell
 // values. This keeps the device's *corners* (and centre) on grid dots when
 // dev.x / dev.y are snapped to GRID — without this the corners landed at
@@ -6067,6 +6121,7 @@ function hydrateMapData(s, data) {
   s.activeZone = data.activeZone && s.zones.find((z) => z.id === data.activeZone) ? data.activeZone : s.zones[0].id;
   s.view = { ...DEFAULT_VIEW, ...(data.view || {}) };
   if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
+  if (!Array.isArray(s.view.subnetFilter)) s.view.subnetFilter = [];
   migrate(s);
 }
 
@@ -6694,6 +6749,13 @@ const MOD002_CSS = `
 .m002-panel-section.m002-panel-section--legend{flex:1 1 auto;min-height:0;overflow:hidden;display:flex;flex-direction:column;}
 .m002-panel-section.m002-panel-section--legend .m002-vlan-legend-body,
 .m002-panel-section.m002-panel-section--legend .m002-subnet-legend-body{flex:1 1 auto;min-height:0;overflow:hidden;}
+/* Layer-aware legends: VLAN legend lives in the VLAN layer; subnet legend
+   in the routing layer. The other two layers see the off-topic ones hidden
+   so the left rail stays focused on what's relevant to the current view. */
+.m002-host[data-active-layer="vlan"] .m002-panel-section--subnets,
+.m002-host[data-active-layer="physical"] .m002-panel-section--subnets,
+.m002-host[data-active-layer="physical"] .m002-panel-section--legend:not(.m002-panel-section--subnets){display:none;}
+.m002-host[data-active-layer="routing"] .m002-panel-section--legend:not(.m002-panel-section--subnets){display:none;}
 .m002-rightpanel{background:rgba(8,8,14,0.92);border-left:1px solid #1a1a22;padding:14px;overflow-y:auto;display:flex;flex-direction:column;gap:10px;min-height:0;}
 .m002-center{position:relative;overflow:hidden;}
 .m002-panel-section{display:flex;flex-direction:column;gap:6px;}
@@ -7043,8 +7105,12 @@ const MOD002_CSS = `
 .m002-subnet-legend-list{display:flex;flex-direction:column;gap:3px;flex:1 1 auto;min-height:0;overflow-y:auto;padding-right:4px;}
 .m002-subnet-legend-list::-webkit-scrollbar{width:6px;}
 .m002-subnet-legend-empty{font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;font-style:italic;}
-.m002-subnet-row{display:grid;grid-template-columns:8px auto 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
+.m002-subnet-row{display:grid;grid-template-columns:8px auto 1fr 18px;gap:6px;align-items:center;padding:4px 6px;background:#06060a;border:1px solid #1a1a22;cursor:pointer;transition:.12s;}
 .m002-subnet-row:hover{border-color:var(--sc);}
+.m002-subnet-row.is-solo{background:rgba(255,255,255,0.04);border-color:var(--sc);box-shadow:0 0 6px rgba(255,255,255,0.06),inset 0 0 6px var(--sc);}
+.m002-subnet-row.is-solo .m002-subnet-row-dot{box-shadow:0 0 6px var(--sc),0 0 14px var(--sc);}
+.m002-subnet-row.is-dimmed{opacity:.4;}
+.m002-subnet-row.is-dimmed:hover{opacity:.85;}
 .m002-subnet-row-dot{width:8px;height:8px;background:var(--sc);box-shadow:0 0 4px var(--sc),0 0 8px var(--sc);}
 .m002-subnet-row-cidr{font-family:'Share Tech Mono',monospace;font-size:11px;color:var(--sc);letter-spacing:1px;white-space:nowrap;}
 .m002-subnet-row-name{background:transparent;border:none;color:#e8e8ee;padding:1px 4px;font-family:'Rajdhani',sans-serif;font-size:12px;outline:none;min-width:0;}
