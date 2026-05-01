@@ -3002,7 +3002,13 @@ function drawLagLink(s, p) {
   const isFiltered = filter.length > 0;
   const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : [];
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
-  if (s.activeLayer === 'vlan' && drawnVlans.length) {
+  if (s.activeLayer === 'routing') {
+    // Routing layer: LAG-pairs are L2 plumbing — paint them as the same dim
+    // dashed underlay every other link gets. The L3 ribbon above carries the
+    // colour. Without this we'd stack a gray double-line beneath the ribbon
+    // and end up with four parallel highlights through one wire pair.
+    inner += `<path class="m002-link-line m002-link-dim" d="${path.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
+  } else if (s.activeLayer === 'vlan' && drawnVlans.length) {
     const gap = 6;
     drawnVlans.forEach((v, i) => {
       const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
@@ -3017,7 +3023,9 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
   }
-  inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
+  if (s.activeLayer !== 'routing') {
+    inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
+  }
   g.innerHTML = inner;
   // Flow path is injected on-demand by applyIncidentFlow() — store the path
   // shape here so the injection has nothing to recompute. No idle <path> means
@@ -3137,20 +3145,12 @@ function drawLink(s, link) {
       inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
     }
   } else if (layer === 'routing') {
-    // L3 view. Links themselves stay neutral L2 underlay — the colourful
-    // L3 streams live in the dedicated m002-l3-paths group, drawn as smooth
-    // ribbons floating above the L2 wiring rather than tracing each leg.
+    // L3 view. Every wire (regular link OR LAG-bundle rep) draws as a single
+    // dim dashed underlay. The colourful streams live in the dedicated
+    // m002-l3-paths layer floating above. Suppressing the LAG double-line
+    // here avoids stacking it under the L3 ribbon and producing four
+    // parallel highlights between two collapsed stacks.
     inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
-    if (bundleInfo?.members) {
-      // LAG-bundles keep the neutral double-line accent so the topology
-      // structure is readable; colour comes from the L3 ribbons above.
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
-      const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
-      const lagB = findPortLag(s, b.id, link.toPort)?.lag;
-      const aLbl = lagA?.name || '?';
-      const bLbl = lagB?.name || '?';
-      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`)}</text>`;
-    }
   } else {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
     const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
