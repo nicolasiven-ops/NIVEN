@@ -3256,12 +3256,12 @@ function updateLagPairsFor(s, deviceId) {
 // Selection + inspector
 // =============================================================================
 function select(s, kind, id) {
-  // Clear any port-focus that doesn't belong to the new selection. Without
-  // this, switching from one device to another would still show the previous
-  // device's port form.
-  if (s.portModalOpen && !(kind === 'device' && id === s.portModalOpen.deviceId)) {
-    s.portModalOpen = null;
-  }
+  // Clear any port-focus on selection: clicking the device on the canvas
+  // (or any other device / link / stack) should return the inspector to
+  // the device-level form. openPortModal() bypasses select() and sets
+  // s.portModalOpen + s.selected itself, so this doesn't break the port
+  // table click path.
+  if (s.portModalOpen) s.portModalOpen = null;
   s.selected = { kind, id };
   markSelected(s);
   openInspector(s);
