@@ -786,12 +786,14 @@ function subnetForIp(s, ip) {
 // the per-member IPs and produce phantom L3 ribbons into the stack interior.
 function deviceSubnets(s, dev) {
   if (!dev) return [];
-  // Stack members keep their own IPs as first-class L3 endpoints — each
-  // member is addressable directly. The stack-as-a-whole carries an
-  // independent VIP via stackSubnets() and shows up as an additional path
-  // destination for "going to the gateway"-style traffic. computeL3Paths()
-  // decides whether a given ribbon terminates at the member position or at
-  // the stack centre based on which entity sits at the path endpoint.
+  // When this device is a member of a VIP-bearing stack, the stack's VIP is
+  // the routing identity. The member's own IP stays in the inspector for
+  // mgmt access but does NOT generate L3 ribbons — otherwise endpoints
+  // aimed at the VIP would also get phantom ribbons to .2 and .3 of the
+  // stack members. Members of non-VIP stacks (plain L2 switches usually
+  // without IPs) are unaffected.
+  const stack = findStack(s, dev.id);
+  if (stack && stackHasVip(stack)) return [];
   const out = [];
   const seen = new Set();
   const add = (sn) => { if (sn && !seen.has(sn.id)) { seen.add(sn.id); out.push(sn); } };
@@ -973,24 +975,46 @@ function computeL3Paths(s) {
           cur = parent.get(cur);
           ids.unshift(cur);
         }
-        // Collapse only TRANSIT member hops to the stack id. Endpoint members
-        // stay as members so the ribbon terminates at the actual member
-        // position. The stack centre is reserved for paths that genuinely
-        // end at the stack's own VIP (gateway traffic).
-        const collapsed = [];
-        for (let k = 0; k < ids.length; k++) {
-          const id = ids[k];
-          const isEndpoint = (k === 0 || k === ids.length - 1);
-          const stkId = stackOfMember.get(id);
-          const eff = (!isEndpoint && stkId) ? stkId : id;
-          if (collapsed[collapsed.length - 1] !== eff) collapsed.push(eff);
+        // Drop adjacent stack-virtual-node hops — BFS sometimes inserts the
+        // stack id between two members of the same stack (because the stack
+        // node is adjacent to all members). Visually a redundant hop. Keep
+        // member ids as separate waypoints so the ribbon curves through the
+        // real member positions for swing — see ribbonWaypoint() which
+        // returns each member's actual coords even when the stack is
+        // visually collapsed.
+        const trimmed = [];
+        for (const id of ids) {
+          if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
         }
-        if (collapsed.length < 2) continue;
-        paths.push({ subnetId, ids: collapsed });
+        if (trimmed.length < 2) continue;
+        paths.push({ subnetId, ids: trimmed });
       }
     }
   }
   return paths;
+}
+
+// Resolve the geometric waypoint for an L3-ribbon node. Differs from the
+// general effectivePos() in one important way: a member of a COLLAPSED
+// stack returns its OWN persisted x/y, not the stack centre. This is the
+// "treat as if expanded for line rendering, but visually keep collapsed"
+// behaviour the user asked for — the ribbon curves through where the
+// member would be if expanded, while the canvas still shows the tidy icon.
+function ribbonWaypoint(s, id) {
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack) {
+    if (isStackCollapsed(s, stack)) return { x: stack.x, y: stack.y };
+    const ms = (stack.members || []).map((mid) => s.devices.find((d) => d.id === mid)).filter(Boolean);
+    if (ms.length) {
+      return {
+        x: ms.reduce((sum, m) => sum + m.x, 0) / ms.length,
+        y: ms.reduce((sum, m) => sum + m.y, 0) / ms.length,
+      };
+    }
+    return { x: stack.x, y: stack.y };
+  }
+  const dev = s.devices.find((d) => d.id === id);
+  return dev ? { x: dev.x, y: dev.y } : null;
 }
 
 // Inserts a perpendicular midpoint between every pair of adjacent points.
@@ -1051,22 +1075,16 @@ function drawL3Paths(s) {
   const paths = computeL3Paths(s);
   if (!paths.length) return;
   let html = '';
-  // Cheap deterministic hash of the path id sequence — drives both the
-  // perpendicular-offset sign in puffPath() and ensures the same path keeps
-  // the same swing across renders (no jitter when redrawing).
-  const seedFor = (ids) => {
-    let h = 0;
-    for (const id of ids) for (let k = 0; k < id.length; k++) h = (h * 31 + id.charCodeAt(k)) | 0;
-    return h;
-  };
   paths.forEach((p) => {
     const sn = s.subnetRegistry.find((x) => x.id === p.subnetId);
     if (!sn) return;
     const c = subnetColor(s, sn.id);
-    const pts = p.ids.map((id) => effectivePos(s, id)).filter(Boolean);
+    // Use ribbonWaypoint so collapsed-stack members contribute their real
+    // positions to the curve. Catmull-Rom through the actual member layout
+    // gives the swing back without needing the synthetic puff offsets.
+    const pts = p.ids.map((id) => ribbonWaypoint(s, id)).filter(Boolean);
     if (pts.length < 2) return;
-    const swung = puffPath(pts, seedFor(p.ids));
-    const d = smoothPath(swung);
+    const d = smoothPath(pts);
     if (!d) return;
     // Flow direction: packets travel from the host that points AT a gateway
     // to the host whose IP IS the gateway — never the other way around. When
