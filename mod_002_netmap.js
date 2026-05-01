@@ -708,10 +708,12 @@ function ipInCidr(ip, cidr) {
   return ((a.ipNum & b.mask) >>> 0) === b.netNum;
 }
 
-// Resolve which subnet (if any) an interface belongs to. Explicit subnetId
-// wins; otherwise we match by CIDR network. As a tertiary hint we honour the
-// interface's own vlanId — when a subnet is registered against the same VLAN
-// (e.g. an SVI / VLAN-bound /24), that match also wins over no match.
+// Resolve which subnet (if any) an interface belongs to. Resolution order:
+//   1. explicit subnetId pick
+//   2. exact CIDR match when the IP carries a prefix (10.0.0.1/24 → 10.0.0.0/24)
+//   3. CONTAINMENT match for bare IPs (10.0.0.10 with no /N → any registered
+//      subnet whose mask contains it; pick the longest-prefix winner)
+//   4. VLAN tag — subnet whose vlanId equals the interface's vlanId
 function ifaceSubnet(s, iface) {
   if (!iface) return null;
   if (iface.subnetId) {
@@ -719,12 +721,8 @@ function ifaceSubnet(s, iface) {
     if (sn) return sn;
   }
   if (iface.ip) {
-    const p = parseCidr(iface.ip);
-    if (p && p.prefix < 32) {
-      const cidr = `${p.network}/${p.prefix}`;
-      const byCidr = s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === cidr);
-      if (byCidr) return byCidr;
-    }
+    const sn = subnetForIp(s, iface.ip);
+    if (sn) return sn;
   }
   if (iface.vlanId) {
     const byVlan = s.subnetRegistry.find((sn) => String(sn.vlanId || '') === String(iface.vlanId));
@@ -733,21 +731,46 @@ function ifaceSubnet(s, iface) {
   return null;
 }
 
+// Match an IP (with or without a prefix) against the subnet registry. With a
+// prefix shorter than /32 we look for the exact network entry first; if no
+// prefix is supplied (or it's /32), we look for any registered subnet that
+// contains the address and return the most-specific one. This is the bridge
+// between "user types 10.0.0.10" and "the routing layer treats it as
+// belonging to the declared 10.0.0.0/24" — without the user having to repeat
+// the /24 on every endpoint.
+function subnetForIp(s, ip) {
+  const p = parseCidr(ip);
+  if (!p) return null;
+  if (p.prefix < 32) {
+    const cidr = `${p.network}/${p.prefix}`;
+    const exact = s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === cidr);
+    if (exact) return exact;
+  }
+  // Containment search — works for bare IPs and /32 host addresses too.
+  let best = null, bestPrefix = -1;
+  for (const sn of s.subnetRegistry) {
+    const p2 = parseCidr(sn.cidr);
+    if (!p2) continue;
+    if (((p.ipNum & p2.mask) >>> 0) === p2.netNum && p2.prefix > bestPrefix) {
+      best = sn;
+      bestPrefix = p2.prefix;
+    }
+  }
+  return best;
+}
+
 // All subnets a device touches (via its interfaces, or via dev.ip for non-L3
-// hosts). Returns subnet entries, deduplicated.
+// hosts). Returns subnet entries, deduplicated. Bare-IP (no /N) matching
+// works through subnetForIp containment, which is what makes a hand-typed
+// "10.0.0.10" on an endpoint actually count as a member of the registered
+// 10.0.0.0/24 in the routing layer.
 function deviceSubnets(s, dev) {
   if (!dev) return [];
   const out = [];
   const seen = new Set();
   const add = (sn) => { if (sn && !seen.has(sn.id)) { seen.add(sn.id); out.push(sn); } };
   (dev.interfaces || []).forEach((iface) => add(ifaceSubnet(s, iface)));
-  if (dev.ip) {
-    const p = parseCidr(dev.ip);
-    if (p && p.prefix < 32) {
-      const cidr = `${p.network}/${p.prefix}`;
-      add(s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === cidr) || null);
-    }
-  }
+  if (dev.ip) add(subnetForIp(s, dev.ip));
   return out;
 }
 
@@ -2724,7 +2747,11 @@ function drawLink(s, link) {
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}${subTag}`)}</text>`;
     } else if (role?.subnet) {
       const c = subnetColor(s, role.subnet.id);
-      inner += `<path class="m002-link-line m002-link-l3" d="${base.d}" style="stroke:${c};color:${c}" stroke-width="2"/>`;
+      // Render two stacked paths: a wider faint underlay (filter:drop-shadow
+      // doesn't bleed predictably across browsers, so we fake the glow by
+      // stacking) and the crisp top line. Cheap, looks alive.
+      inner += `<path class="m002-link-line m002-link-l3-glow" d="${base.d}" style="stroke:${c};color:${c}" stroke-width="6"/>`;
+      inner += `<path class="m002-link-line m002-link-l3" d="${base.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
       const lbl = role.subnet.name ? `${role.subnet.cidr} · ${role.subnet.name}` : role.subnet.cidr;
       inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(lbl)}</text>`;
     } else if (role?.mixed) {
@@ -2979,8 +3006,13 @@ function renderL3SectionsHTML(s, dev) {
   const open = s.inspectorL3Open !== false; // default open
   const ifaces = Array.isArray(dev.interfaces) ? dev.interfaces : [];
   const routes = Array.isArray(dev.routes) ? dev.routes : [];
-  const subnetOptions = (selectedId) => {
-    const opts = ['<option value="">—</option>'];
+  const subnetOptions = (selectedId, autoSn) => {
+    const opts = [];
+    // Empty option label changes from "—" to "auto · CIDR" when the engine
+    // would resolve to that subnet implicitly. That way users see what the
+    // routing layer will use without forcing them to pick.
+    const emptyLbl = autoSn ? `auto · ${autoSn.cidr}` : '—';
+    opts.push(`<option value="" ${!selectedId ? 'selected' : ''}>${escSvg(emptyLbl)}</option>`);
     s.subnetRegistry.forEach((sn) => {
       const sel = String(selectedId || '') === String(sn.id) ? 'selected' : '';
       const lbl = sn.name ? `${sn.cidr} · ${sn.name}` : sn.cidr;
@@ -3033,12 +3065,16 @@ function renderL3SectionsHTML(s, dev) {
     ? ifaces.map((iface) => {
         const sn = ifaceSubnet(s, iface);
         const c = sn ? subnetColor(s, sn.id) : '#3a3a44';
+        // When the user hasn't picked a subnet but one is auto-detectable
+        // from the typed IP, swap the leading "—" option for a labelled
+        // "auto · CIDR" so it's obvious the binding is happening implicitly.
+        const autoSn = !iface.subnetId && iface.ip ? subnetForIp(s, iface.ip) : null;
         return `<div class="m002-iface-row" data-iface-id="${escAttr(iface.id)}" style="--sc:${c}">
-          <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr) : 'no subnet bound'}"></span>
+          <span class="m002-iface-dot" title="${sn ? escAttr('subnet ' + sn.cidr + (autoSn && !iface.subnetId ? ' (auto)' : '')) : 'no subnet bound'}"></span>
           <input class="m002-iface-name" data-if-f="name" value="${escAttr(iface.name)}" placeholder="if0"/>
           <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.1/24"/>
           <select class="m002-iface-vlan" data-if-f="vlanId" title="bound VLAN (SVI / subinterface)">${vlanOptions(iface.vlanId)}</select>
-          <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet (auto-detected from IP if empty)">${subnetOptions(iface.subnetId)}</select>
+          <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet — leave empty for auto-match by IP">${subnetOptions(iface.subnetId, autoSn)}</select>
           <button type="button" class="m002-iface-rm" data-if-rm title="Remove interface">×</button>
         </div>`;
       }).join('')
@@ -6048,6 +6084,7 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]{opacity:.32;filter:saturate(.4);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover{opacity:.6;}
 .m002-link-l3{transition:stroke-width .15s;}
+.m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 .m002-link-l3-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;font-weight:500;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-link-transit-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:2px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-dev-l3{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;fill:#35ff7a;display:none;}
