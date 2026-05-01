@@ -3900,8 +3900,8 @@ function setMode(s, txt) {
 // the user before the panel scales in. Easing is `easeOutExpo` (JS) /
 // cubic-bezier(0.16,1,0.3,1) (CSS) — the same family — so motion across the
 // JS and CSS sides reads as one coordinated decel.
-const DETAIL_ANIM_MS       = 520;
-const DETAIL_FADE_OUT_MS   = 280;
+const DETAIL_ANIM_MS       = 350;
+const DETAIL_FADE_OUT_MS   = 190;
 const DETAIL_TARGET_ZOOM   = 1.6;
 
 function enterDetailView(s, deviceId) {
@@ -4030,11 +4030,11 @@ function renderDetailBody(s, dev, t) {
   const upY    = upPad;
   const acStartY = devY + D.device.h + D.vgap;
 
-  // Per-port enter delay (animation cascade). Element finishes around 1500ms,
+  // Per-port enter delay (animation cascade). Element finishes around 1000ms,
   // then ports stagger every PORT_STAGGER_MS. Stubs derive their delay from
   // the parent port via a CSS calc() so they always come last on a port.
-  const PORT_BASE_DELAY = 1600;
-  const PORT_STAGGER_MS = 40;
+  const PORT_BASE_DELAY = 1070;
+  const PORT_STAGGER_MS = 25;
   let portIndex = 0;
 
   const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
@@ -5115,11 +5115,11 @@ const MOD002_CSS = `
 .m002-detail-overlay .m002-detail-port-inner{transform:scale(0.6);opacity:0;}
 .m002-detail-overlay .m002-detail-stub{opacity:0;}
 
-/* Element entry choreography (1500ms total, 80ms lead-in delay):
-     0–500ms   point appears, then vertical line grows to full height
-     500–600ms HOLD — same scale, no motion (100ms breath)
-     600–1500ms horizontal expansion to full width (900ms)
-   Percentages map 33%→500ms, 40%→600ms, 100%→1500ms.
+/* Element entry choreography (1000ms total, 50ms lead-in delay):
+     0–333ms   point appears, then vertical line grows to full height
+     333–400ms HOLD — same scale, no motion (67ms breath)
+     400–1000ms horizontal expansion to full width (600ms)
+   Percentages map 33%→333ms, 40%→400ms, 100%→1000ms.
    Initial scale(0.005,0.02): 720×0.005=3.6 wide, 180×0.02=3.6 tall — a
    roughly square point. The fill animation (m002-detail-elem-fill) keeps
    the rect accent-coloured during the point/line phase so it reads as a
@@ -5146,10 +5146,10 @@ const MOD002_CSS = `
   100% {opacity:1;}
 }
 
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1500ms cubic-bezier(0.4,0,0.2,1) 80ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1500ms cubic-bezier(0.4,0,0.2,1) 80ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 320ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1600ms);}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 380ms ease-out forwards;animation-delay:calc(var(--enter-delay,1600ms) + 260ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1070ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,1070ms) + 175ms);}
 .m002-detail-device{cursor:pointer;}
 .m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
 .m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
