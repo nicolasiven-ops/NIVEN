@@ -649,13 +649,10 @@ function autoDiscoverSubnets(s) {
 function subnetsChanged(s) {
   recomputeSubnetIndex(s);
   renderSubnetLegend(s);
-  // Routing-view links depend on subnet membership AND on the BFS overlay
-  // map (which derives from device subnet memberships). Recompute the
-  // overlay map before redrawing or stale entries leak across edits.
-  if (s.activeLayer === 'routing') {
-    s._l3Overlays = computeL3PathOverlays(s);
-    s.links.forEach((l) => redrawLink(s, l));
-  }
+  // The L3 ribbons depend on subnet membership of every device, so any
+  // edit to an IP / prefix / gateway demands a redraw of the dedicated
+  // path layer. Cheap (one BFS group + a handful of SVG paths).
+  if (s.activeLayer === 'routing') drawL3Paths(s);
 }
 
 // Refresh the inspector when a subnet add/remove changed the registry options.
@@ -806,33 +803,30 @@ function isDefaultGateway(s, dev) {
   return false;
 }
 
-// Compute L3 path overlays for the routing layer. For every subnet that has
-// at least two IP-configured devices in it, we BFS through the link graph
-// between each pair and mark every link on the shortest path as belonging to
-// that subnet. The result: in the routing layer the L3 connection lights up
-// over the entire L2 path (router → switch → switch → endpoint), even though
-// none of the L2 hops carry an IP themselves. Exactly the user's "logical L3
-// link travelling visually over the L2 infrastructure" requirement.
+// Compute L3 paths for the routing layer. Unlike the earlier link-overlay
+// approach (which painted each underlying L2 link in the subnet colour),
+// this returns the device-id sequence for every pair of L3 hosts in the
+// same subnet. The renderer then draws ONE smooth curve per pair, threaded
+// through the L2 transit nodes — visually decoupled from the L2 wiring so
+// awkward right-angle paths don't bleed through. Exactly the "loose line
+// that approximately follows the L2 path" the user asked for.
 //
-// Returns: Map<linkId, Array<{ subnetId }>>. A link can belong to multiple
-// subnets when several broadcast domains traverse the same physical wire
-// (e.g. a trunk between two switches connecting endpoints in different
-// subnets via routers on either end).
-function computeL3PathOverlays(s) {
-  const overlays = new Map();
-  if (!s.links?.length) return overlays;
+// Returns: Array<{ subnetId, deviceIds: [string,...] }>. deviceIds always
+// has length ≥ 2 (the two L3 endpoints) and may include any number of
+// transit hops (switches without IP) in between.
+function computeL3Paths(s) {
+  const paths = [];
+  if (!s.links?.length) return paths;
 
-  // Build undirected adjacency once.
   const adj = new Map();
   s.devices.forEach((d) => adj.set(d.id, []));
   s.links.forEach((l) => {
     if (!adj.has(l.from)) adj.set(l.from, []);
     if (!adj.has(l.to)) adj.set(l.to, []);
-    adj.get(l.from).push({ neighbor: l.to, linkId: l.id });
-    adj.get(l.to).push({ neighbor: l.from, linkId: l.id });
+    adj.get(l.from).push(l.to);
+    adj.get(l.to).push(l.from);
   });
 
-  // Group L3 devices by subnet membership.
   const groups = new Map();   // subnetId → [deviceId,...]
   s.devices.forEach((d) => {
     if (isReference(d)) return;
@@ -842,46 +836,83 @@ function computeL3PathOverlays(s) {
     });
   });
 
-  // For each subnet, find all-pairs shortest paths and mark links on them.
-  // Single-hop neighbours are still marked — the path is just one link long.
-  const addOverlay = (linkId, subnetId) => {
-    const list = overlays.get(linkId) || [];
-    if (!list.some((o) => o.subnetId === subnetId)) list.push({ subnetId });
-    overlays.set(linkId, list);
-  };
-
   for (const [subnetId, devs] of groups) {
     if (devs.length < 2) continue;
-    // BFS from each device, mark links on shortest paths to every other
-    // device in the same subnet.
     for (let i = 0; i < devs.length; i++) {
       const start = devs[i];
       const parent = new Map();
-      const linkParent = new Map();
       const visited = new Set([start]);
       const queue = [start];
       while (queue.length) {
         const cur = queue.shift();
-        for (const { neighbor, linkId } of adj.get(cur) || []) {
-          if (visited.has(neighbor)) continue;
-          visited.add(neighbor);
-          parent.set(neighbor, cur);
-          linkParent.set(neighbor, linkId);
-          queue.push(neighbor);
+        for (const nb of adj.get(cur) || []) {
+          if (visited.has(nb)) continue;
+          visited.add(nb);
+          parent.set(nb, cur);
+          queue.push(nb);
         }
       }
       for (let j = i + 1; j < devs.length; j++) {
         const target = devs[j];
         if (!parent.has(target)) continue;
+        const deviceIds = [target];
         let cur = target;
         while (parent.has(cur)) {
-          addOverlay(linkParent.get(cur), subnetId);
           cur = parent.get(cur);
+          deviceIds.unshift(cur);
         }
+        paths.push({ subnetId, deviceIds });
       }
     }
   }
-  return overlays;
+  return paths;
+}
+
+// Catmull-Rom-to-Bezier smoothing through a list of points. Two-point paths
+// are rendered as a straight line; three-or-more produce a smooth curve
+// that hits every node it passes through. Tension factor 1/6 gives the
+// classic uniform Catmull-Rom feel — soft but recognisable.
+function smoothPath(pts) {
+  if (!pts || pts.length < 2) return '';
+  if (pts.length === 2) return `M ${pts[0].x} ${pts[0].y} L ${pts[1].x} ${pts[1].y}`;
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const p0 = pts[i - 1] || pts[i];
+    const p1 = pts[i];
+    const p2 = pts[i + 1];
+    const p3 = pts[i + 2] || pts[i + 1];
+    const c1x = p1.x + (p2.x - p0.x) / 6;
+    const c1y = p1.y + (p2.y - p0.y) / 6;
+    const c2x = p2.x - (p3.x - p1.x) / 6;
+    const c2y = p2.y - (p3.y - p1.y) / 6;
+    d += ` C ${c1x.toFixed(1)} ${c1y.toFixed(1)} ${c2x.toFixed(1)} ${c2y.toFixed(1)} ${p2.x} ${p2.y}`;
+  }
+  return d;
+}
+
+// Render the L3 paths into their dedicated <g> layer. Pairs that share
+// device sequences (e.g. three endpoints all connected through the same
+// switch) get fan-out offsets so multiple L3 ribbons through the same
+// transit hop don't fully overlap.
+function drawL3Paths(s) {
+  if (!s.gL3Paths) return;
+  s.gL3Paths.innerHTML = '';
+  if (s.activeLayer !== 'routing') return;
+  const paths = computeL3Paths(s);
+  if (!paths.length) return;
+  let html = '';
+  paths.forEach((p) => {
+    const sn = s.subnetRegistry.find((x) => x.id === p.subnetId);
+    if (!sn) return;
+    const c = subnetColor(s, sn.id);
+    const pts = p.deviceIds.map((id) => effectivePos(s, id)).filter(Boolean);
+    if (pts.length < 2) return;
+    const d = smoothPath(pts);
+    if (!d) return;
+    html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
+    html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
+  });
+  s.gL3Paths.innerHTML = html;
 }
 
 const DEFAULT_VIEW = { x: 0, y: 0, zoom: 1, vlanFilter: [] };
@@ -1086,6 +1117,7 @@ function buildDOM(s) {
             <rect class="m002-grid-bg2" x="-50000" y="-50000" width="100000" height="100000" fill="url(#m002-grid-major)"/>
             <g class="m002-stacks-bg"></g>
             <g class="m002-links"></g>
+            <g class="m002-l3-paths"></g>
             <g class="m002-devices"></g>
             <g class="m002-overlay"></g>
           </g>
@@ -1160,6 +1192,7 @@ function buildDOM(s) {
   s.gWorld = host.querySelector('.m002-world');
   s.gStacksBg = host.querySelector('.m002-stacks-bg');
   s.gLinks = host.querySelector('.m002-links');
+  s.gL3Paths = host.querySelector('.m002-l3-paths');
   s.gDevices = host.querySelector('.m002-devices');
   s.gOverlay = host.querySelector('.m002-overlay');
   s.palette = host.querySelector('.m002-leftpanel');
@@ -1411,6 +1444,9 @@ function bindBoard(s) {
       updateLinksFor(s, dev.id);
       const stk = findStack(s, dev.id);
       if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
+      // L3 ribbons follow device positions — redraw the entire path layer
+      // while dragging so the smooth curves stay anchored to the moving node.
+      if (s.activeLayer === 'routing') drawL3Paths(s);
 
       // Drag-to-stack: highlight nearest valid merge candidate.
       // Skip when this device sits inside a stack (drag-to-merge across stacks
@@ -1493,6 +1529,7 @@ function bindBoard(s) {
         redrawLink(s, l);
       });
       st.members.forEach((mid) => updateLagPairsFor(s, mid));
+      if (s.activeLayer === 'routing') drawL3Paths(s);
     }
   };
   const onUp = () => {
@@ -2075,21 +2112,15 @@ function handleLinkClick(s, deviceId) {
   // into new lanes — invalidate the slot cache and redraw every link that
   // shares this pair so existing edges fan out to make room for the new one.
   invalidateEdgeSlots(s);
-  // Routing layer: a new edge can extend an existing L3 path or create a
-  // new one (e.g. router and endpoint were both configured but unconnected
-  // until now). Recompute the overlay map and redraw EVERY link, not just
-  // the new one — adjacency changed for everyone in this subnet.
-  if (s.activeLayer === 'routing') {
-    s._l3Overlays = computeL3PathOverlays(s);
-    s.links.forEach((l) => { if (l.id !== link.id) redrawLink(s, l); });
-  } else {
-    const newKey = visualEndpointKey(s, link.from, link.to);
-    s.links.forEach((l) => {
-      if (l.id === link.id) return;
-      if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
-    });
-  }
+  const newKey = visualEndpointKey(s, link.from, link.to);
+  s.links.forEach((l) => {
+    if (l.id === link.id) return;
+    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+  });
   drawLink(s, link);
+  // A new edge can extend or split L3 paths (e.g. now-connected router and
+  // endpoint suddenly share a path through the new wire). Refresh ribbons.
+  if (s.activeLayer === 'routing') drawL3Paths(s);
   updateStatus(s);
   s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
   s.linkPending = null;
@@ -2513,6 +2544,14 @@ function drawCollapsedStack(s, stack) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-stack-collapsed');
   g.setAttribute('data-stack-id', stack.id);
+  // L3 status mirrors the stack contents — if any member terminates IP, the
+  // collapsed icon stays opaque on the routing layer; otherwise it fades
+  // along with plain L2 switches.
+  const stackIsL3 = stack.members.some((mid) => {
+    const m = s.devices.find((d) => d.id === mid);
+    return m && isL3Device(m);
+  });
+  g.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
@@ -2823,53 +2862,19 @@ function drawLink(s, link) {
       inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
     }
   } else if (layer === 'routing') {
-    // L3 view. Two-layer rendering:
-    //   1. The L2 base — every link gets a faint dashed underlay so the
-    //      physical topology stays visible regardless of L3 state.
-    //   2. The L3 overlay — for every subnet whose BFS path uses this link,
-    //      stack a colored glow + crisp line. A single switch sitting on the
-    //      shortest path between two L3 hosts therefore lights up exactly
-    //      like the direct link would. "Logical L3 over L2 infrastructure".
+    // L3 view. Links themselves stay neutral L2 underlay — the colourful
+    // L3 streams live in the dedicated m002-l3-paths group, drawn as smooth
+    // ribbons floating above the L2 wiring rather than tracing each leg.
     inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
-    const overlays = s._l3Overlays?.get(link.id) || [];
-    if (overlays.length && !bundleInfo?.members) {
-      // Stack lanes when multiple subnets traverse this wire.
-      const span = overlays.length > 1 ? 4 : 0;
-      overlays.forEach(({ subnetId }, i) => {
-        const sn = s.subnetRegistry.find((x) => x.id === subnetId);
-        if (!sn) return;
-        const c = subnetColor(s, sn.id);
-        const off = lane + (i - (overlays.length - 1) / 2) * span;
-        const op = orthPath(aPos, bPos, off);
-        inner += `<path class="m002-link-line m002-link-l3-glow" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="6"/>`;
-        inner += `<path class="m002-link-line m002-link-l3" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
-      });
-      // Single-subnet case → CIDR label; multi-subnet case → count badge to
-      // keep the canvas readable.
-      if (overlays.length === 1) {
-        const sn = s.subnetRegistry.find((x) => x.id === overlays[0].subnetId);
-        if (sn) {
-          const c = subnetColor(s, sn.id);
-          const lbl = sn.name ? `${sn.cidr} · ${sn.name}` : sn.cidr;
-          inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(lbl)}</text>`;
-        }
-      } else {
-        inner += `<text class="m002-link-label m002-link-l3-label" x="${base.lx}" y="${base.ly - 4}" fill="#e8e8ee" text-anchor="middle">${overlays.length}× L3</text>`;
-      }
-    }
     if (bundleInfo?.members) {
-      // LAG-bundles keep the double-line accent. Colour by the first
-      // overlaid subnet (if any), otherwise neutral.
-      const firstSubnetId = overlays[0]?.subnetId;
-      const sn = firstSubnetId ? s.subnetRegistry.find((x) => x.id === firstSubnetId) : null;
-      const stroke = sn ? subnetColor(s, sn.id) : '#9aa0a8';
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke, width: 2, lane });
+      // LAG-bundles keep the neutral double-line accent so the topology
+      // structure is readable; colour comes from the L3 ribbons above.
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
       const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
       const lagB = findPortLag(s, b.id, link.toPort)?.lag;
       const aLbl = lagA?.name || '?';
       const bLbl = lagB?.name || '?';
-      const subTag = sn ? ` · ${sn.cidr}` : '';
-      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}${subTag}`)}</text>`;
+      inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(`${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`)}</text>`;
     }
   } else {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
@@ -4773,10 +4778,6 @@ function render(s) {
   renderLegend(s);
   renderSubnetLegend(s);
   invalidateEdgeSlots(s);
-  // L3 path overlays — only compute when the routing layer is active.
-  // The map is consumed by drawLink's routing branch and cleared otherwise
-  // so partial redraws on other layers don't accidentally light up L3 paths.
-  s._l3Overlays = s.activeLayer === 'routing' ? computeL3PathOverlays(s) : null;
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
@@ -4855,6 +4856,10 @@ function render(s) {
 
   // Collapsed stack icons drawn last so they sit on top.
   s.stacks.forEach((st) => { if (isStackCollapsed(s, st) && inZone(st)) drawCollapsedStack(s, st); });
+
+  // L3 ribbons — smooth subnet-coloured curves between every L3 pair, drawn
+  // into a dedicated layer so they float above L2 wiring without tracing it.
+  drawL3Paths(s);
 
   markSelected(s);
   updateStatus(s);
@@ -6230,11 +6235,23 @@ const MOD002_CSS = `
 .m002-route-row.is-default{border-color:#ffae00;}
 .m002-route-row.is-default .m002-route-dst{color:#ffae00;}
 
-/* Routing-layer canvas dimming + link styles */
-.m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]{opacity:.32;filter:saturate(.4);}
-.m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover{opacity:.6;}
+/* Routing-layer canvas dimming + link styles. Collapsed stacks get the
+   same fade rule as plain devices so a switch-only stack doesn't suddenly
+   look L3-active just because it's collapsed. */
+.m002-host[data-active-layer="routing"] .m002-device[data-l3="false"],
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
+.m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
+/* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
+   They live in their own SVG group above the link layer so they read as a
+   logical overlay rather than a re-skinned wire. fill:none keeps the curve
+   transparent inside concave bends; pointer-events:none stops them from
+   eating clicks meant for devices. */
+.m002-l3-paths path{fill:none;pointer-events:none;}
+.m002-l3-path{stroke-width:2.5;opacity:.95;stroke-linecap:round;stroke-linejoin:round;}
+.m002-l3-path-glow{stroke-width:8;opacity:.22;filter:blur(2.5px);}
 .m002-link-l3-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1px;font-weight:500;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-link-transit-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:2px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-dev-l3{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1px;fill:#35ff7a;display:none;}
