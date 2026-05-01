@@ -103,7 +103,13 @@ function vlanRegistryRemove(s, id) {
   s.devices.forEach((d) => {
     if (Array.isArray(d.vlans)) d.vlans = d.vlans.filter((x) => String(x) !== id);
     (d.ports || []).forEach((p) => { if (Array.isArray(p.vlans)) p.vlans = p.vlans.filter((x) => String(x) !== id); });
+    // L3 interfaces can be VLAN-bound (SVI / subinterface); drop the binding
+    // so the dropdown falls back to "—" when the VLAN no longer exists.
+    (d.interfaces || []).forEach((iface) => { if (String(iface.vlanId || '') === id) iface.vlanId = null; });
   });
+  // Subnets that were tagged with this VLAN keep the field but a non-existent
+  // tag is harmless — they still resolve via CIDR. Strip for hygiene.
+  (s.subnetRegistry || []).forEach((sn) => { if (String(sn.vlanId || '') === id) sn.vlanId = null; });
 }
 
 // VLANs available on a device (subset of registry).
@@ -703,7 +709,9 @@ function ipInCidr(ip, cidr) {
 }
 
 // Resolve which subnet (if any) an interface belongs to. Explicit subnetId
-// wins; otherwise we match by CIDR network.
+// wins; otherwise we match by CIDR network. As a tertiary hint we honour the
+// interface's own vlanId — when a subnet is registered against the same VLAN
+// (e.g. an SVI / VLAN-bound /24), that match also wins over no match.
 function ifaceSubnet(s, iface) {
   if (!iface) return null;
   if (iface.subnetId) {
@@ -714,8 +722,13 @@ function ifaceSubnet(s, iface) {
     const p = parseCidr(iface.ip);
     if (p && p.prefix < 32) {
       const cidr = `${p.network}/${p.prefix}`;
-      return s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === cidr) || null;
+      const byCidr = s.subnetRegistry.find((sn) => cidrNormalize(sn.cidr) === cidr);
+      if (byCidr) return byCidr;
     }
+  }
+  if (iface.vlanId) {
+    const byVlan = s.subnetRegistry.find((sn) => String(sn.vlanId || '') === String(iface.vlanId));
+    if (byVlan) return byVlan;
   }
   return null;
 }
@@ -2975,6 +2988,20 @@ function renderL3SectionsHTML(s, dev) {
     });
     return opts.join('');
   };
+  // Interface VLAN binding — represents an SVI / subinterface tied to one
+  // VLAN. Shows every VLAN on the device (or every registered VLAN if the
+  // device hasn't been put in any yet). "—" means a plain L3 port.
+  const vlanOptions = (selectedId) => {
+    const opts = ['<option value="">—</option>'];
+    const list = (dev.vlans && dev.vlans.length) ? dev.vlans.map(String).sort(vlanSort) : (s.vlanList || []);
+    list.forEach((v) => {
+      const sel = String(selectedId || '') === String(v) ? 'selected' : '';
+      const entry = s.vlanRegistry.find((r) => String(r.id) === String(v));
+      const lbl = entry?.name ? `${v} · ${entry.name}` : v;
+      opts.push(`<option value="${escAttr(v)}" ${sel}>${escSvg(lbl)}</option>`);
+    });
+    return opts.join('');
+  };
   const ifaceOptions = (selectedId) => {
     const opts = ['<option value="">—</option>'];
     ifaces.forEach((iface) => {
@@ -2992,6 +3019,7 @@ function renderL3SectionsHTML(s, dev) {
           <span class="m002-iface-dot"></span>
           <input class="m002-iface-name" data-if-f="name" value="${escAttr(iface.name)}" placeholder="if0"/>
           <input class="m002-iface-ip" data-if-f="ip" value="${escAttr(iface.ip)}" placeholder="10.0.0.1/24"/>
+          <select class="m002-iface-vlan" data-if-f="vlanId" title="bound VLAN (SVI / subinterface)">${vlanOptions(iface.vlanId)}</select>
           <select class="m002-iface-subnet" data-if-f="subnetId" title="bound subnet">${subnetOptions(iface.subnetId)}</select>
           <button type="button" class="m002-iface-rm" data-if-rm title="Remove interface">×</button>
         </div>`;
@@ -3054,9 +3082,19 @@ function bindL3Sections(s, dev, body) {
     const iface = (dev.interfaces || []).find((x) => x.id === ifaceId);
     if (!iface) return;
     row.querySelectorAll('[data-if-f]').forEach((el) => {
-      el.addEventListener('input', () => {
+      const isSelect = el.tagName === 'SELECT';
+      // Apply the field change. For <select> we want the inspector to
+      // re-render (so any cross-row visuals — colour dot, dependent rows —
+      // update); for <input> we keep typing focus and rely on
+      // refreshSelfAndCanvas() alone.
+      const apply = (rerender) => {
         const f = el.dataset.ifF;
-        iface[f] = el.value;
+        const val = el.value;
+        if (f === 'subnetId' || f === 'vlanId') {
+          iface[f] = val || null;
+        } else {
+          iface[f] = val;
+        }
         if (f === 'ip') {
           // Auto-bind subnet if the IP belongs to a known network and the
           // user hasn't picked one explicitly. No registry mutation here —
@@ -3067,12 +3105,19 @@ function bindL3Sections(s, dev, body) {
           }
           subnetsChanged(s);
         }
-        if (f === 'subnetId') iface.subnetId = el.value || null;
         refreshSelfAndCanvas();
-      });
-      el.addEventListener('change', () => {
-        if (el.dataset.ifF === 'ip' || el.dataset.ifF === 'name') openInspector(s);
-      });
+        if (rerender) openInspector(s);
+      };
+      if (isSelect) {
+        // <select> reliably fires "change" across browsers; "input" support
+        // is uneven (esp. Firefox). Bind change so the picked value commits.
+        el.addEventListener('change', () => apply(true));
+      } else {
+        el.addEventListener('input', () => apply(false));
+        el.addEventListener('change', () => {
+          if (el.dataset.ifF === 'ip' || el.dataset.ifF === 'name') openInspector(s);
+        });
+      }
     });
     row.querySelector('[data-if-rm]')?.addEventListener('click', () => {
       snapshot(s);
@@ -3099,19 +3144,28 @@ function bindL3Sections(s, dev, body) {
     const route = (dev.routes || []).find((x) => x.id === rid_);
     if (!route) return;
     row.querySelectorAll('[data-rt-f]').forEach((el) => {
-      el.addEventListener('input', () => {
+      const isSelect = el.tagName === 'SELECT';
+      const apply = (rerender) => {
         const f = el.dataset.rtF;
         if (f === 'metric') {
           const n = el.value === '' ? null : Number(el.value);
           route.metric = (Number.isFinite(n) ? n : null);
+        } else if (f === 'interfaceId') {
+          route.interfaceId = el.value || null;
         } else {
           route[f] = el.value;
         }
         refreshSelfAndCanvas();
-      });
-      el.addEventListener('change', () => {
-        if (el.dataset.rtF === 'dst') openInspector(s); // gateway-state may change
-      });
+        if (rerender) openInspector(s);
+      };
+      if (isSelect) {
+        el.addEventListener('change', () => apply(false));
+      } else {
+        el.addEventListener('input', () => apply(false));
+        el.addEventListener('change', () => {
+          if (el.dataset.rtF === 'dst') openInspector(s); // gateway-state may change
+        });
+      }
     });
     row.querySelector('[data-rt-rm]')?.addEventListener('click', () => {
       snapshot(s);
@@ -5392,6 +5446,7 @@ function migrate(s) {
         name: String(iface.name || ''),
         ip: String(iface.ip || ''),
         subnetId: iface.subnetId || null,
+        vlanId: iface.vlanId != null && iface.vlanId !== '' ? String(iface.vlanId) : null,
       }));
       d.routes = d.routes.map((r) => ({
         id: r.id || ('rt_' + rid()),
@@ -5507,11 +5562,14 @@ function migrate(s) {
   // L3 — auto-discover subnets from every populated IP so a freshly-loaded
   // map already shows meaningful content in the routing layer. Idempotent.
   autoDiscoverSubnets(s);
-  // Drop orphan subnetIds on interfaces (subnet was deleted between sessions).
+  // Drop orphan subnetIds / vlanIds on interfaces (registry entry was
+  // deleted between sessions). Same idea as the device.vlans constraint.
   const liveSubnets = new Set(s.subnetRegistry.map((sn) => String(sn.id)));
+  const liveVlans = new Set(s.vlanRegistry.map((v) => String(v.id)));
   s.devices.forEach((d) => {
     (d.interfaces || []).forEach((iface) => {
       if (iface.subnetId && !liveSubnets.has(String(iface.subnetId))) iface.subnetId = null;
+      if (iface.vlanId && !liveVlans.has(String(iface.vlanId))) iface.vlanId = null;
     });
   });
   recomputeSubnetIndex(s);
@@ -5946,7 +6004,7 @@ const MOD002_CSS = `
 .m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.5px;}
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
-.m002-iface-row{display:grid;grid-template-columns:8px 1fr 1.4fr 1.2fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
+.m002-iface-row{display:grid;grid-template-columns:8px 0.8fr 1.4fr 0.7fr 1.1fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
 .m002-iface-dot{width:8px;height:8px;background:var(--sc);box-shadow:0 0 3px var(--sc);}
 .m002-iface-row input,.m002-iface-row select,.m002-route-row input,.m002-route-row select{background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:2px 4px;font-family:'Share Tech Mono',monospace;font-size:10px;outline:none;min-width:0;}
