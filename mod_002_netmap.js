@@ -6440,25 +6440,27 @@ function vfxResetInlineParts(parts) {
 const VFX_PULSE_COUNT_MIN = 6;        // tendrils per drop
 const VFX_PULSE_COUNT_MAX = 10;
 const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
-const VFX_PULSE_SEGS_MAX = 4;
-const VFX_PULSE_SEG_CELLS_MIN = 2;    // cells per segment
-const VFX_PULSE_SEG_CELLS_MAX = 5;
-const VFX_PULSE_FILL_MS = 360;        // tendril draw-in duration
-const VFX_PULSE_FADE_MS = 460;        // tendril fade-out duration
-const VFX_PULSE_STAGGER_MS = 90;      // max random per-tendril start delay
+const VFX_PULSE_SEGS_MAX = 6;
+const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
+const VFX_PULSE_SEG_CELLS_MAX = 3;
+const VFX_PULSE_FILL_MS = 620;        // tendril draw-in duration
+const VFX_PULSE_FADE_MS = 620;        // tendril fade-out duration
+const VFX_PULSE_STAGGER_MS = 220;     // max random per-tendril start delay
 
 function vfxGridPulse(s, wx, wy, color) {
   if (!s.gOverlay || !color) return;
   const cx = Math.round(wx / GRID) * GRID;
   const cy = Math.round(wy / GRID) * GRID;
+  // Element half-extents, snapped to grid so launch points and the
+  // no-return rule both work in cell units.
+  const halfW = Math.round(DEVICE_W / 2 / GRID) * GRID;
+  const halfH = Math.round(DEVICE_H / 2 / GRID) * GRID;
 
   const group = document.createElementNS(SVG_NS, 'g');
   group.setAttribute('class', 'm002-vfx-grid-pulse');
   group.setAttribute('pointer-events', 'none');
   group.style.color = color;
-  // Subtle neon glow — keeps the data-tendril read without the dasharray
-  // tail looking flat against the grid.
-  group.style.filter = 'drop-shadow(0 0 3px currentColor)';
+  group.style.filter = 'drop-shadow(0 0 2px currentColor)';
 
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const count = VFX_PULSE_COUNT_MIN
@@ -6471,13 +6473,36 @@ function vfxGridPulse(s, wx, wy, color) {
     [startDirs[i], startDirs[j]] = [startDirs[j], startDirs[i]];
   }
 
+  // Launch from a random grid intersection on the perimeter edge that
+  // matches the chosen first direction. The first segment then heads
+  // straight out away from the element.
+  function launchPoint([dx, dy]) {
+    if (dx !== 0) {
+      const cells = halfH / GRID;
+      const j = (Math.floor(Math.random() * (2 * cells + 1)) - cells) * GRID;
+      return [cx + dx * halfW, cy + j];
+    }
+    const cells = halfW / GRID;
+    const j = (Math.floor(Math.random() * (2 * cells + 1)) - cells) * GRID;
+    return [cx + j, cy + dy * halfH];
+  }
+
+  // After a turn, the new direction is "away from the element" iff its
+  // dot product with the position-from-center vector is non-negative.
+  // For axis-aligned moves this reduces to a single-axis sign check.
+  function awayFromElement(x, y, ndx, ndy) {
+    return ndx * (x - cx) + ndy * (y - cy) >= 0;
+  }
+
   const tendrils = [];
   for (let i = 0; i < count; i++) {
-    let [dx, dy] = i < 4 ? startDirs[i] : DIRS[Math.floor(Math.random() * 4)];
-    let x = cx, y = cy;
+    const firstDir = i < 4 ? startDirs[i] : DIRS[Math.floor(Math.random() * 4)];
+    let [dx, dy] = firstDir;
+    let [x, y] = launchPoint(firstDir);
     const pts = [[x, y]];
     const segs = VFX_PULSE_SEGS_MIN
       + Math.floor(Math.random() * (VFX_PULSE_SEGS_MAX - VFX_PULSE_SEGS_MIN + 1));
+
     for (let j = 0; j < segs; j++) {
       const cells = VFX_PULSE_SEG_CELLS_MIN
         + Math.floor(Math.random() * (VFX_PULSE_SEG_CELLS_MAX - VFX_PULSE_SEG_CELLS_MIN + 1));
@@ -6485,19 +6510,26 @@ function vfxGridPulse(s, wx, wy, color) {
       x += dx * len;
       y += dy * len;
       pts.push([x, y]);
-      // 90° turn for the next segment — never reverse, so the tendril keeps
-      // pushing outward instead of folding back over the element.
-      const turn = Math.random() < 0.5 ? 1 : -1;
-      const ndx = -dy * turn;
-      const ndy = dx * turn;
-      dx = ndx; dy = ndy;
+      if (j === segs - 1) break;
+      // Two perpendicular options. Pick one that doesn't head back toward
+      // the element; if both are valid, random choice.
+      const optA = [-dy,  dx];
+      const optB = [ dy, -dx];
+      const aOK = awayFromElement(x, y, optA[0], optA[1]);
+      const bOK = awayFromElement(x, y, optB[0], optB[1]);
+      const next = (aOK && bOK) ? (Math.random() < 0.5 ? optA : optB)
+                 : aOK ? optA
+                 : bOK ? optB
+                 : optA; // both invalid shouldn't happen — fallback
+      [dx, dy] = next;
     }
 
     const d = pts.map((p, k) => (k === 0 ? 'M' : 'L') + p[0] + ' ' + p[1]).join(' ');
     const path = document.createElementNS(SVG_NS, 'path');
     path.setAttribute('d', d);
     path.setAttribute('stroke', 'currentColor');
-    path.setAttribute('stroke-width', '1.2');
+    // Slight stroke-width jitter per tendril for an organic feel.
+    path.setAttribute('stroke-width', (0.55 + Math.random() * 0.25).toFixed(2));
     path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('fill', 'none');
@@ -6510,7 +6542,12 @@ function vfxGridPulse(s, wx, wy, color) {
       totalLen += Math.abs(pts[k][0] - pts[k - 1][0])
                 + Math.abs(pts[k][1] - pts[k - 1][1]);
     }
-    tendrils.push({ el: path, totalLen, delay: Math.random() * VFX_PULSE_STAGGER_MS });
+    tendrils.push({
+      el: path,
+      totalLen,
+      delay: Math.random() * VFX_PULSE_STAGGER_MS,
+      peak: 0.55 + Math.random() * 0.4,
+    });
   }
   s.gOverlay.appendChild(group);
 
@@ -6532,13 +6569,15 @@ function vfxGridPulse(s, wx, wy, color) {
       const k = tn.totalLen * fillP;
       tn.el.style.strokeDasharray = `${k} ${tn.totalLen}`;
       tn.el.style.strokeDashoffset = '0';
-      // Opacity ramps up during fill, then decays during fade.
+      // Opacity ramps up during fill, then decays during fade, scaled by
+      // the per-tendril peak so different tendrils settle at different
+      // brightness and the overall pulse feels less uniform.
       let opacity;
       if (local < VFX_PULSE_FILL_MS) {
-        opacity = fillP;
+        opacity = fillP * tn.peak;
       } else {
         const fadeP = Math.min(1, (local - VFX_PULSE_FILL_MS) / VFX_PULSE_FADE_MS);
-        opacity = 1 - fadeP;
+        opacity = (1 - fadeP) * tn.peak;
       }
       tn.el.style.opacity = String(opacity);
     }
