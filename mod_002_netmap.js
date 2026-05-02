@@ -7386,6 +7386,18 @@ body.m002-tool-delete .cursor::before,
 body.m002-tool-delete .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#ff003c;box-shadow:0 0 6px #ff003c;}
 body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45deg);}
 body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
+/* Hover state in MOD_002: instead of growing (the global default), the
+   cursor stands on its tip — brackets keep their size but pivot 45°
+   around the cursor centre. Tighter, more deliberate feel. */
+body.m002-tool-select .cursor.active,
+body.m002-tool-link .cursor.active,
+body.m002-tool-delete .cursor.active{width:30px !important;height:30px !important;}
+body.m002-tool-select .cursor.active .cur-bracket,
+body.m002-tool-link .cursor.active .cur-bracket,
+body.m002-tool-delete .cursor.active .cur-bracket{width:7px !important;height:7px !important;transform-origin:15px 15px;transform:rotate(45deg);}
+body.m002-tool-select .cur-bracket,
+body.m002-tool-link .cur-bracket,
+body.m002-tool-delete .cur-bracket{transition:width 0.25s,height 0.25s,border-color 0.25s,transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) !important;}
 `;
 
 // =============================================================================
