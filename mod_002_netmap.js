@@ -6430,92 +6430,117 @@ function vfxResetInlineParts(parts) {
 // =============================================================================
 // VFX — grid energy pulse on element drop
 // =============================================================================
-// When an element lands on the grid (palette spawn or drag-drop), spawn a
-// short-lived halo of grid-aligned lines emanating from the drop point in
-// the element's accent colour. Lines further from the centre light up later
-// (radial wave), each line draws itself in from its midpoint outward, then
-// fades. Conveys the element "wiring into" the grid.
+// When an element lands on the grid, send out a small handful of tendrils
+// that snake along grid lines away from the drop point in the element's
+// accent colour. Each tendril takes a few orthogonal steps with random
+// 90° turns, draws in from origin to tip, then fades — meant to read as
+// the element "patching itself into" the mainframe grid behind, not as a
+// big radial halo.
 
-const VFX_PULSE_SPAN_CELLS = 6;     // lines on each side of the drop axes
-const VFX_PULSE_REACH_CELLS = 8;    // half-length of each line, in grid cells
-const VFX_PULSE_FILL_MS = 320;      // line draw-in duration
-const VFX_PULSE_FADE_MS = 520;      // line fade-out duration
-const VFX_PULSE_STAGGER_MS = 38;    // delay per grid step (radial wave speed)
+const VFX_PULSE_COUNT_MIN = 6;        // tendrils per drop
+const VFX_PULSE_COUNT_MAX = 10;
+const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
+const VFX_PULSE_SEGS_MAX = 4;
+const VFX_PULSE_SEG_CELLS_MIN = 2;    // cells per segment
+const VFX_PULSE_SEG_CELLS_MAX = 5;
+const VFX_PULSE_FILL_MS = 360;        // tendril draw-in duration
+const VFX_PULSE_FADE_MS = 460;        // tendril fade-out duration
+const VFX_PULSE_STAGGER_MS = 90;      // max random per-tendril start delay
 
 function vfxGridPulse(s, wx, wy, color) {
   if (!s.gOverlay || !color) return;
   const cx = Math.round(wx / GRID) * GRID;
   const cy = Math.round(wy / GRID) * GRID;
-  const SPAN = VFX_PULSE_SPAN_CELLS * GRID;
-  const REACH = VFX_PULSE_REACH_CELLS * GRID;
-  const totalLen = 2 * REACH;
 
   const group = document.createElementNS(SVG_NS, 'g');
   group.setAttribute('class', 'm002-vfx-grid-pulse');
   group.setAttribute('pointer-events', 'none');
   group.style.color = color;
+  // Subtle neon glow — keeps the data-tendril read without the dasharray
+  // tail looking flat against the grid.
+  group.style.filter = 'drop-shadow(0 0 3px currentColor)';
 
-  const lines = [];
-  for (let i = -SPAN; i <= SPAN; i += GRID) {
-    const dist = Math.abs(i);
-    const hl = document.createElementNS(SVG_NS, 'line');
-    hl.setAttribute('x1', String(cx - REACH));
-    hl.setAttribute('x2', String(cx + REACH));
-    hl.setAttribute('y1', String(cy + i));
-    hl.setAttribute('y2', String(cy + i));
-    hl.setAttribute('stroke', 'currentColor');
-    hl.setAttribute('stroke-width', '1');
-    hl.setAttribute('stroke-linecap', 'round');
-    hl.style.opacity = '0';
-    group.appendChild(hl);
-    lines.push({ el: hl, dist });
+  const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+  const count = VFX_PULSE_COUNT_MIN
+    + Math.floor(Math.random() * (VFX_PULSE_COUNT_MAX - VFX_PULSE_COUNT_MIN + 1));
+  // Seed the first 4 with one of each cardinal so tendrils don't bunch up;
+  // anything beyond that picks freely.
+  const startDirs = DIRS.slice();
+  for (let i = startDirs.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [startDirs[i], startDirs[j]] = [startDirs[j], startDirs[i]];
+  }
 
-    const vl = document.createElementNS(SVG_NS, 'line');
-    vl.setAttribute('x1', String(cx + i));
-    vl.setAttribute('x2', String(cx + i));
-    vl.setAttribute('y1', String(cy - REACH));
-    vl.setAttribute('y2', String(cy + REACH));
-    vl.setAttribute('stroke', 'currentColor');
-    vl.setAttribute('stroke-width', '1');
-    vl.setAttribute('stroke-linecap', 'round');
-    vl.style.opacity = '0';
-    group.appendChild(vl);
-    lines.push({ el: vl, dist });
+  const tendrils = [];
+  for (let i = 0; i < count; i++) {
+    let [dx, dy] = i < 4 ? startDirs[i] : DIRS[Math.floor(Math.random() * 4)];
+    let x = cx, y = cy;
+    const pts = [[x, y]];
+    const segs = VFX_PULSE_SEGS_MIN
+      + Math.floor(Math.random() * (VFX_PULSE_SEGS_MAX - VFX_PULSE_SEGS_MIN + 1));
+    for (let j = 0; j < segs; j++) {
+      const cells = VFX_PULSE_SEG_CELLS_MIN
+        + Math.floor(Math.random() * (VFX_PULSE_SEG_CELLS_MAX - VFX_PULSE_SEG_CELLS_MIN + 1));
+      const len = cells * GRID;
+      x += dx * len;
+      y += dy * len;
+      pts.push([x, y]);
+      // 90° turn for the next segment — never reverse, so the tendril keeps
+      // pushing outward instead of folding back over the element.
+      const turn = Math.random() < 0.5 ? 1 : -1;
+      const ndx = -dy * turn;
+      const ndy = dx * turn;
+      dx = ndx; dy = ndy;
+    }
+
+    const d = pts.map((p, k) => (k === 0 ? 'M' : 'L') + p[0] + ' ' + p[1]).join(' ');
+    const path = document.createElementNS(SVG_NS, 'path');
+    path.setAttribute('d', d);
+    path.setAttribute('stroke', 'currentColor');
+    path.setAttribute('stroke-width', '1.2');
+    path.setAttribute('stroke-linecap', 'round');
+    path.setAttribute('stroke-linejoin', 'round');
+    path.setAttribute('fill', 'none');
+    path.style.opacity = '0';
+    group.appendChild(path);
+
+    // Manhattan length — every segment is grid-aligned, no diagonals.
+    let totalLen = 0;
+    for (let k = 1; k < pts.length; k++) {
+      totalLen += Math.abs(pts[k][0] - pts[k - 1][0])
+                + Math.abs(pts[k][1] - pts[k - 1][1]);
+    }
+    tendrils.push({ el: path, totalLen, delay: Math.random() * VFX_PULSE_STAGGER_MS });
   }
   s.gOverlay.appendChild(group);
 
-  const maxDelay = VFX_PULSE_STAGGER_MS * (SPAN / GRID);
-  const totalMs = maxDelay + VFX_PULSE_FILL_MS + VFX_PULSE_FADE_MS;
+  const totalMs = VFX_PULSE_STAGGER_MS + VFX_PULSE_FILL_MS + VFX_PULSE_FADE_MS;
   const start = performance.now();
 
   function step(now) {
     const t = now - start;
     if (t >= totalMs) { group.remove(); return; }
-    for (const ln of lines) {
-      const delay = (ln.dist / GRID) * VFX_PULSE_STAGGER_MS;
-      const local = t - delay;
+    for (const tn of tendrils) {
+      const local = t - tn.delay;
       if (local < 0) {
-        ln.el.style.opacity = '0';
-        ln.el.style.strokeDasharray = `0 ${totalLen}`;
+        tn.el.style.opacity = '0';
+        tn.el.style.strokeDasharray = `0 ${tn.totalLen}`;
         continue;
       }
-      // Stroke draws in from line midpoint outward.
-      const fillProgress = Math.min(1, local / VFX_PULSE_FILL_MS);
-      const k = totalLen * fillProgress;
-      const startPos = (totalLen - k) / 2;
-      ln.el.style.strokeDasharray = `${k} ${totalLen}`;
-      ln.el.style.strokeDashoffset = `${-startPos}`;
+      // Head extends from the element outward — dash grows from origin.
+      const fillP = Math.min(1, local / VFX_PULSE_FILL_MS);
+      const k = tn.totalLen * fillP;
+      tn.el.style.strokeDasharray = `${k} ${tn.totalLen}`;
+      tn.el.style.strokeDashoffset = '0';
       // Opacity ramps up during fill, then decays during fade.
       let opacity;
       if (local < VFX_PULSE_FILL_MS) {
-        opacity = fillProgress;
+        opacity = fillP;
       } else {
-        const fadeProgress = Math.min(1, (local - VFX_PULSE_FILL_MS) / VFX_PULSE_FADE_MS);
-        opacity = 1 - fadeProgress;
+        const fadeP = Math.min(1, (local - VFX_PULSE_FILL_MS) / VFX_PULSE_FADE_MS);
+        opacity = 1 - fadeP;
       }
-      // Lines further from centre are dimmer (energy decays with distance).
-      const decay = Math.max(0.15, 1 - (ln.dist / SPAN) * 0.55);
-      ln.el.style.opacity = String(opacity * decay);
+      tn.el.style.opacity = String(opacity);
     }
     requestAnimationFrame(step);
   }
