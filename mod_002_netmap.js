@@ -2201,12 +2201,13 @@ function bindBoard(s) {
       if (snapNow) {
         nx = snapX;
         ny = snapY;
-        hideSnapPreview(s);
+        clearSnapPreview(s);
       } else if (s.prefs?.snapOnDrop) {
-        // Free-move: preview where the element would land on release.
-        showSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'device', dev.id));
+        // Free-move: preview where the element would land on release —
+        // gated by a brief dwell so a fast sweep doesn't flicker ghosts.
+        scheduleSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'device', dev.id));
       } else {
-        hideSnapPreview(s);
+        clearSnapPreview(s);
       }
       s.drag.lastAlt = !!e.altKey;
       const ddx = nx - dev.x, ddy = ny - dev.y;
@@ -2285,11 +2286,11 @@ function bindBoard(s) {
       if (snapNow) {
         nx = snapX;
         ny = snapY;
-        hideSnapPreview(s);
+        clearSnapPreview(s);
       } else if (s.prefs?.snapOnDrop) {
-        showSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'stack', st.id));
+        scheduleSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'stack', st.id));
       } else {
-        hideSnapPreview(s);
+        clearSnapPreview(s);
       }
       s.drag.lastAlt = !!e.altKey;
       const ddx = nx - st.x, ddy = ny - st.y;
@@ -2427,7 +2428,7 @@ function bindBoard(s) {
     }
     s.drag = null;
     s.host.classList.remove('m002-dragging');
-    hideSnapPreview(s);
+    clearSnapPreview(s);
     // Spring the lifted element back to rest (1.0 scale, 0° tilt) — settles
     // smoothly over a few frames after release so the gesture has follow-through.
     endDragLift(s);
@@ -6549,6 +6550,37 @@ function showSnapPreview(s, snapX, snapY, accent) {
 
 function hideSnapPreview(s) {
   if (s.snapPreviewEl) s.snapPreviewEl.style.display = 'none';
+}
+
+// Dwell-gated entry point. Showing the ghost on every mousemove during a
+// long sweep made it strobe across the canvas — it only adds value once
+// the user pauses near a candidate cell. We arm a short timer per snap
+// cell; reaching a different cell resets it and re-hides the preview.
+const SNAP_PREVIEW_DWELL_MS = 180;
+function scheduleSnapPreview(s, snapX, snapY, accent) {
+  const cellKey = `${snapX}|${snapY}`;
+  if (s._snapPreviewKey === cellKey) {
+    // Same cell as last frame — leave any pending timer / shown ghost alone.
+    if (s._snapPreviewPending) s._snapPreviewPending.accent = accent;
+    return;
+  }
+  s._snapPreviewKey = cellKey;
+  s._snapPreviewPending = { snapX, snapY, accent };
+  hideSnapPreview(s);
+  if (s._snapPreviewTimer) clearTimeout(s._snapPreviewTimer);
+  s._snapPreviewTimer = setTimeout(() => {
+    s._snapPreviewTimer = null;
+    const p = s._snapPreviewPending;
+    if (!p) return;
+    showSnapPreview(s, p.snapX, p.snapY, p.accent);
+  }, SNAP_PREVIEW_DWELL_MS);
+}
+
+function clearSnapPreview(s) {
+  if (s._snapPreviewTimer) { clearTimeout(s._snapPreviewTimer); s._snapPreviewTimer = null; }
+  s._snapPreviewKey = null;
+  s._snapPreviewPending = null;
+  hideSnapPreview(s);
 }
 
 function dragSnapAccent(s, kind, id) {
