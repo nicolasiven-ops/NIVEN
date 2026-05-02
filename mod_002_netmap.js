@@ -2671,12 +2671,12 @@ function computeStackPairAggregations(s, absorbed) {
   const groups = new Map();
   const zoneOk = (entity) => !s.activeZone || !entity?.zone || entity.zone === s.activeZone;
   s.links.forEach((l) => {
+    // Paired-LAG links are already represented by drawLagLink — they're in
+    // `absorbed` so we skip them here. Non-paired LAG'd links (LAG on one
+    // side, no counterpart) flow into the aggregate alongside plain wires;
+    // converting them via the configurator is exactly the action the user
+    // wants the aggregate's click-to-LAG to drive.
     if (absorbed.has(l.id)) return;
-    // Skip links that participate in any LAG (paired or single-sided). Those
-    // render via the LAG-pair / bundle visuals — pulling them into the
-    // aggregate would stack a dim "click to LAG" line right under the LAG
-    // graphic the user just configured.
-    if (lagBundleKey(s, l)) return;
     const a = s.devices.find((d) => d.id === l.from);
     const b = s.devices.find((d) => d.id === l.to);
     if (!a || !b) return;
