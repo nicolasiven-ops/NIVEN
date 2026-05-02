@@ -157,6 +157,11 @@ function vlansChanged(s) {
   recomputeVlanIndex(s);
   renderLegend(s);
   s.links.forEach((l) => redrawLink(s, l));
+  // LAG-pair lines render their own VLAN count / stripes and aren't keyed by
+  // link.id, so the per-link redraw above misses them. Refresh them too —
+  // otherwise the count on a paired LAG only catches up on the next full
+  // render (zoom, drag, layer toggle, …).
+  redrawAllLagPairs(s);
   // Re-render any VLAN pickers visible in inspector
   s.host?.querySelectorAll('.m002-vlan-picker').forEach((el) => renderVlanPicker(s, el));
   // The open port modal has static FAR-SIDE / PASSING THROUGH sections that
@@ -3351,7 +3356,9 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
   }
-  if (s.activeLayer !== 'routing') {
+  // "Po1 ⇄ Po2" stencil only in Physical — VLAN/Routing already speak via
+  // colour + count, the textual LAG name is just clutter there.
+  if (s.activeLayer === 'physical') {
     inner += `<text class="m002-link-bundle-label" x="${path.lx}" y="${path.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(p.lagA.name + ' ⇄ ' + p.lagB.name)}</text>`;
   }
   g.innerHTML = inner;
@@ -3631,6 +3638,30 @@ function redrawLink(s, link) {
   // Always reapply selection / incident-flow state — the new <g> has none of
   // those classes yet, and applyIncidentFlow() needs to re-flag this redrawn
   // link if it belongs to the active selection.
+  markSelected(s);
+}
+
+// Wipe and redraw every LAG-pair line on the canvas. Used by vlansChanged()
+// so the VLAN count / stripe pattern on a paired LAG updates immediately —
+// the link-keyed partial redraw can't reach these (different DOM key).
+function redrawAllLagPairs(s) {
+  if (!s.gLinks) return;
+  s.gLinks.querySelectorAll('[data-laglink-id]').forEach((el) => el.remove());
+  const inZone = (st) => !s.activeZone || !st.zone || st.zone === s.activeZone;
+  const seen = new Set();
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      const key = [stA.id + ':' + lag.id, peer.stack.id + ':' + peer.lag.id].sort().join('::');
+      if (seen.has(key)) return;
+      seen.add(key);
+      if (!isStackCollapsed(s, stA) || !isStackCollapsed(s, peer.stack)) return;
+      if (!inZone(stA) || !inZone(peer.stack)) return;
+      drawLagLink(s, { stackA: stA, lagA: lag, stackB: peer.stack, lagB: peer.lag });
+    });
+  });
   markSelected(s);
 }
 
