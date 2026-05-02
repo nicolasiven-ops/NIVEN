@@ -7428,22 +7428,33 @@ const MOD002_CSS = `
 .m002-stack-collapsed.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
-.m002-stack-envelope{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
-.m002-stack-envelope:hover{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 24px var(--accent));}
-.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 10px var(--accent)) drop-shadow(0 0 30px var(--accent));}
-.m002-stack-env-bg{fill:color-mix(in srgb, var(--accent) 4%, transparent);stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4;opacity:1;}
+.m002-stack-envelope{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 24px var(--accent));}
+.m002-stack-envelope:hover{filter:drop-shadow(0 0 11px var(--accent)) drop-shadow(0 0 32px var(--accent));}
+.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 14px var(--accent)) drop-shadow(0 0 40px var(--accent));}
+.m002-stack-env-bg{fill:color-mix(in srgb, var(--accent) 6%, transparent);stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4;opacity:1;}
 .m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke-width:2.4;}
 .m002-stack-envelope.m002-selected .m002-stack-env-label{fill:var(--accent);}
-.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.75;}
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{filter:none;opacity:.45;}
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;}
+.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.8;}
+/* Routing layer: envelope stops glowing — the L3 members themselves carry
+   the light. L2 envelopes recede; L3 envelopes keep an accent outline so the
+   group is still visible without competing with the member glow. */
+.m002-host[data-active-layer="routing"] .m002-stack-envelope{filter:none;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{opacity:.45;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;fill:transparent;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-label{fill:#5a5f6e;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.7;}
+/* Stack-member devices: dimmed white in physical/vlan, but in routing the
+   IP-bearing members glow in their own accent (override below). */
 .m002-device.m002-stack-member{filter:none;}
 .m002-device.m002-stack-member:hover{filter:drop-shadow(0 0 2px rgba(245,243,255,.45)) drop-shadow(0 0 7px rgba(245,243,255,.25));}
 .m002-device.m002-stack-member.m002-selected{filter:drop-shadow(0 0 3px rgba(245,243,255,.6)) drop-shadow(0 0 10px rgba(245,243,255,.35));}
 .m002-device.m002-stack-member .m002-dev-bg{stroke:rgba(245,243,255,.45);}
 .m002-device.m002-stack-member .m002-dev-type{fill:rgba(245,243,255,.65);}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"]{filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"]:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"].m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"] .m002-dev-bg{stroke:var(--accent);}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"] .m002-dev-type{fill:var(--accent);opacity:.85;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
 .m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
 .m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#9aa0a8;letter-spacing:1px;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
