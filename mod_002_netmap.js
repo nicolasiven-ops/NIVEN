@@ -7178,7 +7178,7 @@ function switchZone(s, zoneId) {
     : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
-  render(s);
+  vfxAnimatedRender(s, () => render(s));
   if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
