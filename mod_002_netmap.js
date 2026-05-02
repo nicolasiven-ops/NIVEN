@@ -1260,6 +1260,7 @@ function unmount() {
   // Best-effort: flush any pending edits before tearing down.
   if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
   if (state.dirty) { try { saveNow(state); } catch (_) {} }
+  if (state._zoneAnim) { try { cancelAnimationFrame(state._zoneAnim); } catch (_) {} state._zoneAnim = null; }
   stopFlowTicker(state);
   for (const off of state.cleanups) { try { off(); } catch (_) {} }
   state.host?.remove();
@@ -6162,6 +6163,7 @@ function hydrateMapData(s, data) {
   s.view = { ...DEFAULT_VIEW, ...(data.view || {}) };
   if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
   if (!Array.isArray(s.view.subnetFilter)) s.view.subnetFilter = [];
+  if (!s.view.zoneViews || typeof s.view.zoneViews !== 'object') s.view.zoneViews = {};
   migrate(s);
 }
 
@@ -6422,10 +6424,39 @@ function refreshZoneBar(s) {
 
 function switchZone(s, zoneId) {
   if (!zoneId || zoneId === s.activeZone) return;
+  // Persist the view we're leaving so the user lands back on the same
+  // canvas position next time they return to this zone. Each zone gets
+  // its own saved x/y/zoom slot under s.view.zoneViews.
+  if (!s.view.zoneViews) s.view.zoneViews = {};
+  s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+  const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+  const saved = s.view.zoneViews[zoneId];
+  const to = saved || { x: 0, y: 0, zoom: 1 };
   s.activeZone = zoneId;
   refreshZoneBar(s);
   render(s);
+  animateZoneView(s, from, to, 520);
   schedSave(s);
+}
+
+// Cinematic camera pan + zoom between two view states. Used by zone hops
+// (manual pill click + JUMP-triggered switches) so the canvas glides into
+// the new zone's last-known centre instead of teleporting.
+function animateZoneView(s, from, to, duration) {
+  if (s._zoneAnim) cancelAnimationFrame(s._zoneAnim);
+  const start = performance.now();
+  const ease = (t) => 1 - Math.pow(1 - t, 3); // easeOutCubic
+  const step = (now) => {
+    const t = Math.min(1, (now - start) / duration);
+    const k = ease(t);
+    s.view.x = from.x + (to.x - from.x) * k;
+    s.view.y = from.y + (to.y - from.y) * k;
+    s.view.zoom = from.zoom + (to.zoom - from.zoom) * k;
+    applyView(s);
+    if (t < 1) s._zoneAnim = requestAnimationFrame(step);
+    else s._zoneAnim = null;
+  };
+  s._zoneAnim = requestAnimationFrame(step);
 }
 
 function addZone(s) {
