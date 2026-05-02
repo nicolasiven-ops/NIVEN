@@ -1790,6 +1790,17 @@ function bindBoard(s) {
       const dev = s.devices.find((d) => d.id === devEl.dataset.deviceId);
       if (!dev) return;
       if (e.shiftKey) { toggleMultiSelect(s, 'device', dev.id); e.preventDefault(); return; }
+      // JUMP nodes: defer the action to mouseup. A clean click triggers
+      // jumpToReference (so single-click hops zones, no double-click
+      // needed); a drag past 4px relocates the icon as usual and selects.
+      if (isReference(dev)) {
+        snapshot(s);
+        const w = clientToWorld(s, e.clientX, e.clientY);
+        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, moved: false };
+        s.host.classList.add('m002-dragging');
+        e.preventDefault();
+        return;
+      }
       select(s, 'device', dev.id);
       snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
@@ -1847,6 +1858,18 @@ function bindBoard(s) {
       s.view.y = s.drag.vy + (e.clientY - s.drag.startY);
       applyView(s);
     } else if (s.drag.kind === 'device') {
+      // JUMP click-vs-drag detection: once the pointer crosses a small
+      // threshold, treat the gesture as a real drag and select normally.
+      // Otherwise mouseup triggers jumpToReference (no select intermediate).
+      if (s.drag.jumpPending) {
+        const moved = Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4;
+        if (moved) {
+          s.drag.jumpPending = false;
+          select(s, 'device', s.drag.id);
+        } else {
+          return; // still ambiguous, don't move yet
+        }
+      }
       const w = clientToWorld(s, e.clientX, e.clientY);
       const dev = s.devices.find((d) => d.id === s.drag.id);
       if (!dev) return;
@@ -1954,6 +1977,16 @@ function bindBoard(s) {
     }
   };
   const onUp = () => {
+    // JUMP click without drag → hop to the referenced zone / map. Drag past
+    // the 4px threshold flips jumpPending off in onMove and the mouseup
+    // falls through to the regular drag-end path.
+    if (s.drag?.kind === 'device' && s.drag.jumpPending) {
+      const dev = s.devices.find((d) => d.id === s.drag.id);
+      s.drag = null;
+      s.host.classList.remove('m002-dragging');
+      if (dev) jumpToReference(s, dev);
+      return;
+    }
     // Drop-to-stack: a device was dragged onto another device or stack.
     if (s.drag?.kind === 'device' && s.dragStackTarget) {
       const [tk, tid] = s.dragStackTarget.split(':');
@@ -2385,7 +2418,9 @@ function jumpToReference(s, dev) {
   const peer = couplePeer(s, dev);
   if (peer) {
     if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone);
-    select(s, 'device', peer.id);
+    // Zone glide already animated us to the saved view — don't override
+    // it with an auto-recenter on the peer.
+    select(s, 'device', peer.id, { skipRecenter: true });
     return;
   }
   if (dev.refMode === 'map') {
@@ -3546,7 +3581,7 @@ function updateLagPairsFor(s, deviceId) {
 // =============================================================================
 // Selection + inspector
 // =============================================================================
-function select(s, kind, id) {
+function select(s, kind, id, options = {}) {
   // Clear any port-focus on selection: clicking the device on the canvas
   // (or any other device / link / stack) should return the inspector to
   // the device-level form. openPortModal() bypasses select() and sets
@@ -3556,7 +3591,7 @@ function select(s, kind, id) {
   s.selected = { kind, id };
   markSelected(s);
   openInspector(s);
-  if (s.prefs?.autoRecenter) recenterOnSelection(s, kind, id);
+  if (s.prefs?.autoRecenter && !options.skipRecenter) recenterOnSelection(s, kind, id);
 }
 
 // Pan the camera so a freshly-selected device or stack lands in the middle
