@@ -1642,7 +1642,7 @@ function buildDOM(s) {
       s._routingAutoCollapsed = null;
       s._routingAutoExpanded = null;
     }
-    vfxDrainLinks(s, () => render(s));
+    vfxDrainExits(s, () => render(s));
   });
   s.activeLayer = 'physical';
   s.host.setAttribute('data-active-layer', s.activeLayer);
@@ -6147,52 +6147,65 @@ function deletePort(s, deviceId, portN) {
 }
 
 // =============================================================================
-// VFX — link drain on view transitions
+// VFX — drain on view transitions
 // =============================================================================
-// When a link disappears on view change, we don't pop it out of existence —
-// the bright stroke "drains" outward from the middle toward both endpoints,
-// like water flowing back into the devices. We snapshot the link <g>s before
-// the new render(), clone any that won't be in the new render into a side
-// group (m002-vfx-exits), and animate stroke-dasharray on each cloned path
-// so the bright section retreats to the ends and vanishes. No drift, no
-// device/envelope animations — links only, on purpose.
+// When something disappears on a view change, we don't pop it out — the
+// bright stroke "drains" along its path so the wall looks like a pipe whose
+// water flows out, leaving nothing behind. Same trick for links and for
+// element walls (device rects, stack envelope rects, collapsed-stack icons).
+//
+// Mechanism: snapshot the visible exit-eligible <g>s before render(), clone
+// any that won't be in the new render into a side group (m002-vfx-exits),
+// and animate stroke-dasharray on every stroke-bearing shape inside each
+// clone. The pattern "cap gap cap totalLen" with gap growing 0→L and caps
+// shrinking accordingly retracts the bright section to the path endpoints.
+// Texts and rect fills fade in lockstep so labels don't float over an
+// emptied frame.
 
 const VFX_DRAIN_MS = 620;
 
-const VFX_LINK_GROUPS = [
-  { container: 'gLinks',    selector: '[data-link-id]',     idAttr: 'data-link-id' },
-  { container: 'gLinks',    selector: '[data-laglink-id]',  idAttr: 'data-laglink-id' },
-  { container: 'gLinks',    selector: '[data-agg-key]',     idAttr: 'data-agg-key' },
-  { container: 'gStacksBg', selector: '[data-stacklink-id]', idAttr: 'data-stacklink-id' },
+const VFX_GROUPS = [
+  // Links (paths)
+  { container: 'gLinks',    selector: '[data-link-id]',                       idAttr: 'data-link-id' },
+  { container: 'gLinks',    selector: '[data-laglink-id]',                    idAttr: 'data-laglink-id' },
+  { container: 'gLinks',    selector: '[data-agg-key]',                       idAttr: 'data-agg-key' },
+  { container: 'gStacksBg', selector: '[data-stacklink-id]',                  idAttr: 'data-stacklink-id' },
+  // Element walls (rects)
+  { container: 'gDevices',  selector: '[data-device-id]',                     idAttr: 'data-device-id' },
+  { container: 'gDevices',  selector: '.m002-stack-collapsed[data-stack-id]', idAttr: 'data-stack-id' },
+  { container: 'gStacksBg', selector: '.m002-stack-envelope[data-stack-id]',  idAttr: 'data-stack-id' },
 ];
 
 function vfxEaseInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
-function vfxLinkSnapshot(s) {
+function vfxSnapshot(s) {
   const map = new Map();
-  for (const grp of VFX_LINK_GROUPS) {
+  for (const grp of VFX_GROUPS) {
     const root = s[grp.container];
     if (!root) continue;
     root.querySelectorAll(grp.selector).forEach((el) => {
       const id = el.getAttribute(grp.idAttr);
       if (!id) return;
-      map.set(grp.idAttr + ':' + id, el);
+      // Key includes the container so a stack envelope and a stack icon —
+      // both keyed by data-stack-id but in different groups — don't collide.
+      map.set(grp.container + '|' + grp.idAttr + '|' + id, el);
     });
   }
   return map;
 }
 
-function vfxCollectStrokes(rootEl) {
-  // Every stroke-bearing shape inside the cloned link <g>. Each gets its own
-  // length so the drain proportions are correct per-segment (a link <g> can
-  // contain a base path, VLAN stripes, the LAG railroad lines, etc.).
+function vfxCollectAnimatables(rootEl) {
   const shapes = [];
-  rootEl.querySelectorAll('path, line, polyline, polygon').forEach((el) => {
+  rootEl.querySelectorAll('path, line, polyline, polygon, rect').forEach((el) => {
     let len = 0;
     try { if (typeof el.getTotalLength === 'function') len = el.getTotalLength(); } catch (_) { len = 0; }
     if (!len) {
       const tag = el.tagName.toLowerCase();
-      if (tag === 'line') {
+      if (tag === 'rect') {
+        const w = parseFloat(el.getAttribute('width')) || 0;
+        const h = parseFloat(el.getAttribute('height')) || 0;
+        len = 2 * (w + h);
+      } else if (tag === 'line') {
         const x1 = parseFloat(el.getAttribute('x1')) || 0;
         const y1 = parseFloat(el.getAttribute('y1')) || 0;
         const x2 = parseFloat(el.getAttribute('x2')) || 0;
@@ -6202,53 +6215,59 @@ function vfxCollectStrokes(rootEl) {
     }
     if (len > 0) shapes.push({ el, len });
   });
-  return shapes;
+  // Texts ride opacity; rect fills (the inside of the wall) ride fill-opacity
+  // so a draining wall doesn't leave a filled rectangle behind.
+  const fades = [];
+  rootEl.querySelectorAll('text, tspan').forEach((el) => fades.push({ el, prop: 'opacity' }));
+  rootEl.querySelectorAll('rect').forEach((el) => fades.push({ el, prop: 'fillOpacity' }));
+  return { shapes, fades };
 }
 
-function vfxApplyDrain(shapes, p) {
-  // p in [0..1]: 0 = full bright line, 1 = fully drained.
-  // Pattern `cap gap cap totalLen` paints two end-caps with a growing
-  // middle gap. As p grows, gap → totalLen and caps → 0, so the bright
-  // section recedes from the middle outward toward both ends.
-  for (const sh of shapes) {
+function vfxApplyDrain(parts, p) {
+  // p in [0..1]: 0 = full bright, 1 = fully drained.
+  // Pattern `cap gap cap totalLen` paints two end-caps around a growing
+  // middle gap.
+  for (const sh of parts.shapes) {
     const L = sh.len;
     const g = L * p;
     const c = (L - g) / 2;
     sh.el.style.strokeDasharray = `${c} ${g} ${c} ${L}`;
     sh.el.style.strokeDashoffset = '0';
   }
+  const inv = 1 - p;
+  for (const f of parts.fades) f.el.style[f.prop] = inv;
 }
 
-function vfxDrainLinks(s, doRender) {
+function vfxDrainExits(s, doRender) {
   if (!s.gExits) { doRender(); return; }
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
-  const before = vfxLinkSnapshot(s);
+  const before = vfxSnapshot(s);
   doRender();
-  const after = vfxLinkSnapshot(s);
+  const after = vfxSnapshot(s);
 
   const drains = [];
   for (const [key, oldEl] of before) {
     if (after.has(key)) continue;
     const clone = oldEl.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    // Strip the live flow overlay — its stroke-dashoffset would fight ours.
+    // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
-    const shapes = vfxCollectStrokes(clone);
-    if (shapes.length === 0) { clone.remove(); continue; }
-    drains.push({ clone, shapes });
+    const parts = vfxCollectAnimatables(clone);
+    if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
+    drains.push({ clone, parts });
   }
   if (drains.length === 0) return;
 
   // Paint frame 0 immediately to lock the bright-full state before rAF.
-  for (const d of drains) vfxApplyDrain(d.shapes, 0);
+  for (const d of drains) vfxApplyDrain(d.parts, 0);
 
   const start = performance.now();
   function step(now) {
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
-    for (const d of drains) vfxApplyDrain(d.shapes, e);
+    for (const d of drains) vfxApplyDrain(d.parts, e);
     if (t < 1) requestAnimationFrame(step);
     else for (const d of drains) d.clone.remove();
   }
@@ -7048,7 +7067,7 @@ function switchZone(s, zoneId) {
     : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
-  vfxDrainLinks(s, () => render(s));
+  vfxDrainExits(s, () => render(s));
   if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
