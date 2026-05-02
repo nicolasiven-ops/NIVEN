@@ -510,11 +510,6 @@ function renderSubnetLegend(s) {
   body.innerHTML = `
     ${filterBar}
     ${rows}
-    <form class="m002-subnet-legend-add">
-      <input class="m002-subnet-legend-input" placeholder="CIDR (e.g. 10.0.0.0/24)"/>
-      <button type="submit" class="m002-subnet-legend-add-btn">+ ADD</button>
-    </form>
-    <button type="button" class="m002-subnet-legend-auto" data-sauto title="Scan all device IPs and add their networks">⟲ AUTO-DERIVE</button>
   `;
   body.querySelectorAll('[data-srm]').forEach((b) => {
     b.addEventListener('click', (e) => {
@@ -563,35 +558,6 @@ function renderSubnetLegend(s) {
     s.view.subnetFilter = [];
     render(s);
     schedSave(s);
-  });
-  const form = body.querySelector('.m002-subnet-legend-add');
-  const input = form.querySelector('input');
-  form.addEventListener('submit', (e) => {
-    e.preventDefault();
-    const v = (input.value || '').trim();
-    if (!v) return;
-    const norm = cidrNormalize(v);
-    if (!norm) { toast(s, `invalid CIDR — try 10.0.0.0/24`); return; }
-    snapshot(s);
-    const entry = subnetRegistryAdd(s, norm);
-    if (entry) {
-      input.value = '';
-      subnetsChanged(s);
-      refreshInspectorIfL3(s);
-      schedSave(s);
-    } else {
-      toast(s, `subnet ${norm} already declared`);
-    }
-  });
-  body.querySelector('[data-sauto]')?.addEventListener('click', () => {
-    snapshot(s);
-    const before = s.subnetRegistry.length;
-    autoDiscoverSubnets(s);
-    const added = s.subnetRegistry.length - before;
-    subnetsChanged(s);
-    refreshInspectorIfL3(s);
-    schedSave(s);
-    toast(s, added > 0 ? `auto-derived ${added} subnet${added === 1 ? '' : 's'}` : 'no new subnets to derive');
   });
 }
 
