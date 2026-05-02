@@ -1712,8 +1712,8 @@ const DRAG_LIFT_LAG_FACTOR = 80;     // ms — multiplies smoothed cursor veloci
 const DRAG_LIFT_LAG_MAX = 90;        // world units — cap so it never trails out of arm's reach
 const DRAG_LIFT_VEL_SMOOTH = 0.30;   // EMA factor for cursor velocity (0..1, higher = snappier)
 const DRAG_LIFT_VEL_DECAY = 0.88;    // smoothed-velocity decay each frame — higher keeps target alive longer
-const DRAG_LIFT_SPRING_STIFF = 0.09; // gentler pull → real momentum, not a snap-back
-const DRAG_LIFT_SPRING_DAMP = 0.18;  // low damping → multiple visible bobs before settling
+const DRAG_LIFT_SPRING_STIFF = 0.05; // very gentle pull — soft, viscous return
+const DRAG_LIFT_SPRING_DAMP = 0.40;  // near-critical damping — almost no bobbing, just glide
 const DRAG_LIFT_END_EPS = 0.0015;    // stop animating once inside this scale band
 const DRAG_LIFT_OFFSET_EPS = 0.08;   // ...and this offset/velocity band
 
