@@ -1187,10 +1187,15 @@ function drawL3Paths(s) {
     if (!d) return;
     // Paths are sourced from "entity → its gateway", so the geometric path
     // already runs in the right direction (start = source, end = gateway).
-    // The pulse always animates forward.
+    // The pulse always animates forward. Wrap the three layers in a <g> so
+    // the VFX system can identify and animate each route as one unit, and
+    // tag the direction so the drain knows where to flow.
+    const routeId = `${p.ids[0]}|${p.ids[p.ids.length - 1]}|${p.subnetId}`;
+    html += `<g class="m002-l3-route" data-l3-route="${escAttr(routeId)}">`;
     html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
     html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
     html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="forward"/>`;
+    html += `</g>`;
   });
   s.gL3Paths.innerHTML = html;
 }
@@ -6176,6 +6181,8 @@ const VFX_GROUPS = [
   { container: 'gLinks',    selector: '[data-laglink-id]',                    idAttr: 'data-laglink-id' },
   { container: 'gLinks',    selector: '[data-agg-key]',                       idAttr: 'data-agg-key' },
   { container: 'gStacksBg', selector: '[data-stacklink-id]',                  idAttr: 'data-stacklink-id' },
+  // L3 routes (subnet ribbons drawn target → gateway)
+  { container: 'gL3Paths',  selector: '[data-l3-route]',                      idAttr: 'data-l3-route' },
   // Element walls (rects)
   { container: 'gDevices',  selector: '[data-device-id]',                     idAttr: 'data-device-id' },
   { container: 'gDevices',  selector: '.m002-stack-collapsed[data-stack-id]', idAttr: 'data-stack-id' },
@@ -6233,34 +6240,32 @@ function vfxLocalToWorld(parentG, x, y) {
 // For a shape, decide where the bright should remain at the end of the drain
 // (= where it grows from at the start of the build). Returns a "destination"
 // descriptor used by vfxApplyDrain to position the surviving dash.
-//   - kind 'centered' + offset: closed-perimeter (rect) → dash centered on a
-//                                perimeter offset
-//   - kind 'tail'              : open path → dash anchored at end (path end is
-//                                closer to anchor)
-//   - kind 'head'              : open path → dash anchored at start
-//   - kind 'middle'            : symmetric drain (no anchor) — the original
-//                                cap-gap-cap pattern from the centre
-function vfxComputeDest(shapeEl, parentG, anchor) {
-  if (!anchor) return { kind: 'middle' };
+//   - kind 'four-mid' + w/h: closed-perimeter (rect) → 4 bright sections, one
+//                            per side, each centred on its side's midpoint;
+//                            symmetric, anchor-agnostic ("4 separate drains")
+//   - kind 'tail'           : open path → dash anchored at end (path end is
+//                             closer to anchor, OR L3 route in DRAIN phase)
+//   - kind 'head'           : open path → dash anchored at start (start
+//                             closer to anchor, OR L3 route in BUILD phase)
+//   - kind 'middle'         : symmetric drain (no anchor) — the cap-gap-cap
+//                             pattern from the centre
+function vfxComputeDest(shapeEl, parentG, anchor, phase) {
+  // L3 ribbons have an intrinsic source→gateway flow. The path is drawn in
+  // that direction (start = source/target, end = gateway). On DRAIN the
+  // bright clings to the gateway end and the source end empties first; on
+  // BUILD the bright sprouts from the source end and grows toward the
+  // gateway. Anchor is irrelevant here — the route's own direction wins.
+  if (shapeEl.closest && shapeEl.closest('.m002-l3-route')) {
+    return phase === 'build' ? { kind: 'head' } : { kind: 'tail' };
+  }
   const tag = shapeEl.tagName.toLowerCase();
   if (tag === 'rect') {
-    const x = parseFloat(shapeEl.getAttribute('x')) || 0;
-    const y = parseFloat(shapeEl.getAttribute('y')) || 0;
     const w = parseFloat(shapeEl.getAttribute('width')) || 0;
     const h = parseFloat(shapeEl.getAttribute('height')) || 0;
     if (w <= 0 || h <= 0) return { kind: 'middle' };
-    const center = vfxLocalToWorld(parentG, x + w / 2, y + h / 2);
-    const dx = anchor.x - center.x;
-    const dy = anchor.y - center.y;
-    if (dx === 0 && dy === 0) return { kind: 'middle' };
-    const angle = Math.atan2(dy, dx);
-    let offset;
-    if (angle >= -Math.PI / 4 && angle < Math.PI / 4)              offset = w + h / 2;          // right side mid
-    else if (angle >= Math.PI / 4 && angle < 3 * Math.PI / 4)      offset = 1.5 * w + h;        // bottom mid
-    else if (angle >= 3 * Math.PI / 4 || angle < -3 * Math.PI / 4) offset = 2 * w + 1.5 * h;    // left mid
-    else                                                            offset = w / 2;              // top mid
-    return { kind: 'centered', offset };
+    return { kind: 'four-mid', w, h };
   }
+  if (!anchor) return { kind: 'middle' };
   // path / line / polyline / polygon — work off endpoints
   let L = 0, p0, p1;
   try {
@@ -6275,7 +6280,7 @@ function vfxComputeDest(shapeEl, parentG, anchor) {
   return d0 < d1 ? { kind: 'head' } : { kind: 'tail' };
 }
 
-function vfxCollectAnimatables(rootEl, anchor) {
+function vfxCollectAnimatables(rootEl, anchor, phase) {
   const shapes = [];
   rootEl.querySelectorAll('path, line, polyline, polygon, rect').forEach((el) => {
     let len = 0;
@@ -6294,7 +6299,7 @@ function vfxCollectAnimatables(rootEl, anchor) {
         len = Math.hypot(x2 - x1, y2 - y1);
       }
     }
-    if (len > 0) shapes.push({ el, len, dest: vfxComputeDest(el, rootEl, anchor) });
+    if (len > 0) shapes.push({ el, len, dest: vfxComputeDest(el, rootEl, anchor, phase) });
   });
   // Texts ride opacity; rect fills (the inside of the wall) ride fill-opacity
   // so a draining wall doesn't leave a filled rectangle behind.
@@ -6331,6 +6336,24 @@ function vfxApplyDrain(parts, p) {
       const startPos = dest.offset - k / 2;
       sh.el.style.strokeDasharray = `${k} ${L}`;
       sh.el.style.strokeDashoffset = `${-startPos}`;
+    } else if (dest.kind === 'four-mid') {
+      // 4 separate brights, one per side, each centred on its side midpoint
+      // and shrinking inward toward it. Going clockwise from offset 0:
+      //   gap (top-left half) | top bright | corner gap | right bright |
+      //   corner gap | bottom bright | corner gap | left bright | gap
+      //   (back-to-top-left half)
+      // With the dasharray syntax starting on a dash, we lead with a 0-length
+      // dash so the first emitted segment is the leading gap.
+      const w = dest.w;
+      const h = dest.h;
+      const wb = w * (1 - p);            // bright per top/bottom side
+      const hb = h * (1 - p);            // bright per left/right side
+      const wg = w * p / 2;              // half-gap on top/bottom edge
+      const hg = h * p / 2;              // half-gap on left/right edge
+      const cg = wg + hg;                // full corner gap (two halves merged)
+      sh.el.style.strokeDasharray =
+        `0 ${wg} ${wb} ${cg} ${hb} ${cg} ${wb} ${cg} ${hb} ${hg}`;
+      sh.el.style.strokeDashoffset = '0';
     }
   }
   const inv = 1 - p;
@@ -6394,7 +6417,7 @@ function vfxAnimateView(s, doRender, anchor) {
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
-    const parts = vfxCollectAnimatables(clone, drainAnchor);
+    const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
     drains.push({ clone, parts });
   }
@@ -6416,7 +6439,7 @@ function vfxAnimateView(s, doRender, anchor) {
     if (oldOpacity) clone.style.opacity = oldOpacity;
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
-    const parts = vfxCollectAnimatables(clone, drainAnchor);
+    const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
     drains.push({ clone, parts });
   }
@@ -6428,7 +6451,7 @@ function vfxAnimateView(s, doRender, anchor) {
     if (before.has(key)) continue;
     const newEl = entry.el;
     vfxSuppressFilters(newEl);
-    const parts = vfxCollectAnimatables(newEl, buildAnchor);
+    const parts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (parts.shapes.length === 0 && parts.fades.length === 0) {
       vfxRestoreFilters(newEl);
       continue;
