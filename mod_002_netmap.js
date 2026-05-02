@@ -2723,7 +2723,7 @@ function jumpToReference(s, dev) {
     // worked in that zone. Because coupled peers share world coords, the
     // visual transition is now coherent — the JUMP icon doesn't teleport
     // mid-glide, only the surrounding scenery does.
-    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone);
+    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone, { x: dev.x, y: dev.y });
     // Zone glide already animated us to the saved view — don't override
     // it with an auto-recenter on the peer.
     select(s, 'device', peer.id, { skipRecenter: true });
@@ -2739,7 +2739,7 @@ function jumpToReference(s, dev) {
   if (!dev.refZoneId) { toast(s, 'JUMP target not set'); return; }
   if (!(s.zones || []).some((z) => z.id === dev.refZoneId)) { toast(s, 'JUMP target zone missing'); return; }
   if (dev.refZoneId === s.activeZone) { toast(s, 'Already in this zone'); return; }
-  switchZone(s, dev.refZoneId);
+  switchZone(s, dev.refZoneId, { x: dev.x, y: dev.y });
 }
 
 function drawDevice(s, dev) {
@@ -6186,15 +6186,80 @@ function vfxSnapshot(s) {
     root.querySelectorAll(grp.selector).forEach((el) => {
       const id = el.getAttribute(grp.idAttr);
       if (!id) return;
+      // Capture the world centre NOW — `before` snapshot's els get detached by
+      // render() and getBBox returns nothing on detached SVG nodes.
+      const center = vfxBBoxCenterWorld(el);
       // Key includes the container so a stack envelope and a stack icon —
       // both keyed by data-stack-id but in different groups — don't collide.
-      map.set(grp.container + '|' + grp.idAttr + '|' + id, el);
+      map.set(grp.container + '|' + grp.idAttr + '|' + id, { el, center });
     });
   }
   return map;
 }
 
-function vfxCollectAnimatables(rootEl) {
+function vfxBBoxCenterWorld(el) {
+  let bb;
+  try { bb = el.getBBox(); } catch (_) { return null; }
+  if (!bb || (bb.width === 0 && bb.height === 0)) return null;
+  const t = el.transform?.baseVal?.consolidate?.();
+  const m = t ? t.matrix : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  const cx = bb.x + bb.width / 2;
+  const cy = bb.y + bb.height / 2;
+  return { x: m.a * cx + m.c * cy + m.e, y: m.b * cx + m.d * cy + m.f };
+}
+
+function vfxLocalToWorld(parentG, x, y) {
+  const t = parentG?.transform?.baseVal?.consolidate?.();
+  const m = t ? t.matrix : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+  return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f };
+}
+
+// For a shape, decide where the bright should remain at the end of the drain
+// (= where it grows from at the start of the build). Returns a "destination"
+// descriptor used by vfxApplyDrain to position the surviving dash.
+//   - kind 'centered' + offset: closed-perimeter (rect) → dash centered on a
+//                                perimeter offset
+//   - kind 'tail'              : open path → dash anchored at end (path end is
+//                                closer to anchor)
+//   - kind 'head'              : open path → dash anchored at start
+//   - kind 'middle'            : symmetric drain (no anchor) — the original
+//                                cap-gap-cap pattern from the centre
+function vfxComputeDest(shapeEl, parentG, anchor) {
+  if (!anchor) return { kind: 'middle' };
+  const tag = shapeEl.tagName.toLowerCase();
+  if (tag === 'rect') {
+    const x = parseFloat(shapeEl.getAttribute('x')) || 0;
+    const y = parseFloat(shapeEl.getAttribute('y')) || 0;
+    const w = parseFloat(shapeEl.getAttribute('width')) || 0;
+    const h = parseFloat(shapeEl.getAttribute('height')) || 0;
+    if (w <= 0 || h <= 0) return { kind: 'middle' };
+    const center = vfxLocalToWorld(parentG, x + w / 2, y + h / 2);
+    const dx = anchor.x - center.x;
+    const dy = anchor.y - center.y;
+    if (dx === 0 && dy === 0) return { kind: 'middle' };
+    const angle = Math.atan2(dy, dx);
+    let offset;
+    if (angle >= -Math.PI / 4 && angle < Math.PI / 4)              offset = w + h / 2;          // right side mid
+    else if (angle >= Math.PI / 4 && angle < 3 * Math.PI / 4)      offset = 1.5 * w + h;        // bottom mid
+    else if (angle >= 3 * Math.PI / 4 || angle < -3 * Math.PI / 4) offset = 2 * w + 1.5 * h;    // left mid
+    else                                                            offset = w / 2;              // top mid
+    return { kind: 'centered', offset };
+  }
+  // path / line / polyline / polygon — work off endpoints
+  let L = 0, p0, p1;
+  try {
+    L = shapeEl.getTotalLength();
+    if (L > 0) { p0 = shapeEl.getPointAtLength(0); p1 = shapeEl.getPointAtLength(L); }
+  } catch (_) { /* ignore */ }
+  if (!p0 || !p1) return { kind: 'middle' };
+  const w0 = vfxLocalToWorld(parentG, p0.x, p0.y);
+  const w1 = vfxLocalToWorld(parentG, p1.x, p1.y);
+  const d0 = (w0.x - anchor.x) ** 2 + (w0.y - anchor.y) ** 2;
+  const d1 = (w1.x - anchor.x) ** 2 + (w1.y - anchor.y) ** 2;
+  return d0 < d1 ? { kind: 'head' } : { kind: 'tail' };
+}
+
+function vfxCollectAnimatables(rootEl, anchor) {
   const shapes = [];
   rootEl.querySelectorAll('path, line, polyline, polygon, rect').forEach((el) => {
     let len = 0;
@@ -6213,7 +6278,7 @@ function vfxCollectAnimatables(rootEl) {
         len = Math.hypot(x2 - x1, y2 - y1);
       }
     }
-    if (len > 0) shapes.push({ el, len });
+    if (len > 0) shapes.push({ el, len, dest: vfxComputeDest(el, rootEl, anchor) });
   });
   // Texts ride opacity; rect fills (the inside of the wall) ride fill-opacity
   // so a draining wall doesn't leave a filled rectangle behind.
@@ -6225,14 +6290,32 @@ function vfxCollectAnimatables(rootEl) {
 
 function vfxApplyDrain(parts, p) {
   // p in [0..1]: 0 = full bright, 1 = fully drained.
-  // Pattern `cap gap cap totalLen` paints two end-caps around a growing
-  // middle gap.
+  // The dash patterns place a single bright section anchored at the
+  // destination so the bright recedes TOWARD the anchor:
+  //   - 'middle':   cap-gap-cap (symmetric, no anchor)
+  //   - 'head':     dash from 0 to k (bright clings to path start)
+  //   - 'tail':     dash from L-k to L (bright clings to path end)
+  //   - 'centered': dash of length k centered on perimeter offset .offset
   for (const sh of parts.shapes) {
     const L = sh.len;
-    const g = L * p;
-    const c = (L - g) / 2;
-    sh.el.style.strokeDasharray = `${c} ${g} ${c} ${L}`;
-    sh.el.style.strokeDashoffset = '0';
+    const k = L * (1 - p); // surviving bright length
+    const dest = sh.dest || { kind: 'middle' };
+    if (dest.kind === 'middle') {
+      const g = L - k;
+      const c = k / 2;
+      sh.el.style.strokeDasharray = `${c} ${g} ${c} ${L}`;
+      sh.el.style.strokeDashoffset = '0';
+    } else if (dest.kind === 'head') {
+      sh.el.style.strokeDasharray = `${k} ${L}`;
+      sh.el.style.strokeDashoffset = '0';
+    } else if (dest.kind === 'tail') {
+      sh.el.style.strokeDasharray = `${k} ${L}`;
+      sh.el.style.strokeDashoffset = `${-(L - k)}`;
+    } else if (dest.kind === 'centered') {
+      const startPos = dest.offset - k / 2;
+      sh.el.style.strokeDasharray = `${k} ${L}`;
+      sh.el.style.strokeDashoffset = `${-startPos}`;
+    }
   }
   const inv = 1 - p;
   for (const f of parts.fades) f.el.style[f.prop] = inv;
@@ -6258,7 +6341,17 @@ function vfxResetInlineParts(parts) {
   for (const f of parts.fades) f.el.style[f.prop] = '';
 }
 
-function vfxAnimateView(s, doRender) {
+function vfxCentroid(snapshot) {
+  let cx = 0, cy = 0, n = 0;
+  for (const [, entry] of snapshot) {
+    const c = entry.center;
+    if (!c) continue;
+    cx += c.x; cy += c.y; n++;
+  }
+  return n > 0 ? { x: cx / n, y: cy / n } : null;
+}
+
+function vfxAnimateView(s, doRender, anchor) {
   if (!s.gExits) { doRender(); return; }
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
@@ -6266,17 +6359,26 @@ function vfxAnimateView(s, doRender) {
   doRender();
   const after = vfxSnapshot(s);
 
+  // Anchor for directional drain. Explicit point wins (e.g. clicked Jump's
+  // world position). Otherwise the centroid of persisting elements; if none
+  // persists, the centroid of the new view; if that's also empty, no anchor
+  // and the drain falls back to the symmetric cap-gap-cap from the middle.
+  const persisting = new Map();
+  for (const [k, entry] of after) if (before.has(k)) persisting.set(k, entry);
+  const drainAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(after) || vfxCentroid(before);
+  const buildAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(before) || vfxCentroid(after);
+
   // EXITS — clone old element, drain it, remove.
   const drains = [];
-  for (const [key, oldEl] of before) {
+  for (const [key, entry] of before) {
     if (after.has(key)) continue;
-    const clone = oldEl.cloneNode(true);
+    const clone = entry.el.cloneNode(true);
     clone.style.pointerEvents = 'none';
     vfxSuppressFilters(clone);
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
-    const parts = vfxCollectAnimatables(clone);
+    const parts = vfxCollectAnimatables(clone, drainAnchor);
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
     drains.push({ clone, parts });
   }
@@ -6284,10 +6386,11 @@ function vfxAnimateView(s, doRender) {
   // BUILDS — fresh element in its real container, build it up from empty,
   // restore CSS-driven styles at the end so the glow returns naturally.
   const builds = [];
-  for (const [key, newEl] of after) {
+  for (const [key, entry] of after) {
     if (before.has(key)) continue;
+    const newEl = entry.el;
     vfxSuppressFilters(newEl);
-    const parts = vfxCollectAnimatables(newEl);
+    const parts = vfxCollectAnimatables(newEl, buildAnchor);
     if (parts.shapes.length === 0 && parts.fades.length === 0) {
       vfxRestoreFilters(newEl);
       continue;
@@ -7097,7 +7200,7 @@ function refreshZoneBar(s) {
   `;
 }
 
-function switchZone(s, zoneId) {
+function switchZone(s, zoneId, anchor) {
   if (!zoneId || zoneId === s.activeZone) return;
   // Persist the position we're leaving so a return trip lands on the same
   // spot. Zoom is held instead of restored — the user keeps whatever scale
@@ -7111,7 +7214,7 @@ function switchZone(s, zoneId) {
     : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
-  vfxAnimateView(s, () => render(s));
+  vfxAnimateView(s, () => render(s), anchor);
   if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
