@@ -6197,7 +6197,9 @@ function deletePort(s, deviceId, portN) {
 // Texts and rect fills fade in lockstep so labels don't float over an
 // emptied frame.
 
-const VFX_DRAIN_MS = 620;
+const VFX_DRAIN_MS = 620;       // dasharray drain (the leading visual)
+const VFX_GLOW_TAIL_MS = 360;   // extra tail for wrapper opacity / glow halo
+                                // so the shadow lingers past the source drain
 
 const VFX_GROUPS = [
   // Links (paths)
@@ -6386,9 +6388,13 @@ function vfxApplyDrain(parts, p, phase) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  // Visibility (fill / text / glow) rides the wrapper's opacity in BOTH
-  // phases so the drop-shadow halo fades smoothly with the rest of the
-  // element instead of popping. Inline fades aren't needed here.
+  // Fills + texts ride inline opacity in lockstep with the dasharray drain.
+  // The dasharray IS the drain (leading visual); fade-out of fills/texts
+  // makes the element actually disappear. The drop-shadow halo follows the
+  // wrapper's opacity, which is animated separately in vfxAnimateView with
+  // a longer tail so the glow lingers softly past the source's drain.
+  const inv = 1 - p;
+  for (const f of parts.fades) f.el.style[f.prop] = inv;
 }
 
 function vfxSuppressFilters(el) {
@@ -6542,7 +6548,12 @@ function vfxCentroid(snapshot) {
 
 function vfxAnimateView(s, doRender, anchor) {
   if (!s.gExits) { doRender(); return; }
-  // Wipe any in-flight clones from a previous switch so we don't stack them.
+  // Cancel any in-flight transition from a previous click. Without this,
+  // rapid pill-clicks (or clicking a Jump while the previous animation is
+  // still running) leave stale rAF loops writing to detached elements,
+  // and the new transition's builds inherit half-faded inline opacities.
+  // Clean up THEN clear gExits.
+  if (s._vfxStop) { try { s._vfxStop(); } catch (_) {} s._vfxStop = null; }
   s.gExits.innerHTML = '';
   const before = vfxSnapshot(s);
   doRender();
@@ -6631,26 +6642,57 @@ function vfxAnimateView(s, doRender, anchor) {
   for (const d of drains) vfxApplyDrain(d.parts, 0, 'drain'); // exits start full
   for (const b of builds) vfxApplyDrain(b.parts, 1, 'build'); // builds start empty
 
+  // Two timelines run in parallel:
+  //   - DRAIN dasharray (the leading visual): runs over VFX_DRAIN_MS
+  //   - Wrapper opacity / glow halo: runs over VFX_DRAIN_MS + VFX_GLOW_TAIL_MS
+  //     so the shadow lingers softly past the source's drain instead of
+  //     popping out the moment the dasharray hits zero. Builds get the same
+  //     longer ramp-in for symmetry.
   const start = performance.now();
-  function step(now) {
-    const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
-    const e = vfxEaseInOutQuad(t);
-    for (const d of drains) {
-      vfxApplyDrain(d.parts, e, 'drain');
-      d.clone.style.opacity = String(d.startOpacity * (1 - e));
-    }
-    for (const b of builds) {
-      vfxApplyDrain(b.parts, 1 - e, 'build');
-      b.el.style.opacity = String(b.target * e);
-    }
-    if (t < 1) { requestAnimationFrame(step); return; }
+  const TOTAL_MS = VFX_DRAIN_MS + VFX_GLOW_TAIL_MS;
+  let cancelled = false;
+  let rafId = 0;
+
+  // The cleanup we hand to s._vfxStop — runs to settle any in-flight builds
+  // back to their natural CSS-driven look (otherwise inline opacity:0 stays
+  // forever and the element vanishes).
+  const finalize = () => {
     for (const d of drains) d.clone.remove();
     for (const b of builds) {
       vfxResetInlineParts(b.parts);
       vfxClearBuildFade(b.el);
     }
+  };
+  s._vfxStop = () => {
+    cancelled = true;
+    if (rafId) cancelAnimationFrame(rafId);
+    finalize();
+  };
+
+  function step(now) {
+    if (cancelled) return;
+    const t = now - start;
+    // Dasharray drain progress (0..1) — finishes at VFX_DRAIN_MS
+    const dashT = Math.min(1, t / VFX_DRAIN_MS);
+    const dashE = vfxEaseInOutQuad(dashT);
+    // Wrapper opacity progress (0..1) — extended by GLOW_TAIL_MS
+    const fadeT = Math.min(1, t / TOTAL_MS);
+    const fadeE = vfxEaseInOutQuad(fadeT);
+
+    for (const d of drains) {
+      vfxApplyDrain(d.parts, dashE, 'drain');
+      d.clone.style.opacity = String(d.startOpacity * (1 - fadeE));
+    }
+    for (const b of builds) {
+      vfxApplyDrain(b.parts, 1 - dashE, 'build');
+      b.el.style.opacity = String(b.target * fadeE);
+    }
+
+    if (t < TOTAL_MS) { rafId = requestAnimationFrame(step); return; }
+    s._vfxStop = null;
+    finalize();
   }
-  requestAnimationFrame(step);
+  rafId = requestAnimationFrame(step);
 }
 
 // =============================================================================
