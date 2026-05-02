@@ -2670,12 +2670,20 @@ function invalidateEdgeSlots(s) {
 function computeStackPairAggregations(s, absorbed) {
   const groups = new Map();
   const zoneOk = (entity) => !s.activeZone || !entity?.zone || entity.zone === s.activeZone;
+  // Stack-pairs that already have a paired LAG between them — we skip
+  // aggregating those entirely. The aggregate is a "no LAG yet" filler;
+  // once even one LAG-pair exists it stops being useful and turns into
+  // visual clutter alongside the proper LAG-pair line.
+  const pairedStackPairs = new Set();
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      const peerId = lag.counterpart.stackId;
+      if (!peerId || peerId === stA.id) return;
+      pairedStackPairs.add([stA.id, peerId].sort().join('::'));
+    });
+  });
   s.links.forEach((l) => {
-    // Paired-LAG links are already represented by drawLagLink — they're in
-    // `absorbed` so we skip them here. Non-paired LAG'd links (LAG on one
-    // side, no counterpart) flow into the aggregate alongside plain wires;
-    // converting them via the configurator is exactly the action the user
-    // wants the aggregate's click-to-LAG to drive.
     if (absorbed.has(l.id)) return;
     const a = s.devices.find((d) => d.id === l.from);
     const b = s.devices.find((d) => d.id === l.to);
@@ -2693,6 +2701,7 @@ function computeStackPairAggregations(s, absorbed) {
     const bSide = stkB.id;
     if (aSide === bSide) return;
     const key = [aSide, bSide].sort().join('::');
+    if (pairedStackPairs.has(key)) return;
     if (!groups.has(key)) groups.set(key, { aSide, bSide, linkIds: [] });
     groups.get(key).linkIds.push(l.id);
   });
