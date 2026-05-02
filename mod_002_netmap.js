@@ -1894,6 +1894,10 @@ function bindBoard(s) {
       // If this drag is part of a multi-selection, move every selected item
       const group = collectGroupTargets(s, { kind: 'device', id: dev.id });
       group.forEach((it) => moveItemBy(s, it, ddx, ddy));
+      // Coupled JUMP: keep the peer locked at the same world coords so the
+      // no-drift hop invariant survives a relocate. Peer is in another zone,
+      // not currently rendered — data update only.
+      if (isReference(dev)) syncCouplePeerPosition(s, dev);
       updateLinksFor(s, dev.id);
       const stk = findStack(s, dev.id);
       if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
@@ -2387,6 +2391,18 @@ function couplePeer(s, dev) {
   return peer;
 }
 
+// Couple peers must share world coordinates so a JUMP-triggered zone hop
+// (which keeps the current view) lands the peer at the exact same screen
+// position as the source — no view drift on hop. Mirrors dev → peer.
+function syncCouplePeerPosition(s, dev) {
+  if (!isReference(dev)) return;
+  const peer = couplePeer(s, dev);
+  if (!peer) return;
+  if (peer.x === dev.x && peer.y === dev.y) return;
+  peer.x = dev.x;
+  peer.y = dev.y;
+}
+
 // Mutually couple two Jumps. Drops any prior couples on either side. Both
 // Jumps must already exist in s.devices and live in different zones.
 function coupleJumps(s, devA, devB) {
@@ -2402,6 +2418,9 @@ function coupleJumps(s, devA, devB) {
   devA.refZoneId = devB.zone || null;
   devB.refMode = 'zone';
   devB.refZoneId = devA.zone || null;
+  // Lock peer to source coordinates — prerequisite for the no-drift hop.
+  devB.x = devA.x;
+  devB.y = devA.y;
   return true;
 }
 
@@ -2445,9 +2464,10 @@ function jumpToReference(s, dev) {
   // select the peer so the user lands directly on the wormhole's other end.
   const peer = couplePeer(s, dev);
   if (peer) {
-    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone);
-    // Zone glide already animated us to the saved view — don't override
-    // it with an auto-recenter on the peer.
+    // Coupled peers share world coordinates by invariant — keep the current
+    // view through the hop so the peer materialises at the exact same screen
+    // position as the source JUMP. Anything else would be visible drift.
+    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone, { keepView: true });
     select(s, 'device', peer.id, { skipRecenter: true });
     return;
   }
@@ -6586,7 +6606,7 @@ function refreshZoneBar(s) {
   `;
 }
 
-function switchZone(s, zoneId) {
+function switchZone(s, zoneId, opts = {}) {
   if (!zoneId || zoneId === s.activeZone) return;
   // Persist the position we're leaving so a return trip lands on the same
   // spot. Zoom is held instead of restored — the user keeps whatever scale
@@ -6594,7 +6614,9 @@ function switchZone(s, zoneId) {
   if (!s.view.zoneViews) s.view.zoneViews = {};
   s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
-  const saved = s.view.zoneViews[zoneId];
+  // keepView: caller (JUMP couple hop) wants the camera to stay put — the
+  // peer JUMP shares world coords so it'll appear at the same screen spot.
+  const saved = opts.keepView ? null : s.view.zoneViews[zoneId];
   const to = saved
     ? { x: saved.x, y: saved.y, zoom: from.zoom } // keep current zoom
     : from;
@@ -6890,6 +6912,7 @@ function migrate(s) {
   // Sanity-check Jump couples: must point at a live Jump in a different zone,
   // and must be mutual.
   const liveDevById = new Map(s.devices.map((d) => [d.id, d]));
+  const coupleSynced = new Set();
   s.devices.forEach((d) => {
     if (!isReference(d)) { delete d.coupleId; return; }
     if (!d.coupleId) return;
@@ -6897,6 +6920,18 @@ function migrate(s) {
     if (!peer || !isReference(peer) || peer.zone === d.zone) { d.coupleId = null; return; }
     // Repair one-sided couples (peer doesn't point back) by enforcing mutuality.
     if (peer.coupleId !== d.id) peer.coupleId = d.id;
+    // Enforce shared coordinates — older saves may have drifted. Pick a
+    // canonical side (lexicographic id) so both iterations agree on the
+    // anchor, otherwise we'd ping-pong on every load.
+    if (coupleSynced.has(d.id)) return;
+    const anchor = d.id < peer.id ? d : peer;
+    const follower = anchor === d ? peer : d;
+    if (follower.x !== anchor.x || follower.y !== anchor.y) {
+      follower.x = anchor.x;
+      follower.y = anchor.y;
+    }
+    coupleSynced.add(d.id);
+    coupleSynced.add(peer.id);
   });
   recomputeVlanIndex(s);
 
