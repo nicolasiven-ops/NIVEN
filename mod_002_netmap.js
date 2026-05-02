@@ -1191,10 +1191,15 @@ function drawL3Paths(s) {
     // the VFX system can identify and animate each route as one unit, and
     // tag the direction so the drain knows where to flow.
     const routeId = `${p.ids[0]}|${p.ids[p.ids.length - 1]}|${p.subnetId}`;
+    // Inline fill="none" — the parent-scoped `.m002-l3-paths path{fill:none}`
+    // rule does NOT follow these paths into the m002-vfx-exits group when the
+    // VFX system clones them for the drain, so SVG's default black fill
+    // becomes visible the moment our drain dasharray opens a gap. Inline
+    // attribute survives cloneNode.
     html += `<g class="m002-l3-route" data-l3-route="${escAttr(routeId)}">`;
-    html += `<path class="m002-l3-path-glow" d="${d}" style="stroke:${c};color:${c}"/>`;
-    html += `<path class="m002-l3-path" d="${d}" style="stroke:${c};color:${c}"/>`;
-    html += `<path class="m002-l3-path-flow" d="${d}" style="stroke:${c};color:${c}" data-flow-dir="forward"/>`;
+    html += `<path class="m002-l3-path-glow" d="${d}" fill="none" style="stroke:${c};color:${c}"/>`;
+    html += `<path class="m002-l3-path" d="${d}" fill="none" style="stroke:${c};color:${c}"/>`;
+    html += `<path class="m002-l3-path-flow" d="${d}" fill="none" style="stroke:${c};color:${c}" data-flow-dir="forward"/>`;
     html += `</g>`;
   });
   s.gL3Paths.innerHTML = html;
