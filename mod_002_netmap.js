@@ -1642,7 +1642,7 @@ function buildDOM(s) {
       s._routingAutoCollapsed = null;
       s._routingAutoExpanded = null;
     }
-    vfxAnimatedRender(s, () => render(s));
+    vfxDrainLinks(s, () => render(s));
   });
   s.activeLayer = 'physical';
   s.host.setAttribute('data-active-layer', s.activeLayer);
@@ -6147,242 +6147,112 @@ function deletePort(s, deviceId, portN) {
 }
 
 // =============================================================================
-// VFX — view-transition outline animation
+// VFX — link drain on view transitions
 // =============================================================================
-// When the active view changes (layer switch first, more later), elements no
-// longer pop in/out — outlines of departing elements retract and drift
-// toward the nearest persisting neighbour ("sucked in"), and arriving
-// elements draw themselves out from a neighbour's centre.
-//
-// Strategy: snapshot the visible SVG entities BEFORE clearing, run render(),
-// then diff snapshots to identify exits / enters / persisting. Exits are
-// deep-cloned into a side group (m002-vfx-exits) so they survive the clear
-// and animate independently. Enters are the freshly-rendered elements,
-// styled invisible-then-built.
+// When a link disappears on view change, we don't pop it out of existence —
+// the bright stroke "drains" outward from the middle toward both endpoints,
+// like water flowing back into the devices. We snapshot the link <g>s before
+// the new render(), clone any that won't be in the new render into a side
+// group (m002-vfx-exits), and animate stroke-dasharray on each cloned path
+// so the bright section retreats to the ends and vanishes. No drift, no
+// device/envelope animations — links only, on purpose.
 
-const VFX_EXIT_MS = 460;
-const VFX_ENTER_MS = 560;
-const VFX_ENTER_DELAY_MS = 180;
+const VFX_DRAIN_MS = 620;
 
-const VFX_GROUPS = [
-  { container: 'gStacksBg', selector: '[data-stack-id].m002-stack-envelope', idAttr: 'data-stack-id', kind: 'env' },
-  { container: 'gStacksBg', selector: '[data-stacklink-id]',                  idAttr: 'data-stacklink-id', kind: 'stklnk' },
-  { container: 'gLinks',    selector: '[data-link-id]',                       idAttr: 'data-link-id', kind: 'link' },
-  { container: 'gLinks',    selector: '[data-laglink-id]',                    idAttr: 'data-laglink-id', kind: 'lag' },
-  { container: 'gLinks',    selector: '[data-agg-key]',                       idAttr: 'data-agg-key', kind: 'agg' },
-  { container: 'gDevices',  selector: '[data-device-id]',                     idAttr: 'data-device-id', kind: 'dev' },
-  { container: 'gDevices',  selector: '.m002-stack-collapsed[data-stack-id]', idAttr: 'data-stack-id', kind: 'stkco' },
+const VFX_LINK_GROUPS = [
+  { container: 'gLinks',    selector: '[data-link-id]',     idAttr: 'data-link-id' },
+  { container: 'gLinks',    selector: '[data-laglink-id]',  idAttr: 'data-laglink-id' },
+  { container: 'gLinks',    selector: '[data-agg-key]',     idAttr: 'data-agg-key' },
+  { container: 'gStacksBg', selector: '[data-stacklink-id]', idAttr: 'data-stacklink-id' },
 ];
 
-function vfxEaseInCubic(t) { return t * t * t; }
-function vfxEaseOutCubic(t) { return 1 - Math.pow(1 - t, 3); }
+function vfxEaseInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
-function vfxElCenterWorld(el) {
-  let bb;
-  try { bb = el.getBBox(); } catch (_) { return null; }
-  if (!bb || (bb.width === 0 && bb.height === 0)) return null;
-  const t = el.transform?.baseVal?.consolidate?.();
-  const m = t ? t.matrix : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-  const cx = bb.x + bb.width / 2;
-  const cy = bb.y + bb.height / 2;
-  return { x: m.a * cx + m.c * cy + m.e, y: m.b * cx + m.d * cy + m.f };
-}
-
-function vfxSnapshot(s) {
+function vfxLinkSnapshot(s) {
   const map = new Map();
-  for (const grp of VFX_GROUPS) {
+  for (const grp of VFX_LINK_GROUPS) {
     const root = s[grp.container];
     if (!root) continue;
     root.querySelectorAll(grp.selector).forEach((el) => {
       const id = el.getAttribute(grp.idAttr);
       if (!id) return;
-      const center = vfxElCenterWorld(el);
-      if (!center) return;
-      map.set(grp.kind + ':' + id, { kind: grp.kind, id, el, center });
+      map.set(grp.idAttr + ':' + id, el);
     });
   }
   return map;
 }
 
-function vfxNearest(point, candidates) {
-  let best = null;
-  let bestD = Infinity;
-  for (const c of candidates) {
-    const dx = c.center.x - point.x;
-    const dy = c.center.y - point.y;
-    const d = dx * dx + dy * dy;
-    if (d < bestD) { bestD = d; best = c; }
-  }
-  return best;
-}
-
-function vfxCollectAnimatable(rootEl) {
+function vfxCollectStrokes(rootEl) {
+  // Every stroke-bearing shape inside the cloned link <g>. Each gets its own
+  // length so the drain proportions are correct per-segment (a link <g> can
+  // contain a base path, VLAN stripes, the LAG railroad lines, etc.).
   const shapes = [];
-  const fills = [];
-  const texts = [];
-  const isShape = (tag) => /^(path|line|rect|polyline|polygon|circle|ellipse)$/i.test(tag);
-  const all = [];
-  if (isShape(rootEl.tagName)) all.push(rootEl);
-  rootEl.querySelectorAll('path, line, rect, polyline, polygon, circle, ellipse').forEach((el) => all.push(el));
-  for (const el of all) {
+  rootEl.querySelectorAll('path, line, polyline, polygon').forEach((el) => {
     let len = 0;
     try { if (typeof el.getTotalLength === 'function') len = el.getTotalLength(); } catch (_) { len = 0; }
     if (!len) {
       const tag = el.tagName.toLowerCase();
-      if (tag === 'rect') {
-        const w = parseFloat(el.getAttribute('width')) || 0;
-        const h = parseFloat(el.getAttribute('height')) || 0;
-        len = 2 * (w + h);
-      } else if (tag === 'line') {
+      if (tag === 'line') {
         const x1 = parseFloat(el.getAttribute('x1')) || 0;
         const y1 = parseFloat(el.getAttribute('y1')) || 0;
         const x2 = parseFloat(el.getAttribute('x2')) || 0;
         const y2 = parseFloat(el.getAttribute('y2')) || 0;
         len = Math.hypot(x2 - x1, y2 - y1);
-      } else if (tag === 'circle') {
-        const r = parseFloat(el.getAttribute('r')) || 0;
-        len = 2 * Math.PI * r;
-      } else if (tag === 'ellipse') {
-        const rx = parseFloat(el.getAttribute('rx')) || 0;
-        const ry = parseFloat(el.getAttribute('ry')) || 0;
-        len = Math.PI * (3 * (rx + ry) - Math.sqrt((3 * rx + ry) * (rx + 3 * ry)));
       }
     }
     if (len > 0) shapes.push({ el, len });
-    fills.push(el);
+  });
+  return shapes;
+}
+
+function vfxApplyDrain(shapes, p) {
+  // p in [0..1]: 0 = full bright line, 1 = fully drained.
+  // Pattern `cap gap cap totalLen` paints two end-caps with a growing
+  // middle gap. As p grows, gap → totalLen and caps → 0, so the bright
+  // section recedes from the middle outward toward both ends.
+  for (const sh of shapes) {
+    const L = sh.len;
+    const g = L * p;
+    const c = (L - g) / 2;
+    sh.el.style.strokeDasharray = `${c} ${g} ${c} ${L}`;
+    sh.el.style.strokeDashoffset = '0';
   }
-  rootEl.querySelectorAll('text, tspan').forEach((el) => texts.push(el));
-  return { shapes, fills, texts };
 }
 
-function vfxApplyExitFrame(parts, p) {
-  // p in [0..1]: 0 = full, 1 = erased
-  for (const sh of parts.shapes) {
-    sh.el.style.strokeDasharray = sh.len + 'px';
-    sh.el.style.strokeDashoffset = (sh.len * p) + 'px';
-  }
-  const inv = 1 - p;
-  for (const f of parts.fills) f.style.fillOpacity = inv;
-  for (const tx of parts.texts) tx.style.opacity = inv;
-}
+function vfxDrainLinks(s, doRender) {
+  if (!s.gExits) { doRender(); return; }
+  // Wipe any in-flight clones from a previous switch so we don't stack them.
+  s.gExits.innerHTML = '';
+  const before = vfxLinkSnapshot(s);
+  doRender();
+  const after = vfxLinkSnapshot(s);
 
-function vfxApplyEnterFrame(parts, p) {
-  // p in [0..1]: 0 = invisible, 1 = full
-  for (const sh of parts.shapes) {
-    sh.el.style.strokeDasharray = sh.len + 'px';
-    sh.el.style.strokeDashoffset = (sh.len * (1 - p)) + 'px';
-  }
-  for (const f of parts.fills) f.style.fillOpacity = p;
-  for (const tx of parts.texts) tx.style.opacity = p;
-}
-
-function vfxClearStyles(parts) {
-  for (const sh of parts.shapes) {
-    sh.el.style.strokeDasharray = '';
-    sh.el.style.strokeDashoffset = '';
-  }
-  for (const f of parts.fills) f.style.fillOpacity = '';
-  for (const tx of parts.texts) tx.style.opacity = '';
-}
-
-function vfxComposeTransform(el, dx, dy) {
-  let orig = el.getAttribute('data-vfx-orig-transform');
-  if (orig === null) {
-    orig = el.getAttribute('transform') || '';
-    el.setAttribute('data-vfx-orig-transform', orig);
-  }
-  el.setAttribute('transform', `${orig} translate(${dx} ${dy})`);
-}
-
-function vfxRestoreTransform(el) {
-  const orig = el.getAttribute('data-vfx-orig-transform');
-  if (orig === null) return;
-  if (orig) el.setAttribute('transform', orig);
-  else el.removeAttribute('transform');
-  el.removeAttribute('data-vfx-orig-transform');
-}
-
-function vfxAnimateExit(s, snapshot, persistingCenters) {
-  const exits = [];
-  for (const [key, entry] of snapshot) {
-    if (persistingCenters.has(key)) continue;
-    const clone = entry.el.cloneNode(true);
+  const drains = [];
+  for (const [key, oldEl] of before) {
+    if (after.has(key)) continue;
+    const clone = oldEl.cloneNode(true);
     clone.style.pointerEvents = 'none';
+    // Strip the live flow overlay — its stroke-dashoffset would fight ours.
+    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
-    const target = persistingCenters.size > 0
-      ? vfxNearest(entry.center, persistingCenters.values())
-      : null;
-    const dx = target ? (target.center.x - entry.center.x) * 0.55 : 0;
-    const dy = target ? (target.center.y - entry.center.y) * 0.55 : 0;
-    const parts = vfxCollectAnimatable(clone);
-    exits.push({ clone, parts, dx, dy });
+    const shapes = vfxCollectStrokes(clone);
+    if (shapes.length === 0) { clone.remove(); continue; }
+    drains.push({ clone, shapes });
   }
-  if (exits.length === 0) return;
-  // Paint frame 0 immediately so there's no one-frame flash at full opacity.
-  for (const x of exits) vfxApplyExitFrame(x.parts, 0);
+  if (drains.length === 0) return;
+
+  // Paint frame 0 immediately to lock the bright-full state before rAF.
+  for (const d of drains) vfxApplyDrain(d.shapes, 0);
+
   const start = performance.now();
   function step(now) {
-    const t = Math.min(1, (now - start) / VFX_EXIT_MS);
-    const e = vfxEaseInCubic(t);
-    for (const x of exits) {
-      vfxApplyExitFrame(x.parts, e);
-      vfxComposeTransform(x.clone, x.dx * e, x.dy * e);
-    }
+    const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
+    const e = vfxEaseInOutQuad(t);
+    for (const d of drains) vfxApplyDrain(d.shapes, e);
     if (t < 1) requestAnimationFrame(step);
-    else for (const x of exits) x.clone.remove();
+    else for (const d of drains) d.clone.remove();
   }
   requestAnimationFrame(step);
-}
-
-function vfxAnimateEnter(s, postSnapshot, prevSnapshot) {
-  const persistingCenters = new Map();
-  for (const [key, entry] of postSnapshot) {
-    if (prevSnapshot.has(key)) persistingCenters.set(key, entry);
-  }
-  const enters = [];
-  for (const [key, entry] of postSnapshot) {
-    if (prevSnapshot.has(key)) continue;
-    const target = persistingCenters.size > 0
-      ? vfxNearest(entry.center, persistingCenters.values())
-      : null;
-    const dx = target ? (entry.center.x - target.center.x) * 0.55 : 0;
-    const dy = target ? (entry.center.y - target.center.y) * 0.55 : 0;
-    const parts = vfxCollectAnimatable(entry.el);
-    enters.push({ el: entry.el, parts, dx, dy });
-  }
-  if (enters.length === 0) return;
-  // Hide everything immediately so we don't get a one-frame pop.
-  for (const x of enters) {
-    vfxApplyEnterFrame(x.parts, 0);
-    vfxComposeTransform(x.el, -x.dx, -x.dy);
-  }
-  const startAt = performance.now() + VFX_ENTER_DELAY_MS;
-  function step(now) {
-    if (now < startAt) { requestAnimationFrame(step); return; }
-    const t = Math.min(1, (now - startAt) / VFX_ENTER_MS);
-    const e = vfxEaseOutCubic(t);
-    for (const x of enters) {
-      vfxApplyEnterFrame(x.parts, e);
-      vfxComposeTransform(x.el, -x.dx * (1 - e), -x.dy * (1 - e));
-    }
-    if (t < 1) requestAnimationFrame(step);
-    else for (const x of enters) {
-      vfxClearStyles(x.parts);
-      vfxRestoreTransform(x.el);
-    }
-  }
-  requestAnimationFrame(step);
-}
-
-function vfxAnimatedRender(s, doRender) {
-  if (!s.gExits) { doRender(); return; }
-  // Wipe leftover clones from a still-animating prior switch.
-  s.gExits.innerHTML = '';
-  const before = vfxSnapshot(s);
-  doRender();
-  const after = vfxSnapshot(s);
-  vfxAnimateExit(s, before, after);
-  vfxAnimateEnter(s, after, before);
 }
 
 // =============================================================================
@@ -7178,7 +7048,7 @@ function switchZone(s, zoneId) {
     : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
-  vfxAnimatedRender(s, () => render(s));
+  vfxDrainLinks(s, () => render(s));
   if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
