@@ -7415,19 +7415,29 @@ body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45de
 body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
 /* Hover state in MOD_002: instead of growing (the global default), the
    cursor stands on its tip — the whole bracket frame pivots 45° around
-   the cursor centre, brackets travel as one unit. The pressed (.down)
-   state still shrinks like the global cursor — combined active+down lets
-   the rotated frame "zoom in" too. */
+   the cursor centre, brackets travel as one unit. */
 body.m002-tool-select .cursor.active,
 body.m002-tool-link .cursor.active,
 body.m002-tool-delete .cursor.active{width:30px;height:30px;}
 body.m002-tool-select .cursor.active .cur-bracket,
 body.m002-tool-link .cursor.active .cur-bracket,
 body.m002-tool-delete .cursor.active .cur-bracket{width:7px;height:7px;transform:none;}
-.m002-cursor-frame{position:absolute;inset:0;transition:transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);transform-origin:50% 50%;}
+.m002-cursor-frame{position:absolute;inset:0;transition:transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1),width 0.25s,height 0.25s;transform-origin:50% 50%;}
 body.m002-tool-select .cursor.active .m002-cursor-frame,
 body.m002-tool-link .cursor.active .m002-cursor-frame,
 body.m002-tool-delete .cursor.active .m002-cursor-frame{transform:rotate(45deg);}
+/* Pressed-while-hovering: shrink the rotated cursor like the unrotated one
+   does on a background grab. Higher specificity than the bare .active rule
+   above so it wins; no !important needed. */
+body.m002-tool-select .cursor.active.down,
+body.m002-tool-link .cursor.active.down,
+body.m002-tool-delete .cursor.active.down{width:22px;height:22px;}
+body.m002-tool-select .cursor.active.down .cur-bracket,
+body.m002-tool-link .cursor.active.down .cur-bracket,
+body.m002-tool-delete .cursor.active.down .cur-bracket{width:5px;height:5px;}
+body.m002-tool-select .cursor.active.down .m002-cursor-frame,
+body.m002-tool-link .cursor.active.down .m002-cursor-frame,
+body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45deg) scale(0.8);}
 `;
 
 // =============================================================================
