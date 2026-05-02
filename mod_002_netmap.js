@@ -1597,52 +1597,58 @@ function buildDOM(s) {
     if (!pill) return;
     s.layerBar.querySelectorAll('.m002-layer-pill').forEach((p) => p.classList.toggle('active', p === pill));
     const prev = s.activeLayer;
-    s.activeLayer = pill.dataset.layer;
-    s.host.setAttribute('data-active-layer', s.activeLayer);
-    // Persist on the map's view block so a tab change / reload returns
-    // the user to the layer they were on.
-    if (!s.view || typeof s.view !== 'object') s.view = { ...DEFAULT_VIEW };
-    s.view.activeLayer = s.activeLayer;
-    schedSave(s);
-    // Routing-layer ergonomics:
-    //   - L3 stacks (VIPs or L3 members) auto-EXPAND so the user can see
-    //     the individual L3 entities inside them.
-    //   - Pure-L2 stacks auto-COLLAPSE — they're transit, no L3 to show.
-    // We remember which stacks we touched so leaving the layer restores
-    // the user's prior layout without clobbering manual changes.
-    if (s.activeLayer === 'routing' && prev !== 'routing') {
-      const collapsedByLayer = [];
-      const expandedByLayer = [];
-      (s.stacks || []).forEach((st) => {
-        const isL3 = stackHasVip(st) || st.members.some((mid) => {
-          const m = s.devices.find((d) => d.id === mid);
-          return m && isL3Device(m);
+    // Defer the state + attribute change into the vfxAnimateView callback
+    // so its `before` snapshot still sees the OLD active-layer CSS context.
+    // That's required for the persisting-element overlay-drain to freeze
+    // the pre-transition look.
+    vfxAnimateView(s, () => {
+      s.activeLayer = pill.dataset.layer;
+      s.host.setAttribute('data-active-layer', s.activeLayer);
+      // Persist on the map's view block so a tab change / reload returns
+      // the user to the layer they were on.
+      if (!s.view || typeof s.view !== 'object') s.view = { ...DEFAULT_VIEW };
+      s.view.activeLayer = s.activeLayer;
+      schedSave(s);
+      // Routing-layer ergonomics:
+      //   - L3 stacks (VIPs or L3 members) auto-EXPAND so the user can see
+      //     the individual L3 entities inside them.
+      //   - Pure-L2 stacks auto-COLLAPSE — they're transit, no L3 to show.
+      // We remember which stacks we touched so leaving the layer restores
+      // the user's prior layout without clobbering manual changes.
+      if (s.activeLayer === 'routing' && prev !== 'routing') {
+        const collapsedByLayer = [];
+        const expandedByLayer = [];
+        (s.stacks || []).forEach((st) => {
+          const isL3 = stackHasVip(st) || st.members.some((mid) => {
+            const m = s.devices.find((d) => d.id === mid);
+            return m && isL3Device(m);
+          });
+          if (isL3 && !st.expanded) {
+            st.expanded = true;
+            expandedByLayer.push(st.id);
+          } else if (!isL3 && st.expanded) {
+            st.expanded = false;
+            collapsedByLayer.push(st.id);
+          }
         });
-        if (isL3 && !st.expanded) {
-          st.expanded = true;
-          expandedByLayer.push(st.id);
-        } else if (!isL3 && st.expanded) {
-          st.expanded = false;
-          collapsedByLayer.push(st.id);
-        }
-      });
-      s._routingAutoCollapsed = collapsedByLayer;
-      s._routingAutoExpanded = expandedByLayer;
-    } else if (prev === 'routing' && s.activeLayer !== 'routing') {
-      // Leaving routing — restore stacks we touched on entry to their prior
-      // states.
-      (s._routingAutoCollapsed || []).forEach((id) => {
-        const st = (s.stacks || []).find((x) => x.id === id);
-        if (st) st.expanded = true;
-      });
-      (s._routingAutoExpanded || []).forEach((id) => {
-        const st = (s.stacks || []).find((x) => x.id === id);
-        if (st) st.expanded = false;
-      });
-      s._routingAutoCollapsed = null;
-      s._routingAutoExpanded = null;
-    }
-    vfxAnimateView(s, () => render(s));
+        s._routingAutoCollapsed = collapsedByLayer;
+        s._routingAutoExpanded = expandedByLayer;
+      } else if (prev === 'routing' && s.activeLayer !== 'routing') {
+        // Leaving routing — restore stacks we touched on entry to their prior
+        // states.
+        (s._routingAutoCollapsed || []).forEach((id) => {
+          const st = (s.stacks || []).find((x) => x.id === id);
+          if (st) st.expanded = true;
+        });
+        (s._routingAutoExpanded || []).forEach((id) => {
+          const st = (s.stacks || []).find((x) => x.id === id);
+          if (st) st.expanded = false;
+        });
+        s._routingAutoCollapsed = null;
+        s._routingAutoExpanded = null;
+      }
+      render(s);
+    });
   });
   s.activeLayer = 'physical';
   s.host.setAttribute('data-active-layer', s.activeLayer);
@@ -6189,9 +6195,19 @@ function vfxSnapshot(s) {
       // Capture the world centre NOW — `before` snapshot's els get detached by
       // render() and getBBox returns nothing on detached SVG nodes.
       const center = vfxBBoxCenterWorld(el);
+      // Freeze a digest of the visual state for layer-sensitive elements
+      // (data-l3 means the host's data-active-layer drives the look). Used
+      // to detect persisting elements whose appearance crossed the layer
+      // boundary so we can overlay-drain the OLD look on top of the NEW
+      // dim render — bright "drains" to reveal the grey skeleton.
+      let frozen = null;
+      if (el.hasAttribute('data-l3')) {
+        const cs = window.getComputedStyle(el);
+        frozen = `${cs.opacity}|${cs.filter}`;
+      }
       // Key includes the container so a stack envelope and a stack icon —
       // both keyed by data-stack-id but in different groups — don't collide.
-      map.set(grp.container + '|' + grp.idAttr + '|' + id, { el, center });
+      map.set(grp.container + '|' + grp.idAttr + '|' + id, { el, center, frozen });
     });
   }
   return map;
@@ -6376,6 +6392,28 @@ function vfxAnimateView(s, doRender, anchor) {
     clone.style.pointerEvents = 'none';
     vfxSuppressFilters(clone);
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
+    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
+    s.gExits.appendChild(clone);
+    const parts = vfxCollectAnimatables(clone, drainAnchor);
+    if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
+    drains.push({ clone, parts });
+  }
+
+  // PERSISTING with changed look (e.g. layer flip dimmed a non-L3 device) —
+  // overlay-drain the OLD bright clone on top of the NEW dim render. As the
+  // clone drains, the underlying dim element progressively shows through.
+  for (const [key, oldEntry] of before) {
+    const newEntry = after.get(key);
+    if (!newEntry) continue;
+    if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
+    const clone = oldEntry.el.cloneNode(true);
+    clone.style.pointerEvents = 'none';
+    vfxSuppressFilters(clone);
+    // Freeze the OLD computed opacity inline so the clone holds its
+    // pre-transition brightness even though the host now broadcasts the
+    // new layer's CSS rules.
+    const oldOpacity = (oldEntry.frozen || '').split('|')[0];
+    if (oldOpacity) clone.style.opacity = oldOpacity;
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
     const parts = vfxCollectAnimatables(clone, drainAnchor);
