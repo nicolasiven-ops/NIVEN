@@ -6446,7 +6446,7 @@ const VFX_PULSE_SEGS_MAX = 4;
 const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
 const VFX_PULSE_SEG_CELLS_MAX = 2;
 const VFX_PULSE_FILL_MS = 620;        // tendril draw-in duration
-const VFX_PULSE_FADE_MS = 620;        // tendril fade-out duration
+const VFX_PULSE_DRAIN_MS = 620;       // tendril drain-out duration (origin → tip)
 const VFX_PULSE_STAGGER_MS = 220;     // max random per-tendril start delay
 
 function vfxGridPulse(s, wx, wy, color) {
@@ -6556,7 +6556,7 @@ function vfxGridPulse(s, wx, wy, color) {
   }
   layer.appendChild(group);
 
-  const totalMs = VFX_PULSE_STAGGER_MS + VFX_PULSE_FILL_MS + VFX_PULSE_FADE_MS;
+  const totalMs = VFX_PULSE_STAGGER_MS + VFX_PULSE_FILL_MS + VFX_PULSE_DRAIN_MS;
   const start = performance.now();
 
   function step(now) {
@@ -6564,27 +6564,34 @@ function vfxGridPulse(s, wx, wy, color) {
     if (t >= totalMs) { group.remove(); return; }
     for (const tn of tendrils) {
       const local = t - tn.delay;
+      const L = tn.totalLen;
       if (local < 0) {
         tn.el.style.opacity = '0';
-        tn.el.style.strokeDasharray = `0 ${tn.totalLen}`;
+        tn.el.style.strokeDasharray = `0 ${L}`;
         continue;
       }
-      // Head extends from the element outward — dash grows from origin.
-      const fillP = Math.min(1, local / VFX_PULSE_FILL_MS);
-      const k = tn.totalLen * fillP;
-      tn.el.style.strokeDasharray = `${k} ${tn.totalLen}`;
-      tn.el.style.strokeDashoffset = '0';
-      // Opacity ramps up during fill, then decays during fade, scaled by
-      // the per-tendril peak so different tendrils settle at different
-      // brightness and the overall pulse feels less uniform.
-      let opacity;
       if (local < VFX_PULSE_FILL_MS) {
-        opacity = fillP * tn.peak;
+        // Build: head extends from element-side origin out to the tip.
+        // Visible portion is [0, k], so a single dash of length k.
+        const fillP = local / VFX_PULSE_FILL_MS;
+        const k = L * fillP;
+        tn.el.style.strokeDasharray = `${k} ${L}`;
+        tn.el.style.strokeDashoffset = '0';
+        tn.el.style.opacity = String(fillP * tn.peak);
+      } else if (local < VFX_PULSE_FILL_MS + VFX_PULSE_DRAIN_MS) {
+        // Drain: bright recedes FROM the element-side origin TOWARD the
+        // tip. Visible portion is [drainP * L, L]. Dasharray pattern is
+        // (0-dash, gap to start of visible, dash to end, big gap) so the
+        // first emitted segment is the leading gap.
+        const drainP = (local - VFX_PULSE_FILL_MS) / VFX_PULSE_DRAIN_MS;
+        const gap = L * drainP;
+        const dash = L * (1 - drainP);
+        tn.el.style.strokeDasharray = `0 ${gap} ${dash} ${L * 2}`;
+        tn.el.style.strokeDashoffset = '0';
+        tn.el.style.opacity = String(tn.peak);
       } else {
-        const fadeP = Math.min(1, (local - VFX_PULSE_FILL_MS) / VFX_PULSE_FADE_MS);
-        opacity = (1 - fadeP) * tn.peak;
+        tn.el.style.opacity = '0';
       }
-      tn.el.style.opacity = String(opacity);
     }
     requestAnimationFrame(step);
   }
