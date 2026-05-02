@@ -1698,22 +1698,24 @@ function ensureStyles() {
 }
 
 // =============================================================================
-// Drag lift + inertia — picks the dragged element up off the board (small
-// scale-up, deeper shadow) and lets it wobble around the cursor with a spring
-// so quick side-to-side swings feel fluid instead of glued. The rAF loop owns
-// the dragged element's transform attribute for the duration of the gesture
-// (and a brief settle animation afterwards), so every other code path that
-// would normally write `translate(x y)` to that element is suppressed via
-// `el.dataset.m002LiftLock`.
+// Drag lift + positional inertia — picks the dragged element up off the board
+// (scale-up, deeper shadow) and lets its visual position lag the cursor like
+// a soft-spring tether. Quick swings make the body trail behind the pointer;
+// when the pointer stops, the body coasts past the cursor and floats back to
+// rest. The element stays upright the whole time — no rotation. The rAF tick
+// owns the dragged element's transform attribute (and its lift lock keeps
+// other writers from clobbering it mid-frame).
 // =============================================================================
-const DRAG_LIFT_SCALE = 1.07;
-const DRAG_LIFT_TILT_FACTOR = 7;     // px/ms of pointer velocity → degrees
-const DRAG_LIFT_TILT_MAX = 11;       // clamp degrees so it stays subtle
-const DRAG_LIFT_SPRING_STIFF = 0.18; // 0..1 — pull toward target tilt
-const DRAG_LIFT_SPRING_DAMP = 0.55;  // 0..1 — bleed velocity each frame
-const DRAG_LIFT_TARGET_DECAY = 0.82; // target tilt fades when pointer stalls
+const DRAG_LIFT_SCALE = 1.10;
 const DRAG_LIFT_SCALE_LERP = 0.22;
-const DRAG_LIFT_END_EPS = 0.0015;    // stop animating once inside this band
+const DRAG_LIFT_LAG_FACTOR = 24;     // ms — multiplies smoothed cursor velocity into target offset
+const DRAG_LIFT_LAG_MAX = 26;        // world units — cap so it never trails out of arm's reach
+const DRAG_LIFT_VEL_SMOOTH = 0.30;   // EMA factor for cursor velocity (0..1, higher = snappier)
+const DRAG_LIFT_VEL_DECAY = 0.82;    // smoothed-velocity decay each frame when pointer is idle
+const DRAG_LIFT_SPRING_STIFF = 0.16; // pull offset toward target offset
+const DRAG_LIFT_SPRING_DAMP = 0.32;  // damping factor — low for that floaty multi-bob settle
+const DRAG_LIFT_END_EPS = 0.0015;    // stop animating once inside this scale band
+const DRAG_LIFT_OFFSET_EPS = 0.08;   // ...and this offset/velocity band
 
 function dragLiftElement(s) {
   if (!s.dragVisual) return null;
@@ -1743,7 +1745,9 @@ function applyDragLiftTransform(s) {
   const el = dragLiftElement(s);
   const pos = dragLiftPosition(s);
   if (!el || !pos) return;
-  el.setAttribute('transform', `translate(${pos.x} ${pos.y}) rotate(${dv.tilt.toFixed(3)}) scale(${dv.scale.toFixed(4)})`);
+  const x = pos.x + dv.offX;
+  const y = pos.y + dv.offY;
+  el.setAttribute('transform', `translate(${x.toFixed(3)} ${y.toFixed(3)}) scale(${dv.scale.toFixed(4)})`);
 }
 
 function startDragLift(s, kind, id) {
@@ -1757,10 +1761,14 @@ function startDragLift(s, kind, id) {
     kind, id,
     scale: 1,
     scaleTarget: DRAG_LIFT_SCALE,
-    tilt: 0,
-    tiltVel: 0,
-    targetTilt: 0,
-    lastClientX: null,
+    // Visual offset (world units) from the logical/cursor anchor — the body
+    // lags the cursor by `(offX, offY)` while keeping links rooted at the
+    // logical centre, so the trail effect doesn't drag the wiring with it.
+    offX: 0, offY: 0,
+    offVX: 0, offVY: 0,
+    targetOffX: 0, targetOffY: 0,
+    smoothVX: 0, smoothVY: 0,        // EMA of cursor velocity in world units / ms
+    lastClientX: null, lastClientY: null,
     lastTime: performance.now(),
     ending: false,
     raf: null,
@@ -1773,20 +1781,45 @@ function startDragLift(s, kind, id) {
   const tick = () => {
     const dv = s.dragVisual;
     if (!dv) return;
-    // Scale lerp
+    // Scale lerp toward current target (1.10 while held, 1.0 once ending).
     dv.scale += (dv.scaleTarget - dv.scale) * DRAG_LIFT_SCALE_LERP;
-    // Tilt spring
-    const accel = (dv.targetTilt - dv.tilt) * DRAG_LIFT_SPRING_STIFF - dv.tiltVel * DRAG_LIFT_SPRING_DAMP;
-    dv.tiltVel += accel;
-    dv.tilt += dv.tiltVel;
-    // Target tilt decays toward 0 each frame so a still pointer settles.
-    dv.targetTilt *= DRAG_LIFT_TARGET_DECAY;
-    if (Math.abs(dv.targetTilt) < 0.01) dv.targetTilt = 0;
+    // Smoothed cursor velocity decays when the pointer stops moving so the
+    // target offset eases back to 0 and the spring carries the body home.
+    dv.smoothVX *= DRAG_LIFT_VEL_DECAY;
+    dv.smoothVY *= DRAG_LIFT_VEL_DECAY;
+    if (dv.ending) {
+      dv.targetOffX = 0;
+      dv.targetOffY = 0;
+    } else {
+      // Re-derive target each frame from smoothed velocity so an idle pointer
+      // pulls the offset back to 0 even without a fresh mousemove.
+      let tx = -dv.smoothVX * DRAG_LIFT_LAG_FACTOR;
+      let ty = -dv.smoothVY * DRAG_LIFT_LAG_FACTOR;
+      const mag = Math.hypot(tx, ty);
+      if (mag > DRAG_LIFT_LAG_MAX) {
+        const f = DRAG_LIFT_LAG_MAX / mag;
+        tx *= f; ty *= f;
+      }
+      dv.targetOffX = tx;
+      dv.targetOffY = ty;
+    }
+    // 2D spring on offset — under-damped so the body coasts past the cursor
+    // when motion stops, then floats back through 0 with one or two visible
+    // bobs before settling. That's the "leicht um den Mauszeiger floaten"
+    // behaviour we're after.
+    const ax = (dv.targetOffX - dv.offX) * DRAG_LIFT_SPRING_STIFF - dv.offVX * DRAG_LIFT_SPRING_DAMP;
+    const ay = (dv.targetOffY - dv.offY) * DRAG_LIFT_SPRING_STIFF - dv.offVY * DRAG_LIFT_SPRING_DAMP;
+    dv.offVX += ax;
+    dv.offVY += ay;
+    dv.offX += dv.offVX;
+    dv.offY += dv.offVY;
     applyDragLiftTransform(s);
     const settled = dv.ending
       && Math.abs(dv.scaleTarget - dv.scale) < DRAG_LIFT_END_EPS
-      && Math.abs(dv.tilt) < 0.05
-      && Math.abs(dv.tiltVel) < 0.05;
+      && Math.abs(dv.offX) < DRAG_LIFT_OFFSET_EPS
+      && Math.abs(dv.offY) < DRAG_LIFT_OFFSET_EPS
+      && Math.abs(dv.offVX) < DRAG_LIFT_OFFSET_EPS
+      && Math.abs(dv.offVY) < DRAG_LIFT_OFFSET_EPS;
     if (settled) {
       const el2 = dragLiftElement(s);
       const pos = dragLiftPosition(s);
@@ -1803,17 +1836,23 @@ function startDragLift(s, kind, id) {
   s.dragVisual.raf = requestAnimationFrame(tick);
 }
 
-function updateDragLiftFromPointer(s, clientX) {
+function updateDragLiftFromPointer(s, clientX, clientY) {
   const dv = s.dragVisual;
   if (!dv || dv.ending) return;
   const now = performance.now();
   if (dv.lastClientX != null) {
     const dt = Math.max(1, now - dv.lastTime);
-    const vx = (clientX - dv.lastClientX) / dt; // px/ms
-    const target = -vx * DRAG_LIFT_TILT_FACTOR;
-    dv.targetTilt = Math.max(-DRAG_LIFT_TILT_MAX, Math.min(DRAG_LIFT_TILT_MAX, target));
+    // Cursor velocity in world units / ms — divide by zoom so a 12-pixel lag
+    // looks the same regardless of how zoomed-in the canvas is.
+    const zoom = s.view?.zoom || 1;
+    const ivx = (clientX - dv.lastClientX) / dt / zoom;
+    const ivy = (clientY - dv.lastClientY) / dt / zoom;
+    const a = DRAG_LIFT_VEL_SMOOTH;
+    dv.smoothVX = dv.smoothVX * (1 - a) + ivx * a;
+    dv.smoothVY = dv.smoothVY * (1 - a) + ivy * a;
   }
   dv.lastClientX = clientX;
+  dv.lastClientY = clientY;
   dv.lastTime = now;
 }
 
@@ -1822,7 +1861,8 @@ function endDragLift(s) {
   if (!dv) return;
   dv.ending = true;
   dv.scaleTarget = 1;
-  dv.targetTilt = 0;
+  dv.targetOffX = 0;
+  dv.targetOffY = 0;
 }
 
 // Aligns a freshly-dropped device or stack onto the nearest grid cell when
@@ -2188,7 +2228,7 @@ function bindBoard(s) {
     // re-write the dragged element's transform so the rAF settle never lags
     // a frame behind the cursor.
     if (s.dragVisual && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
-      updateDragLiftFromPointer(s, e.clientX);
+      updateDragLiftFromPointer(s, e.clientX, e.clientY);
       applyDragLiftTransform(s);
     }
   };
@@ -7343,7 +7383,7 @@ const MOD002_CSS = `
 .m002-device{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-device:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-device.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
-.m002-device.m002-lifted{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 22px var(--accent)) drop-shadow(0 7px 14px rgba(0,0,0,.55));}
+.m002-device.m002-lifted{filter:drop-shadow(0 0 10px var(--accent)) drop-shadow(0 0 28px var(--accent)) drop-shadow(0 14px 26px rgba(0,0,0,.7)) drop-shadow(0 4px 6px rgba(0,0,0,.5));}
 .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.2;}
 .m002-device.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-device.m002-link-pending .m002-dev-bg{stroke-dasharray:4 3;}
@@ -7375,7 +7415,7 @@ const MOD002_CSS = `
 .m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-stack-collapsed.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
-.m002-stack-collapsed.m002-lifted{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 22px var(--accent)) drop-shadow(0 7px 14px rgba(0,0,0,.55));}
+.m002-stack-collapsed.m002-lifted{filter:drop-shadow(0 0 10px var(--accent)) drop-shadow(0 0 28px var(--accent)) drop-shadow(0 14px 26px rgba(0,0,0,.7)) drop-shadow(0 4px 6px rgba(0,0,0,.5));}
 .m002-stack-collapsed.m002-stack-pending .m002-dev-bg{stroke-dasharray:4 3;}
 .m002-stack-ghost{fill:#0a0a10;stroke:var(--accent);stroke-width:1;opacity:.55;}
 .m002-stack-collapsed .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.4;}
