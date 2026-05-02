@@ -1702,10 +1702,24 @@ function bindBoard(s) {
   const svg = s.svg;
 
   // Custom-cursor hover state. The N.IVEN cursor's .active class scales the
-  // brackets up — we trigger it on every interactive SVG target inside the
-  // module so the cursor itself signals "this is clickable" instead of the
-  // OS swapping in a hand or move glyph.
+  // brackets up by default — in MOD_002 we instead pivot the whole bracket
+  // frame 45° around the cursor centre, "standing on its tip". To rotate
+  // them as one unit (instead of each bracket spinning in place), wrap the
+  // bracket spans in a frame div on mount and restore on unmount.
   const cursorEl = document.querySelector('.cursor');
+  if (cursorEl && !cursorEl.querySelector('.m002-cursor-frame')) {
+    const frame = document.createElement('div');
+    frame.className = 'm002-cursor-frame';
+    while (cursorEl.firstChild) frame.appendChild(cursorEl.firstChild);
+    cursorEl.appendChild(frame);
+    s.cleanups.push(() => {
+      const f = cursorEl.querySelector('.m002-cursor-frame');
+      if (f) {
+        while (f.firstChild) cursorEl.appendChild(f.firstChild);
+        f.remove();
+      }
+    });
+  }
   const interactiveSel = '[data-device-id], [data-stack-id], [data-link-id], [data-laglink-id], [data-agg-key], .m002-link-hit, .m002-stack-collapsed, .m002-stack-envelope';
   const onHoverIn = (e) => {
     if (!cursorEl) return;
@@ -7390,17 +7404,18 @@ body.m002-tool-delete .cursor::after{content:'';position:absolute;left:50%;top:5
 body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45deg);}
 body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
 /* Hover state in MOD_002: instead of growing (the global default), the
-   cursor stands on its tip — brackets keep their size but pivot 45°
-   around the cursor centre. Tighter, more deliberate feel. */
+   cursor stands on its tip — the whole bracket frame pivots 45° around
+   the cursor centre, brackets travel as one unit. */
 body.m002-tool-select .cursor.active,
 body.m002-tool-link .cursor.active,
 body.m002-tool-delete .cursor.active{width:30px !important;height:30px !important;}
 body.m002-tool-select .cursor.active .cur-bracket,
 body.m002-tool-link .cursor.active .cur-bracket,
-body.m002-tool-delete .cursor.active .cur-bracket{width:7px !important;height:7px !important;transform-origin:15px 15px;transform:rotate(45deg);}
-body.m002-tool-select .cur-bracket,
-body.m002-tool-link .cur-bracket,
-body.m002-tool-delete .cur-bracket{transition:width 0.25s,height 0.25s,border-color 0.25s,transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1) !important;}
+body.m002-tool-delete .cursor.active .cur-bracket{width:7px !important;height:7px !important;transform:none !important;}
+.m002-cursor-frame{position:absolute;inset:0;transition:transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);transform-origin:50% 50%;}
+body.m002-tool-select .cursor.active .m002-cursor-frame,
+body.m002-tool-link .cursor.active .m002-cursor-frame,
+body.m002-tool-delete .cursor.active .m002-cursor-frame{transform:rotate(45deg);}
 `;
 
 // =============================================================================
