@@ -2744,6 +2744,8 @@ function drawDevice(s, dev) {
   const cls = ['m002-device'];
   if (isReference(dev)) cls.push('m002-device-ref');
   if (peer) cls.push('m002-device-coupled');
+  const memberStack = findStack(s, dev.id);
+  if (memberStack && !isStackCollapsed(s, memberStack)) cls.push('m002-stack-member');
   g.setAttribute('class', cls.join(' '));
   g.setAttribute('data-device-id', dev.id);
   // Layer-aware data hooks. CSS dims data-l3="false" devices in the routing
@@ -3447,6 +3449,8 @@ function drawStackEnvelope(s, stack) {
   const env = document.createElementNS(SVG_NS, 'g');
   env.setAttribute('class', 'm002-stack-envelope');
   env.setAttribute('data-stack-id', stack.id);
+  const t = typeOf(stackTypeOf(s, stack));
+  if (t?.accent) env.style.setProperty('--accent', t.accent);
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
     <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
@@ -7422,10 +7426,17 @@ const MOD002_CSS = `
 .m002-stack-collapsed.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
-.m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:#3a3a44;stroke-width:1;stroke-dasharray:5 4;}
-.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke:#9aa0a8;stroke-width:1.4;filter:drop-shadow(0 0 3px rgba(154,160,168,0.55)) drop-shadow(0 0 9px rgba(154,160,168,0.35));}
-.m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#9aa0a8;}
-.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#5a5f6e;letter-spacing:1.5px;}
+.m002-stack-envelope{filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 10px var(--accent));}
+.m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:var(--accent);stroke-width:1.2;stroke-dasharray:5 4;opacity:.85;}
+.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 16px var(--accent));}
+.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke-width:1.6;opacity:1;}
+.m002-stack-envelope.m002-selected .m002-stack-env-label{fill:var(--accent);}
+.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.7;}
+.m002-device.m002-stack-member{filter:none;}
+.m002-device.m002-stack-member:hover{filter:drop-shadow(0 0 2px rgba(245,243,255,.45)) drop-shadow(0 0 7px rgba(245,243,255,.25));}
+.m002-device.m002-stack-member.m002-selected{filter:drop-shadow(0 0 3px rgba(245,243,255,.6)) drop-shadow(0 0 10px rgba(245,243,255,.35));}
+.m002-device.m002-stack-member .m002-dev-bg{stroke:rgba(245,243,255,.45);}
+.m002-device.m002-stack-member .m002-dev-type{fill:rgba(245,243,255,.65);}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
 .m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
 .m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#9aa0a8;letter-spacing:1px;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
