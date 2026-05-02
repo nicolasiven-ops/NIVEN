@@ -2016,7 +2016,10 @@ function bindBoard(s) {
       if (isReference(dev)) {
         snapshot(s);
         const w = clientToWorld(s, e.clientX, e.clientY);
-        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, moved: false };
+        // recenterPending stays false: JUMPs hop on click (no auto-recenter
+        // semantics), but the flag still needs to read `false` after a real
+        // drag so snap-on-drop in onUp accepts it as a "real drag".
+        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, recenterPending: false, moved: false };
         s.host.classList.add('m002-dragging');
         e.preventDefault();
         return;
