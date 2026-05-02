@@ -6315,7 +6315,7 @@ function vfxCollectAnimatables(rootEl, anchor, phase) {
   return { shapes, fades };
 }
 
-function vfxApplyDrain(parts, p) {
+function vfxApplyDrain(parts, p, phase) {
   // p in [0..1]: 0 = full bright, 1 = fully drained.
   // The dash patterns place a single bright section anchored at the
   // destination so the bright recedes TOWARD the anchor:
@@ -6323,6 +6323,11 @@ function vfxApplyDrain(parts, p) {
   //   - 'head':     dash from 0 to k (bright clings to path start)
   //   - 'tail':     dash from L-k to L (bright clings to path end)
   //   - 'centered': dash of length k centered on perimeter offset .offset
+  // For phase === 'build' the wrapper opacity owns the fade (and the glow
+  // halo fades with it), so we skip the inline fill/text opacity work to
+  // avoid double-fading. For phase === 'drain' we still want the fills/
+  // texts to vanish on top of the dasharray drain so the clone fully
+  // disappears before it's removed.
   for (const sh of parts.shapes) {
     const L = sh.len;
     const k = L * (1 - p); // surviving bright length
@@ -6362,13 +6367,15 @@ function vfxApplyDrain(parts, p) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  const inv = 1 - p;
-  for (const f of parts.fades) f.el.style[f.prop] = inv;
+  if (phase !== 'build') {
+    const inv = 1 - p;
+    for (const f of parts.fades) f.el.style[f.prop] = inv;
+  }
 }
 
 function vfxSuppressFilters(el) {
-  // Glow off on the wrapper + every SVG descendant so neither exit clones
-  // nor builds-in-progress carry a halo before the wall is even drawn.
+  // Glow off on the wrapper + every SVG descendant so exit clones don't
+  // carry a halo while their stroke drains away (and read as a "flash").
   el.style.filter = 'none';
   el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = 'none'; });
 }
@@ -6376,6 +6383,22 @@ function vfxSuppressFilters(el) {
 function vfxRestoreFilters(el) {
   el.style.filter = '';
   el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = ''; });
+}
+
+// For builds: capture the natural CSS opacity as the fade target, then drop
+// the wrapper to opacity 0 inline. The rAF step ramps it back up to target
+// over the same window the dasharray builds in. The drop-shadow halo is
+// part of the wrapper's render output so it scales with this opacity —
+// glow now fades in instead of popping at the end.
+function vfxStartBuildFade(el) {
+  const cs = window.getComputedStyle(el);
+  const target = parseFloat(cs.opacity || '1');
+  el.style.opacity = '0';
+  return Number.isFinite(target) ? target : 1;
+}
+
+function vfxClearBuildFade(el) {
+  el.style.opacity = '';
 }
 
 function vfxResetInlineParts(parts) {
@@ -6428,19 +6451,17 @@ function vfxAnimateView(s, doRender, anchor) {
     drains.push({ clone, parts });
   }
 
-  // BUILDS — fresh element in its real container, build it up from empty,
-  // restore CSS-driven styles at the end so the glow returns naturally.
+  // BUILDS — fresh element in its real container, build it up from empty.
+  // Wrapper opacity rides 0 → CSS-target so the drop-shadow halo fades in
+  // along with the wall (no end-of-animation glow pop).
   const builds = [];
   for (const [key, entry] of after) {
     if (before.has(key)) continue;
     const newEl = entry.el;
-    vfxSuppressFilters(newEl);
     const parts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
-    if (parts.shapes.length === 0 && parts.fades.length === 0) {
-      vfxRestoreFilters(newEl);
-      continue;
-    }
-    builds.push({ el: newEl, parts });
+    if (parts.shapes.length === 0 && parts.fades.length === 0) continue;
+    const target = vfxStartBuildFade(newEl);
+    builds.push({ el: newEl, parts, target });
   }
 
   // PERSISTING with changed look (e.g. layer flip dimmed a non-L3 device, or
@@ -6471,16 +6492,13 @@ function vfxAnimateView(s, doRender, anchor) {
     }
 
     // Build up the NEW look on the underlying real element. Same machinery
-    // as fresh-entry builds — suppress filters, frame 0 = empty, animate to
-    // full, then restore CSS so the natural look (incl. any new dim/glow)
-    // takes over.
+    // as fresh-entry builds — wrapper opacity 0 → target, glow naturally
+    // scales with it, no filter suppression / restore pop at the end.
     const newEl = newEntry.el;
-    vfxSuppressFilters(newEl);
     const buildParts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (buildParts.shapes.length > 0 || buildParts.fades.length > 0) {
-      builds.push({ el: newEl, parts: buildParts });
-    } else {
-      vfxRestoreFilters(newEl);
+      const target = vfxStartBuildFade(newEl);
+      builds.push({ el: newEl, parts: buildParts, target });
     }
   }
 
@@ -6488,20 +6506,23 @@ function vfxAnimateView(s, doRender, anchor) {
 
   // Paint frame 0 immediately so neither exits nor builds flash for a frame
   // before the first rAF tick lands.
-  for (const d of drains) vfxApplyDrain(d.parts, 0); // exits start full
-  for (const b of builds) vfxApplyDrain(b.parts, 1); // builds start empty
+  for (const d of drains) vfxApplyDrain(d.parts, 0, 'drain'); // exits start full
+  for (const b of builds) vfxApplyDrain(b.parts, 1, 'build'); // builds start empty
 
   const start = performance.now();
   function step(now) {
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
-    for (const d of drains) vfxApplyDrain(d.parts, e);
-    for (const b of builds) vfxApplyDrain(b.parts, 1 - e);
+    for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
+    for (const b of builds) {
+      vfxApplyDrain(b.parts, 1 - e, 'build');
+      b.el.style.opacity = String(b.target * e);
+    }
     if (t < 1) { requestAnimationFrame(step); return; }
     for (const d of drains) d.clone.remove();
     for (const b of builds) {
       vfxResetInlineParts(b.parts);
-      vfxRestoreFilters(b.el);
+      vfxClearBuildFade(b.el);
     }
   }
   requestAnimationFrame(step);
