@@ -3451,7 +3451,10 @@ function drawStackEnvelope(s, stack) {
   env.setAttribute('data-stack-id', stack.id);
   const t = typeOf(stackTypeOf(s, stack));
   if (t?.accent) env.style.setProperty('--accent', t.accent);
-  const stackIsL3 = stackHasVip(stack) || members.some((m) => isL3Device(m));
+  // The envelope itself is an L3 entity ONLY when the stack carries a VIP.
+  // A stack without a VIP is just a container — its router/firewall members
+  // speak L3 individually; the envelope must stay neutral in routing layer.
+  const stackIsL3 = stackHasVip(stack);
   env.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
