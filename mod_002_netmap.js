@@ -1993,6 +1993,246 @@ function cancelDragLift(s) {
 }
 
 // =============================================================================
+// Rope drag — right-click + drag from a device pulls a fluid cable that you can
+// drop on another device to create a link. The rope tip springs after the cursor
+// (under-damped to feel cable-like), the curve sags between origin and tip, and
+// a missed drop animates the tip retracting back into the source element.
+// =============================================================================
+const ROPE_SPRING_STIFF   = 0.20;
+const ROPE_SPRING_DAMP    = 0.55;
+const ROPE_SAG_FACTOR     = 0.18;   // sag depth as fraction of length
+const ROPE_SAG_MAX        = 70;     // world units cap so long pulls stay on screen
+const ROPE_TIP_LAG_FACTOR = 35;     // ms — velocity → trailing offset on the tip
+const ROPE_TIP_LAG_MAX    = 60;
+const ROPE_VEL_SMOOTH     = 0.30;
+const ROPE_VEL_DECAY      = 0.85;
+const ROPE_RETRACT_END    = 0.6;    // retract animation stop threshold (world units)
+
+function startRopeDrag(s, fromDeviceId, clientX, clientY) {
+  cancelRopeDrag(s);
+  const dev = s.devices.find((d) => d.id === fromDeviceId);
+  if (!dev || !s.gOverlay) return;
+  const origin = effectivePos(s, fromDeviceId);
+  if (!origin) return;
+  const w = clientToWorld(s, clientX, clientY);
+  const t = typeOf(dev.type);
+  const accent = t?.accent || '#ff003c';
+
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-rope');
+  g.setAttribute('pointer-events', 'none');
+  const halo = document.createElementNS(SVG_NS, 'path');
+  halo.setAttribute('class', 'm002-rope-halo');
+  halo.setAttribute('fill', 'none');
+  halo.setAttribute('stroke', accent);
+  halo.setAttribute('stroke-width', '7');
+  halo.setAttribute('stroke-linecap', 'round');
+  halo.setAttribute('opacity', '0.18');
+  const line = document.createElementNS(SVG_NS, 'path');
+  line.setAttribute('class', 'm002-rope-line');
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke', accent);
+  line.setAttribute('stroke-width', '2');
+  line.setAttribute('stroke-linecap', 'round');
+  const tipDot = document.createElementNS(SVG_NS, 'circle');
+  tipDot.setAttribute('class', 'm002-rope-tip');
+  tipDot.setAttribute('r', '4.5');
+  tipDot.setAttribute('fill', accent);
+  g.appendChild(halo);
+  g.appendChild(line);
+  g.appendChild(tipDot);
+  s.gOverlay.appendChild(g);
+
+  s.dragRope = {
+    fromId: fromDeviceId,
+    accent,
+    originX: origin.x, originY: origin.y,
+    tipX: w.x, tipY: w.y,
+    targetX: w.x, targetY: w.y,
+    tipVX: 0, tipVY: 0,
+    smoothVX: 0, smoothVY: 0,
+    lastClientX: clientX, lastClientY: clientY,
+    lastTime: performance.now(),
+    g, halo, line, tipDot,
+    targetId: null,
+    retracting: false,
+    moved: false,
+    startClientX: clientX, startClientY: clientY,
+    raf: null,
+  };
+  s.host?.classList.add('m002-roping');
+  applyRopePath(s);
+
+  const tick = () => {
+    const r = s.dragRope;
+    if (!r) return;
+    // Origin can shift if the source device is moved between frames (rare —
+    // rope owns the gesture so device drag isn't possible — but keep it honest).
+    const op = effectivePos(s, r.fromId);
+    if (op) { r.originX = op.x; r.originY = op.y; }
+    r.smoothVX *= ROPE_VEL_DECAY;
+    r.smoothVY *= ROPE_VEL_DECAY;
+    let tx, ty;
+    if (r.retracting) {
+      tx = r.originX; ty = r.originY;
+    } else {
+      // Trail the cursor by a velocity-proportional offset so quick swipes
+      // see the tip lag, then catch up — the same trick used for drag-lift.
+      let lagX = -r.smoothVX * ROPE_TIP_LAG_FACTOR;
+      let lagY = -r.smoothVY * ROPE_TIP_LAG_FACTOR;
+      const lm = Math.hypot(lagX, lagY);
+      if (lm > ROPE_TIP_LAG_MAX) { const f = ROPE_TIP_LAG_MAX / lm; lagX *= f; lagY *= f; }
+      tx = r.targetX + lagX;
+      ty = r.targetY + lagY;
+    }
+    const ax = (tx - r.tipX) * ROPE_SPRING_STIFF - r.tipVX * ROPE_SPRING_DAMP;
+    const ay = (ty - r.tipY) * ROPE_SPRING_STIFF - r.tipVY * ROPE_SPRING_DAMP;
+    r.tipVX += ax; r.tipVY += ay;
+    r.tipX += r.tipVX; r.tipY += r.tipVY;
+    applyRopePath(s);
+    if (r.retracting) {
+      const d = Math.hypot(r.tipX - r.originX, r.tipY - r.originY);
+      const v = Math.hypot(r.tipVX, r.tipVY);
+      if (d < ROPE_RETRACT_END && v < ROPE_RETRACT_END) {
+        cancelRopeDrag(s);
+        return;
+      }
+    }
+    r.raf = requestAnimationFrame(tick);
+  };
+  s.dragRope.raf = requestAnimationFrame(tick);
+}
+
+function ropePathD(ox, oy, tx, ty) {
+  const dx = tx - ox, dy = ty - oy;
+  const d = Math.hypot(dx, dy);
+  const sag = Math.min(d * ROPE_SAG_FACTOR, ROPE_SAG_MAX);
+  const c1x = ox + dx * 0.33;
+  const c1y = oy + dy * 0.33 + sag;
+  const c2x = ox + dx * 0.66;
+  const c2y = oy + dy * 0.66 + sag;
+  return `M ${ox.toFixed(2)} ${oy.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${tx.toFixed(2)} ${ty.toFixed(2)}`;
+}
+
+function applyRopePath(s) {
+  const r = s.dragRope;
+  if (!r) return;
+  const d = ropePathD(r.originX, r.originY, r.tipX, r.tipY);
+  r.halo.setAttribute('d', d);
+  r.line.setAttribute('d', d);
+  r.tipDot.setAttribute('cx', r.tipX.toFixed(2));
+  r.tipDot.setAttribute('cy', r.tipY.toFixed(2));
+}
+
+function updateRopeFromPointer(s, clientX, clientY) {
+  const r = s.dragRope;
+  if (!r || r.retracting) return;
+  const w = clientToWorld(s, clientX, clientY);
+  r.targetX = w.x;
+  r.targetY = w.y;
+  const now = performance.now();
+  if (r.lastClientX != null) {
+    const dt = Math.max(1, now - r.lastTime);
+    const zoom = s.view?.zoom || 1;
+    const ivx = (clientX - r.lastClientX) / dt / zoom;
+    const ivy = (clientY - r.lastClientY) / dt / zoom;
+    const a = ROPE_VEL_SMOOTH;
+    r.smoothVX = r.smoothVX * (1 - a) + ivx * a;
+    r.smoothVY = r.smoothVY * (1 - a) + ivy * a;
+  }
+  r.lastClientX = clientX;
+  r.lastClientY = clientY;
+  r.lastTime = now;
+  if (Math.hypot(clientX - r.startClientX, clientY - r.startClientY) > 4) r.moved = true;
+  setRopeTarget(s, ropeTargetUnder(s, clientX, clientY));
+}
+
+function ropeTargetUnder(s, clientX, clientY) {
+  const r = s.dragRope;
+  if (!r) return null;
+  // elementsFromPoint walks the full hit stack — needed because overlay UI
+  // (the custom cursor follower, vignette, etc.) sits on top of the SVG and
+  // would otherwise mask the device hit. We just look for the first ancestor
+  // carrying a device id.
+  const els = document.elementsFromPoint(clientX, clientY);
+  for (const el of els) {
+    const devEl = el.closest && el.closest('[data-device-id]');
+    if (devEl && devEl.dataset.deviceId !== r.fromId) return devEl.dataset.deviceId;
+  }
+  return null;
+}
+
+function setRopeTarget(s, deviceId) {
+  const r = s.dragRope;
+  if (!r) return;
+  if (r.targetId === deviceId) return;
+  if (r.targetId) {
+    s.gDevices?.querySelector(`[data-device-id="${r.targetId}"]`)?.classList.remove('m002-rope-target');
+  }
+  r.targetId = deviceId || null;
+  if (r.targetId) {
+    s.gDevices?.querySelector(`[data-device-id="${r.targetId}"]`)?.classList.add('m002-rope-target');
+  }
+}
+
+function commitRopeLink(s, fromId, toId) {
+  // Mirror handleLinkClick's validity rules — the rope is just a faster gesture,
+  // not a way to slip past the constraints (no intra-stack, no JUMP↔JUMP, no
+  // cross-zone JUMP hub-leg).
+  const devA = s.devices.find((d) => d.id === fromId);
+  const devB = s.devices.find((d) => d.id === toId);
+  if (!devA || !devB) return false;
+  const stA = findStack(s, fromId);
+  const stB = findStack(s, toId);
+  if (stA && stA === stB) { toast(s, 'Use STACK-LINKS inside a stack'); return false; }
+  if (isReference(devA) && isReference(devB)) { toast(s, 'Couple JUMPs via the inspector COUPLE WITH dropdown'); return false; }
+  if ((isReference(devA) || isReference(devB)) && devA.zone !== devB.zone) { toast(s, 'JUMP hub-leg must stay in the same zone'); return false; }
+  snapshot(s);
+  const link = { id: rid(), from: fromId, to: toId, fromPort: '', toPort: '' };
+  s.links.push(link);
+  invalidateEdgeSlots(s);
+  const newKey = visualEndpointKey(s, link.from, link.to);
+  s.links.forEach((l) => {
+    if (l.id === link.id) return;
+    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+  });
+  drawLink(s, link);
+  if (s.activeLayer === 'routing') drawL3Paths(s);
+  updateStatus(s);
+  schedSave(s);
+  select(s, 'link', link.id);
+  return true;
+}
+
+function endRopeDrag(s) {
+  const r = s.dragRope;
+  if (!r) return;
+  if (r.targetId && r.moved) {
+    const fromId = r.fromId;
+    const toId = r.targetId;
+    setRopeTarget(s, null);
+    cancelRopeDrag(s);
+    commitRopeLink(s, fromId, toId);
+    return;
+  }
+  setRopeTarget(s, null);
+  // Missed drop — let the tip spring home, then dispose in the rAF tick.
+  r.retracting = true;
+}
+
+function cancelRopeDrag(s) {
+  const r = s.dragRope;
+  if (!r) return;
+  if (r.raf) cancelAnimationFrame(r.raf);
+  if (r.targetId) {
+    s.gDevices?.querySelector(`[data-device-id="${r.targetId}"]`)?.classList.remove('m002-rope-target');
+  }
+  r.g?.remove();
+  s.dragRope = null;
+  s.host?.classList.remove('m002-roping');
+}
+
+// =============================================================================
 // Board interaction — pan / zoom / drag
 // =============================================================================
 function bindBoard(s) {
@@ -2056,11 +2296,19 @@ function bindBoard(s) {
 
   // Mouse interactions: pan empty, drag device, drag stack
   const onDown = (e) => {
-    if (e.button !== 0 && e.button !== 1) return;
     const devEl = e.target.closest('[data-device-id]');
     const stackEl = e.target.closest('[data-stack-id]');
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
+
+    // Right-click on a device → start a rope-drag. The rope is mutually
+    // exclusive with the regular drag/pan so we return here without setting s.drag.
+    if (e.button === 2 && devEl) {
+      startRopeDrag(s, devEl.dataset.deviceId, e.clientX, e.clientY);
+      e.preventDefault();
+      return;
+    }
+    if (e.button !== 0 && e.button !== 1) return;
 
     if (s.linkMode && devEl && e.button === 0) {
       handleLinkClick(s, devEl.dataset.deviceId);
@@ -2157,6 +2405,7 @@ function bindBoard(s) {
     }
   };
   const onMove = (e) => {
+    if (s.dragRope) updateRopeFromPointer(s, e.clientX, e.clientY);
     if (!s.drag) return;
     if (s.drag.kind === 'pan') {
       s.drag.lastX = e.clientX;
@@ -2336,6 +2585,12 @@ function bindBoard(s) {
     }
   };
   const onUp = (e) => {
+    // Rope drag finishes independently of s.drag (right-click never sets it).
+    if (s.dragRope && e.button === 2) {
+      endRopeDrag(s);
+      e.preventDefault();
+      return;
+    }
     // JUMP click without drag → hop to the referenced zone / map. Drag past
     // the 4px threshold flips jumpPending off in onMove and the mouseup
     // falls through to the regular drag-end path.
@@ -2470,9 +2725,14 @@ function bindBoard(s) {
   svg.addEventListener('mousedown', onDown);
   window.addEventListener('mousemove', onMove);
   window.addEventListener('mouseup', onUp);
+  // Suppress the native context menu on the canvas — right-click is reserved
+  // for rope-drag, and the menu would pop up over the in-flight rope.
+  const onCtx = (e) => e.preventDefault();
+  svg.addEventListener('contextmenu', onCtx);
   s.cleanups.push(() => svg.removeEventListener('mousedown', onDown));
   s.cleanups.push(() => window.removeEventListener('mousemove', onMove));
   s.cleanups.push(() => window.removeEventListener('mouseup', onUp));
+  s.cleanups.push(() => svg.removeEventListener('contextmenu', onCtx));
 }
 
 function clientToWorld(s, cx, cy) {
@@ -2686,6 +2946,7 @@ function bindKeyboard(s) {
     } else if (e.key === 'Escape') {
       const lagModal = s.host?.querySelector('.m002-lag-modal');
       if (lagModal && !lagModal.hidden) { closeLagModal(s); return; }
+      if (s.dragRope) { cancelRopeDrag(s); return; }
       if (s.portModalOpen) closePortModal(s);
       else if (s.detailDeviceId) exitDetailView(s);
       else if (s.linkMode) toggleLinkMode(s);
@@ -8373,6 +8634,12 @@ const MOD002_CSS = `
 .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.2;}
 .m002-device.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-device.m002-link-pending .m002-dev-bg{stroke-dasharray:4 3;}
+.m002-rope{pointer-events:none;}
+.m002-rope .m002-rope-line{filter:drop-shadow(0 0 3px currentColor);}
+.m002-rope .m002-rope-tip{filter:drop-shadow(0 0 4px currentColor) drop-shadow(0 0 10px currentColor);}
+.m002-device.m002-rope-target .m002-dev-bg{stroke-width:2.4;stroke-dasharray:none;filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+.m002-host.m002-roping .m002-svg{cursor:crosshair;}
+.m002-host.m002-roping .m002-device{cursor:crosshair;}
 .m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
