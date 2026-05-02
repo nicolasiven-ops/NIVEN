@@ -6449,13 +6449,14 @@ function vfxResetInlineParts(parts) {
 // VFX — snap-to-grid preview during drag
 // =============================================================================
 // When the user drags in free-move mode, a dashed outline rectangle shows
-// where the element would snap on release. Renders into the dedicated
-// pulse layer so it sits behind devices/links/stacks and never covers
-// anything interactive. One reusable rect per state — updated in place
-// so dragging is allocation-free.
+// where the element would snap on release. Renders into m002-overlay (on
+// top of devices/links) so the ghost is visible even when the dragged
+// element is near the snap target — otherwise the device sits in front
+// and the ghost is invisible exactly when it matters most. One reusable
+// rect per state, updated in place so dragging is allocation-free.
 
 function showSnapPreview(s, snapX, snapY, accent) {
-  const layer = s.gPulse || s.gOverlay;
+  const layer = s.gOverlay;
   if (!layer) return;
   let el = s.snapPreviewEl;
   if (!el || !el.isConnected) {
@@ -8045,9 +8046,10 @@ const MOD002_CSS = `
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
 
 /* Snap-to-grid preview during free-move drag — dashed outline at the cell
-   the element would land on if dropped now. Sits in m002-vfx-pulse so it
-   stays behind every interactive element. */
-.m002-snap-preview{opacity:.7;}
+   the element would land on if dropped now. Sits in m002-overlay (above
+   devices) so it overlaps the element being dragged and stays visible
+   even when the snap target is right under the cursor. */
+.m002-snap-preview{opacity:.85;}
 
 .m002-device{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-device:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
