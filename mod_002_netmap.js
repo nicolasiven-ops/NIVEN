@@ -6451,27 +6451,37 @@ function switchZone(s, zoneId) {
   refreshZoneBar(s);
   render(s);
   if (from.x !== to.x || from.y !== to.y || from.zoom !== to.zoom) {
-    animateZoneView(s, from, to, 520);
+    animateZoneView(s, from, to, 900);
   }
   schedSave(s);
 }
 
 // Cinematic camera pan + zoom between two view states. Used by zone hops
 // (manual pill click + JUMP-triggered switches) so the canvas glides into
-// the new zone's last-known centre instead of teleporting.
+// the new zone's last-known centre instead of teleporting. Symmetric
+// easeInOutCubic so the start and end both feel composed — neither lurches.
 function animateZoneView(s, from, to, duration) {
   if (s._zoneAnim) cancelAnimationFrame(s._zoneAnim);
   const start = performance.now();
-  const ease = (t) => 1 - Math.pow(1 - t, 3); // easeOutCubic
+  const ease = (t) => t < 0.5
+    ? 4 * t * t * t
+    : 1 - Math.pow(-2 * t + 2, 3) / 2;
   const step = (now) => {
     const t = Math.min(1, (now - start) / duration);
     const k = ease(t);
     s.view.x = from.x + (to.x - from.x) * k;
     s.view.y = from.y + (to.y - from.y) * k;
     s.view.zoom = from.zoom + (to.zoom - from.zoom) * k;
-    applyView(s);
-    if (t < 1) s._zoneAnim = requestAnimationFrame(step);
-    else s._zoneAnim = null;
+    // Per-frame minimap rebuild is expensive enough to stutter the pan.
+    // Just touch the world transform during the glide and refresh the
+    // minimap once at the end.
+    s.gWorld.setAttribute('transform', `translate(${s.view.x} ${s.view.y}) scale(${s.view.zoom})`);
+    if (t < 1) {
+      s._zoneAnim = requestAnimationFrame(step);
+    } else {
+      s._zoneAnim = null;
+      applyView(s);
+    }
   };
   s._zoneAnim = requestAnimationFrame(step);
 }
@@ -7405,13 +7415,15 @@ body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45de
 body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
 /* Hover state in MOD_002: instead of growing (the global default), the
    cursor stands on its tip — the whole bracket frame pivots 45° around
-   the cursor centre, brackets travel as one unit. */
+   the cursor centre, brackets travel as one unit. The pressed (.down)
+   state still shrinks like the global cursor — combined active+down lets
+   the rotated frame "zoom in" too. */
 body.m002-tool-select .cursor.active,
 body.m002-tool-link .cursor.active,
-body.m002-tool-delete .cursor.active{width:30px !important;height:30px !important;}
+body.m002-tool-delete .cursor.active{width:30px;height:30px;}
 body.m002-tool-select .cursor.active .cur-bracket,
 body.m002-tool-link .cursor.active .cur-bracket,
-body.m002-tool-delete .cursor.active .cur-bracket{width:7px !important;height:7px !important;transform:none !important;}
+body.m002-tool-delete .cursor.active .cur-bracket{width:7px;height:7px;transform:none;}
 .m002-cursor-frame{position:absolute;inset:0;transition:transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);transform-origin:50% 50%;}
 body.m002-tool-select .cursor.active .m002-cursor-frame,
 body.m002-tool-link .cursor.active .m002-cursor-frame,
