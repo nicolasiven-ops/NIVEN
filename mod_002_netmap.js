@@ -6367,10 +6367,9 @@ function vfxApplyDrain(parts, p, phase) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  if (phase !== 'build') {
-    const inv = 1 - p;
-    for (const f of parts.fades) f.el.style[f.prop] = inv;
-  }
+  // Visibility (fill / text / glow) rides the wrapper's opacity in BOTH
+  // phases so the drop-shadow halo fades smoothly with the rest of the
+  // element instead of popping. Inline fades aren't needed here.
 }
 
 function vfxSuppressFilters(el) {
@@ -6409,6 +6408,14 @@ function vfxResetInlineParts(parts) {
   for (const f of parts.fades) f.el.style[f.prop] = '';
 }
 
+function vfxFrozenOpacity(entry) {
+  // Pull the leading opacity component out of the frozen digest. Falls back
+  // to 1 when no digest was captured.
+  const f = entry?.frozen || '';
+  const v = parseFloat((f.split('|')[0] || '1'));
+  return Number.isFinite(v) ? v : 1;
+}
+
 function vfxCentroid(snapshot) {
   let cx = 0, cy = 0, n = 0;
   for (const [, entry] of snapshot) {
@@ -6436,19 +6443,22 @@ function vfxAnimateView(s, doRender, anchor) {
   const drainAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(after) || vfxCentroid(before);
   const buildAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(before) || vfxCentroid(after);
 
-  // EXITS — clone old element, drain it, remove.
+  // EXITS — clone old element, drain it, remove. Wrapper opacity rides
+  // OLD-opacity → 0 over the same window so the drop-shadow halo fades
+  // smoothly with the wall (no glow-pop at start of drain).
   const drains = [];
   for (const [key, entry] of before) {
     if (after.has(key)) continue;
     const clone = entry.el.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    vfxSuppressFilters(clone);
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
     const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
-    drains.push({ clone, parts });
+    const startOpacity = vfxFrozenOpacity(entry);
+    clone.style.opacity = String(startOpacity);
+    drains.push({ clone, parts, startOpacity });
   }
 
   // BUILDS — fresh element in its real container, build it up from empty.
@@ -6473,20 +6483,18 @@ function vfxAnimateView(s, doRender, anchor) {
     if (!newEntry) continue;
     if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
 
-    // Overlay-drain the OLD look on top of the new render.
+    // Overlay-drain the OLD look on top of the new render. Wrapper opacity
+    // rides oldOpacity → 0 in lockstep with the dasharray drain, so the
+    // glow halo fades along with everything else.
     const clone = oldEntry.el.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    vfxSuppressFilters(clone);
-    // Freeze the OLD computed opacity inline so the clone holds its
-    // pre-transition brightness even though the host now broadcasts the
-    // new layer's CSS rules.
-    const oldOpacity = (oldEntry.frozen || '').split('|')[0];
-    if (oldOpacity) clone.style.opacity = oldOpacity;
+    const startOpacity = vfxFrozenOpacity(oldEntry);
+    clone.style.opacity = String(startOpacity);
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
     const drainParts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (drainParts.shapes.length > 0 || drainParts.fades.length > 0) {
-      drains.push({ clone, parts: drainParts });
+      drains.push({ clone, parts: drainParts, startOpacity });
     } else {
       clone.remove();
     }
@@ -6513,7 +6521,10 @@ function vfxAnimateView(s, doRender, anchor) {
   function step(now) {
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
-    for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
+    for (const d of drains) {
+      vfxApplyDrain(d.parts, e, 'drain');
+      d.clone.style.opacity = String(d.startOpacity * (1 - e));
+    }
     for (const b of builds) {
       vfxApplyDrain(b.parts, 1 - e, 'build');
       b.el.style.opacity = String(b.target * e);
