@@ -3226,11 +3226,15 @@ function drawStackEnvelope(s, stack) {
     cab.setAttribute('data-stacklink-id', sl.id);
     const path = orthPath(a, b, off);
     let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
-    const fromLbl = sl.fromPort ? portLabel(a, sl.fromPort) : '';
-    const toLbl   = sl.toPort   ? portLabel(b, sl.toPort)   : '';
-    if (fromLbl || toLbl) {
-      const lbl = (fromLbl || '?') + ' ⇄ ' + (toLbl || '?');
-      inner += `<text class="m002-stack-cable-label" x="${path.lx}" y="${path.ly - 4}" text-anchor="middle">${escSvg(lbl)}</text>`;
+    // Port labels on stacking cables only in Physical — VLAN/Routing layers
+    // already speak via colour, the textual port stencil is just clutter there.
+    if (s.activeLayer === 'physical') {
+      const fromLbl = sl.fromPort ? portLabel(a, sl.fromPort) : '';
+      const toLbl   = sl.toPort   ? portLabel(b, sl.toPort)   : '';
+      if (fromLbl || toLbl) {
+        const lbl = (fromLbl || '?') + ' ⇄ ' + (toLbl || '?');
+        inner += `<text class="m002-stack-cable-label" x="${path.lx}" y="${path.ly - 4}" text-anchor="middle">${escSvg(lbl)}</text>`;
+      }
     }
     cab.innerHTML = inner;
     s.gStacksBg.appendChild(cab);
@@ -3406,7 +3410,8 @@ function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   g.setAttribute('data-agg-key', key);
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   inner += `<path class="m002-link-line m002-link-agg-line" d="${path.d}" stroke="#5a5f6e" stroke-dasharray="6 4" stroke-width="1.4"/>`;
-  inner += `<text class="m002-link-agg-label" x="${path.lx}" y="${path.ly - 4}" fill="#7a7f8e" text-anchor="middle">×${agg.linkIds.length} · click to LAG</text>`;
+  // No textual badge — the dashed line itself is enough of a placeholder.
+  // Click target is the full hit-region (m002-link-hit) above.
   g.innerHTML = inner;
   s.gLinks.appendChild(g);
 }
@@ -7365,9 +7370,9 @@ const MOD002_CSS = `
 .m002-port-lag-select{flex:1;background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'Share Tech Mono',monospace;font-size:11px;outline:none;}
 .m002-link-bundle-label{font-size:10px;font-family:'Share Tech Mono',monospace;letter-spacing:1.5px;font-weight:600;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;stroke-linecap:round;}
 /* Stack-pair aggregate summary — replaces N parallel non-paired stubs
-   between two collapsed stacks (or stack + device). One faint dashed line
-   plus a "×N · click to LAG" badge. Hover lifts the line so it's clearly
-   actionable. */
+   between two collapsed stacks (or stack + device). A single faint dashed
+   line; hover lifts it so it's clearly actionable. Click opens the LAG
+   configurator. */
 .m002-link-agg .m002-link-hit{stroke-width:14;cursor:pointer;}
 .m002-link-agg-line{transition:stroke .15s,opacity .15s;}
 .m002-link-agg:hover .m002-link-agg-line{stroke:#9aa0a8;}
