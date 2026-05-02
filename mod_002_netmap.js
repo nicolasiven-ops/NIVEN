@@ -1708,8 +1708,8 @@ function ensureStyles() {
 // =============================================================================
 const DRAG_LIFT_SCALE = 1.10;
 const DRAG_LIFT_SCALE_LERP = 0.22;
-const DRAG_LIFT_LAG_FACTOR = 24;     // ms — multiplies smoothed cursor velocity into target offset
-const DRAG_LIFT_LAG_MAX = 26;        // world units — cap so it never trails out of arm's reach
+const DRAG_LIFT_LAG_FACTOR = 120;    // ms — multiplies smoothed cursor velocity into target offset
+const DRAG_LIFT_LAG_MAX = 130;       // world units — cap so it never trails out of arm's reach
 const DRAG_LIFT_VEL_SMOOTH = 0.30;   // EMA factor for cursor velocity (0..1, higher = snappier)
 const DRAG_LIFT_VEL_DECAY = 0.82;    // smoothed-velocity decay each frame when pointer is idle
 const DRAG_LIFT_SPRING_STIFF = 0.16; // pull offset toward target offset
