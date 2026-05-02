@@ -1107,6 +1107,53 @@ function ribbonWaypoint(s, id) {
   return effectivePos(s, id);
 }
 
+// Bounding rect of the dashed envelope drawn around an expanded stack.
+// Mirrors the math in drawStackEnvelope so a ribbon dock-point sits exactly
+// on the visible boundary. Returns null when the stack is collapsed or has
+// fewer than two members (no envelope drawn).
+function stackEnvelopeRect(s, stack) {
+  if (!stack || isStackCollapsed(s, stack)) return null;
+  const members = (stack.members || []).map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  if (members.length < 2) return null;
+  const padding = 18;
+  const minX = Math.min(...members.map((m) => m.x - DEVICE_W / 2)) - padding;
+  const minY = Math.min(...members.map((m) => m.y - DEVICE_H / 2)) - padding - 8;
+  const maxX = Math.max(...members.map((m) => m.x + DEVICE_W / 2)) + padding;
+  const maxY = Math.max(...members.map((m) => m.y + DEVICE_H / 2)) + padding;
+  return { minX, minY, maxX, maxY };
+}
+
+// Slab-test entry point of segment from→to into rect. Returns the point
+// where the segment first crosses the rect boundary, or null if `from` is
+// already inside (the caller should keep its original endpoint then).
+function segmentRectEntry(from, to, rect) {
+  if (!from || !to || !rect) return null;
+  const insideFrom = from.x >= rect.minX && from.x <= rect.maxX
+                  && from.y >= rect.minY && from.y <= rect.maxY;
+  if (insideFrom) return null;
+  const dx = to.x - from.x, dy = to.y - from.y;
+  let tNear = 0, tFar = 1;
+  if (dx !== 0) {
+    const t1 = (rect.minX - from.x) / dx;
+    const t2 = (rect.maxX - from.x) / dx;
+    tNear = Math.max(tNear, Math.min(t1, t2));
+    tFar  = Math.min(tFar,  Math.max(t1, t2));
+  } else if (from.x < rect.minX || from.x > rect.maxX) {
+    return null;
+  }
+  if (dy !== 0) {
+    const t1 = (rect.minY - from.y) / dy;
+    const t2 = (rect.maxY - from.y) / dy;
+    tNear = Math.max(tNear, Math.min(t1, t2));
+    tFar  = Math.min(tFar,  Math.max(t1, t2));
+  } else if (from.y < rect.minY || from.y > rect.maxY) {
+    return null;
+  }
+  if (tNear > tFar) return null;
+  const t = Math.max(0, Math.min(1, tNear));
+  return { x: from.x + dx * t, y: from.y + dy * t };
+}
+
 // Inserts a perpendicular midpoint between every pair of adjacent points.
 // The midpoint is offset perpendicular to the segment by a fraction of its
 // length, capped — short segments stay subtle, long ones bow noticeably.
@@ -1183,6 +1230,23 @@ function drawL3Paths(s) {
     // gives the swing back without needing the synthetic puff offsets.
     const pts = p.ids.map((id) => ribbonWaypoint(s, id)).filter(Boolean);
     if (pts.length < 2) return;
+    // Dock ribbon ends on the envelope edge of an expanded stack instead of
+    // diving to its centroid — matches how a device's body covers the line
+    // tip, so the ribbon visibly terminates at the stack's perimeter rather
+    // than crossing it.
+    const headStack = (s.stacks || []).find((st) => st.id === p.ids[0]);
+    const headRect = stackEnvelopeRect(s, headStack);
+    if (headRect) {
+      const hit = segmentRectEntry(pts[1], pts[0], headRect);
+      if (hit) pts[0] = hit;
+    }
+    const tailIdx = p.ids.length - 1;
+    const tailStack = (s.stacks || []).find((st) => st.id === p.ids[tailIdx]);
+    const tailRect = stackEnvelopeRect(s, tailStack);
+    if (tailRect) {
+      const hit = segmentRectEntry(pts[tailIdx - 1], pts[tailIdx], tailRect);
+      if (hit) pts[tailIdx] = hit;
+    }
     const d = smoothPath(pts);
     if (!d) return;
     // Paths are sourced from "entity → its gateway", so the geometric path
