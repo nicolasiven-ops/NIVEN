@@ -6428,28 +6428,6 @@ function vfxAnimateView(s, doRender, anchor) {
     drains.push({ clone, parts });
   }
 
-  // PERSISTING with changed look (e.g. layer flip dimmed a non-L3 device) —
-  // overlay-drain the OLD bright clone on top of the NEW dim render. As the
-  // clone drains, the underlying dim element progressively shows through.
-  for (const [key, oldEntry] of before) {
-    const newEntry = after.get(key);
-    if (!newEntry) continue;
-    if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
-    const clone = oldEntry.el.cloneNode(true);
-    clone.style.pointerEvents = 'none';
-    vfxSuppressFilters(clone);
-    // Freeze the OLD computed opacity inline so the clone holds its
-    // pre-transition brightness even though the host now broadcasts the
-    // new layer's CSS rules.
-    const oldOpacity = (oldEntry.frozen || '').split('|')[0];
-    if (oldOpacity) clone.style.opacity = oldOpacity;
-    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
-    s.gExits.appendChild(clone);
-    const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
-    if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
-    drains.push({ clone, parts });
-  }
-
   // BUILDS — fresh element in its real container, build it up from empty,
   // restore CSS-driven styles at the end so the glow returns naturally.
   const builds = [];
@@ -6463,6 +6441,47 @@ function vfxAnimateView(s, doRender, anchor) {
       continue;
     }
     builds.push({ el: newEl, parts });
+  }
+
+  // PERSISTING with changed look (e.g. layer flip dimmed a non-L3 device, or
+  // a link's VLAN stripes appeared) — overlay-drain the OLD clone on top
+  // AND build the NEW underlying element so both halves of the transition
+  // animate in parallel: bright drains away while dim/new look builds up.
+  for (const [key, oldEntry] of before) {
+    const newEntry = after.get(key);
+    if (!newEntry) continue;
+    if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
+
+    // Overlay-drain the OLD look on top of the new render.
+    const clone = oldEntry.el.cloneNode(true);
+    clone.style.pointerEvents = 'none';
+    vfxSuppressFilters(clone);
+    // Freeze the OLD computed opacity inline so the clone holds its
+    // pre-transition brightness even though the host now broadcasts the
+    // new layer's CSS rules.
+    const oldOpacity = (oldEntry.frozen || '').split('|')[0];
+    if (oldOpacity) clone.style.opacity = oldOpacity;
+    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
+    s.gExits.appendChild(clone);
+    const drainParts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
+    if (drainParts.shapes.length > 0 || drainParts.fades.length > 0) {
+      drains.push({ clone, parts: drainParts });
+    } else {
+      clone.remove();
+    }
+
+    // Build up the NEW look on the underlying real element. Same machinery
+    // as fresh-entry builds — suppress filters, frame 0 = empty, animate to
+    // full, then restore CSS so the natural look (incl. any new dim/glow)
+    // takes over.
+    const newEl = newEntry.el;
+    vfxSuppressFilters(newEl);
+    const buildParts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
+    if (buildParts.shapes.length > 0 || buildParts.fades.length > 0) {
+      builds.push({ el: newEl, parts: buildParts });
+    } else {
+      vfxRestoreFilters(newEl);
+    }
   }
 
   if (drains.length === 0 && builds.length === 0) return;
