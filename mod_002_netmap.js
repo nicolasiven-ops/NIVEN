@@ -606,8 +606,10 @@ function recomputeSubnetIndex(s) {
   const N = list.length;
   s.subnetColors = new Map();
   list.forEach((sn, i) => {
-    const hue = N <= 1 ? 165 : Math.round(140 + (i / Math.max(1, N - 1)) * 200) % 360;
-    s.subnetColors.set(String(sn.id), `hsl(${hue}, 70%, 58%)`);
+    // Mirror the VLAN ramp (0..300° → red through the spectrum to violet)
+    // so the routing layer feels like a sibling of the VLAN view.
+    const hue = N <= 1 ? 0 : Math.round((i / (N - 1)) * 300);
+    s.subnetColors.set(String(sn.id), `hsl(${hue}, 85%, 60%)`);
   });
   s.subnetList = list.map((sn) => String(sn.id));
 }
