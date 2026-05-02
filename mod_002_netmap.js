@@ -1289,7 +1289,7 @@ function stopFlowTicker(s) {
   s.flowFrame = null;
 }
 
-const DEFAULT_PREFS = { autoRecenter: false };
+const DEFAULT_PREFS = { autoRecenter: false, freeMove: false, snapOnDrop: true };
 const PREFS_KEY = 'm002.preferences';
 function loadPrefs() {
   try {
@@ -1825,6 +1825,37 @@ function endDragLift(s) {
   dv.targetTilt = 0;
 }
 
+// Aligns a freshly-dropped device or stack onto the nearest grid cell when
+// "Snap to grid on drop" is enabled. The snap is applied as a delta so any
+// multi-selection that came along during the drag stays cohesive — they
+// shift by the same vector instead of each landing on its own cell.
+function snapDropToGrid(s, kind, id) {
+  let cx, cy;
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === id);
+    if (!dev) return;
+    cx = dev.x; cy = dev.y;
+  } else if (kind === 'stack') {
+    const st = findStackById(s, id);
+    if (!st) return;
+    cx = st.x; cy = st.y;
+  } else return;
+  const tx = Math.round(cx / GRID) * GRID;
+  const ty = Math.round(cy / GRID) * GRID;
+  const ddx = tx - cx, ddy = ty - cy;
+  if (ddx === 0 && ddy === 0) return;
+  const group = collectGroupTargets(s, { kind, id });
+  group.forEach((it) => moveItemBy(s, it, ddx, ddy));
+  // Keep coupled JUMP peer in sync after the snap, mirroring onMove.
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === id);
+    if (dev && isReference(dev)) syncCouplePeerPosition(s, dev);
+    if (dev) updateLinksFor(s, dev.id);
+  }
+  if (s.activeLayer === 'routing') drawL3Paths(s);
+  refreshAggregates(s);
+}
+
 function cancelDragLift(s) {
   // Immediate teardown — used when the lifted element is about to be replaced
   // (drop-to-stack merges the source into a freshly-rendered stack icon, so a
@@ -2034,10 +2065,15 @@ function bindBoard(s) {
       if (!dev) return;
       let nx = w.x + s.drag.dx;
       let ny = w.y + s.drag.dy;
-      if (!e.altKey) {
+      // Snap during drag — Alt is a per-gesture inverter on top of the prefs
+      // toggle, so users keep an escape hatch in either configuration.
+      const freeDrag = !!s.prefs?.freeMove;
+      const snapNow = e.altKey ? freeDrag : !freeDrag;
+      if (snapNow) {
         nx = Math.round(nx / GRID) * GRID;
         ny = Math.round(ny / GRID) * GRID;
       }
+      s.drag.lastAlt = !!e.altKey;
       const ddx = nx - dev.x, ddy = ny - dev.y;
       // If this drag is part of a multi-selection, move every selected item
       const group = collectGroupTargets(s, { kind: 'device', id: dev.id });
@@ -2107,10 +2143,13 @@ function bindBoard(s) {
       if (!st) return;
       let nx = w.x + s.drag.dx;
       let ny = w.y + s.drag.dy;
-      if (!e.altKey) {
+      const freeDrag = !!s.prefs?.freeMove;
+      const snapNow = e.altKey ? freeDrag : !freeDrag;
+      if (snapNow) {
         nx = Math.round(nx / GRID) * GRID;
         ny = Math.round(ny / GRID) * GRID;
       }
+      s.drag.lastAlt = !!e.altKey;
       const ddx = nx - st.x, ddy = ny - st.y;
       st.x = nx; st.y = ny;
       st.members.forEach((mid) => {
@@ -2153,7 +2192,7 @@ function bindBoard(s) {
       applyDragLiftTransform(s);
     }
   };
-  const onUp = () => {
+  const onUp = (e) => {
     // JUMP click without drag → hop to the referenced zone / map. Drag past
     // the 4px threshold flips jumpPending off in onMove and the mouseup
     // falls through to the regular drag-end path.
@@ -2214,6 +2253,15 @@ function bindBoard(s) {
         const dx = (s.drag.lastX ?? s.drag.startX) - s.drag.startX;
         const dy = (s.drag.lastY ?? s.drag.startY) - s.drag.startY;
         if (Math.hypot(dx, dy) < 4) deselect(s);
+      }
+      // Snap-on-drop: only after a real drag (recenterPending flips off in
+      // onMove past 4px), only when the user wants it, and Alt at release is
+      // an escape hatch so off-grid placement is still reachable per gesture.
+      const realDrag = s.drag.recenterPending === false;
+      const altAtRelease = !!(e?.altKey ?? s.drag.lastAlt);
+      if (realDrag && s.prefs?.snapOnDrop && !altAtRelease
+          && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
+        snapDropToGrid(s, s.drag.kind, s.drag.id);
       }
       if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
     }
@@ -4503,6 +4551,20 @@ function renderPrefsInspector(s, body, idEl) {
         <span class="m002-prefs-sublabel">Pan the camera so the clicked element ends up in the middle of the canvas.</span>
       </span>
       <input type="checkbox" data-pref="autoRecenter" ${prefs.autoRecenter ? 'checked' : ''}/>
+    </label>
+    <label class="m002-prefs-row">
+      <span>
+        <span class="m002-prefs-label">Free movement (no grid)</span>
+        <span class="m002-prefs-sublabel">Drag elements smoothly without the grid pulling them. Hold Alt to invert per-gesture.</span>
+      </span>
+      <input type="checkbox" data-pref="freeMove" ${prefs.freeMove ? 'checked' : ''}/>
+    </label>
+    <label class="m002-prefs-row">
+      <span>
+        <span class="m002-prefs-label">Snap to grid on drop</span>
+        <span class="m002-prefs-sublabel">When you release, the element settles onto the nearest grid cell. Alt at release skips it.</span>
+      </span>
+      <input type="checkbox" data-pref="snapOnDrop" ${prefs.snapOnDrop ? 'checked' : ''}/>
     </label>
   `;
   body.querySelectorAll('[data-pref]').forEach((el) => {
