@@ -2132,9 +2132,17 @@ function bindBoard(s) {
       // toggle, so users keep an escape hatch in either configuration.
       const freeDrag = !!s.prefs?.freeMove;
       const snapNow = e.altKey ? freeDrag : !freeDrag;
+      const snapX = Math.round(nx / GRID) * GRID;
+      const snapY = Math.round(ny / GRID) * GRID;
       if (snapNow) {
-        nx = Math.round(nx / GRID) * GRID;
-        ny = Math.round(ny / GRID) * GRID;
+        nx = snapX;
+        ny = snapY;
+        hideSnapPreview(s);
+      } else if (s.prefs?.snapOnDrop) {
+        // Free-move: preview where the element would land on release.
+        showSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'device', dev.id));
+      } else {
+        hideSnapPreview(s);
       }
       s.drag.lastAlt = !!e.altKey;
       const ddx = nx - dev.x, ddy = ny - dev.y;
@@ -2208,9 +2216,16 @@ function bindBoard(s) {
       let ny = w.y + s.drag.dy;
       const freeDrag = !!s.prefs?.freeMove;
       const snapNow = e.altKey ? freeDrag : !freeDrag;
+      const snapX = Math.round(nx / GRID) * GRID;
+      const snapY = Math.round(ny / GRID) * GRID;
       if (snapNow) {
-        nx = Math.round(nx / GRID) * GRID;
-        ny = Math.round(ny / GRID) * GRID;
+        nx = snapX;
+        ny = snapY;
+        hideSnapPreview(s);
+      } else if (s.prefs?.snapOnDrop) {
+        showSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'stack', st.id));
+      } else {
+        hideSnapPreview(s);
       }
       s.drag.lastAlt = !!e.altKey;
       const ddx = nx - st.x, ddy = ny - st.y;
@@ -2348,6 +2363,7 @@ function bindBoard(s) {
     }
     s.drag = null;
     s.host.classList.remove('m002-dragging');
+    hideSnapPreview(s);
     // Spring the lifted element back to rest (1.0 scale, 0° tilt) — settles
     // smoothly over a few frames after release so the gesture has follow-through.
     endDragLift(s);
@@ -6430,6 +6446,54 @@ function vfxResetInlineParts(parts) {
 }
 
 // =============================================================================
+// VFX — snap-to-grid preview during drag
+// =============================================================================
+// When the user drags in free-move mode, a dashed outline rectangle shows
+// where the element would snap on release. Renders into the dedicated
+// pulse layer so it sits behind devices/links/stacks and never covers
+// anything interactive. One reusable rect per state — updated in place
+// so dragging is allocation-free.
+
+function showSnapPreview(s, snapX, snapY, accent) {
+  const layer = s.gPulse || s.gOverlay;
+  if (!layer) return;
+  let el = s.snapPreviewEl;
+  if (!el || !el.isConnected) {
+    el = document.createElementNS(SVG_NS, 'rect');
+    el.setAttribute('class', 'm002-snap-preview');
+    el.setAttribute('width', String(DEVICE_W));
+    el.setAttribute('height', String(DEVICE_H));
+    el.setAttribute('rx', '3');
+    el.setAttribute('fill', 'none');
+    el.setAttribute('stroke-width', '1');
+    el.setAttribute('stroke-dasharray', '5 4');
+    el.setAttribute('pointer-events', 'none');
+    layer.appendChild(el);
+    s.snapPreviewEl = el;
+  }
+  el.setAttribute('x', String(snapX - DEVICE_W / 2));
+  el.setAttribute('y', String(snapY - DEVICE_H / 2));
+  el.setAttribute('stroke', accent || '#5a5f6e');
+  el.style.display = '';
+}
+
+function hideSnapPreview(s) {
+  if (s.snapPreviewEl) s.snapPreviewEl.style.display = 'none';
+}
+
+function dragSnapAccent(s, kind, id) {
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === id);
+    return dev ? typeOf(dev.type).accent : null;
+  }
+  if (kind === 'stack') {
+    const st = findStackById(s, id);
+    return st ? typeOf(stackTypeOf(s, st)).accent : null;
+  }
+  return null;
+}
+
+// =============================================================================
 // VFX — grid energy pulse on element drop
 // =============================================================================
 // When an element lands on the grid, send out a small handful of tendrils
@@ -7979,6 +8043,11 @@ const MOD002_CSS = `
 .m002-host,.m002-host *{cursor:none !important;}
 
 .m002-grid-bg,.m002-grid-bg2{pointer-events:all;}
+
+/* Snap-to-grid preview during free-move drag — dashed outline at the cell
+   the element would land on if dropped now. Sits in m002-vfx-pulse so it
+   stays behind every interactive element. */
+.m002-snap-preview{opacity:.7;}
 
 .m002-device{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-device:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
