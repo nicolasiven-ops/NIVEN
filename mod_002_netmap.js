@@ -6197,10 +6197,7 @@ function deletePort(s, deviceId, portN) {
 // Texts and rect fills fade in lockstep so labels don't float over an
 // emptied frame.
 
-const VFX_DRAIN_MS = 620;       // dasharray drain — the leading visual.
-                                // Wrapper opacity / glow halo runs on the
-                                // same window so the element doesn't keep
-                                // brightening after the dasharray is done.
+const VFX_DRAIN_MS = 620;
 
 const VFX_GROUPS = [
   // Links (paths)
@@ -6389,16 +6386,9 @@ function vfxApplyDrain(parts, p, phase) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  // Inline fill / text opacity is only used during the DRAIN phase — that's
-  // where the dasharray is the LEADING visual and we need the non-stroke
-  // parts to disappear in lockstep so the element actually vanishes.
-  // For BUILD phase, the wrapper opacity (animated in vfxAnimateView) owns
-  // the fade-in for everything, including fills/texts/glow — applying
-  // inline fades here would double-fade and slow the build perceptibly.
-  if (phase === 'drain') {
-    const inv = 1 - p;
-    for (const f of parts.fades) f.el.style[f.prop] = inv;
-  }
+  // Visibility (fill / text / glow) rides the wrapper's opacity in BOTH
+  // phases so the drop-shadow halo fades smoothly with the rest of the
+  // element instead of popping. Inline fades aren't needed here.
 }
 
 function vfxSuppressFilters(el) {
@@ -6552,12 +6542,7 @@ function vfxCentroid(snapshot) {
 
 function vfxAnimateView(s, doRender, anchor) {
   if (!s.gExits) { doRender(); return; }
-  // Cancel any in-flight transition from a previous click. Without this,
-  // rapid pill-clicks (or clicking a Jump while the previous animation is
-  // still running) leave stale rAF loops writing to detached elements,
-  // and the new transition's builds inherit half-faded inline opacities.
-  // Clean up THEN clear gExits.
-  if (s._vfxStop) { try { s._vfxStop(); } catch (_) {} s._vfxStop = null; }
+  // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
   const before = vfxSnapshot(s);
   doRender();
@@ -6646,30 +6631,8 @@ function vfxAnimateView(s, doRender, anchor) {
   for (const d of drains) vfxApplyDrain(d.parts, 0, 'drain'); // exits start full
   for (const b of builds) vfxApplyDrain(b.parts, 1, 'build'); // builds start empty
 
-  // Single timeline: dasharray drain + wrapper opacity / glow halo all
-  // share VFX_DRAIN_MS so the element doesn't keep brightening (or fading)
-  // after the dasharray is done. Cancellation via s._vfxStop hands the
-  // next vfxAnimateView call a way to abort us cleanly and finalize any
-  // in-flight builds (otherwise inline opacity:0 stays and elements
-  // remain invisible).
   const start = performance.now();
-  let cancelled = false;
-  let rafId = 0;
-  const finalize = () => {
-    for (const d of drains) d.clone.remove();
-    for (const b of builds) {
-      vfxResetInlineParts(b.parts);
-      vfxClearBuildFade(b.el);
-    }
-  };
-  s._vfxStop = () => {
-    cancelled = true;
-    if (rafId) cancelAnimationFrame(rafId);
-    finalize();
-  };
-
   function step(now) {
-    if (cancelled) return;
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
     for (const d of drains) {
@@ -6680,11 +6643,14 @@ function vfxAnimateView(s, doRender, anchor) {
       vfxApplyDrain(b.parts, 1 - e, 'build');
       b.el.style.opacity = String(b.target * e);
     }
-    if (t < 1) { rafId = requestAnimationFrame(step); return; }
-    s._vfxStop = null;
-    finalize();
+    if (t < 1) { requestAnimationFrame(step); return; }
+    for (const d of drains) d.clone.remove();
+    for (const b of builds) {
+      vfxResetInlineParts(b.parts);
+      vfxClearBuildFade(b.el);
+    }
   }
-  rafId = requestAnimationFrame(step);
+  requestAnimationFrame(step);
 }
 
 // =============================================================================
