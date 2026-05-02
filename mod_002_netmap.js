@@ -6207,16 +6207,17 @@ function vfxSnapshot(s) {
       // Capture the world centre NOW — `before` snapshot's els get detached by
       // render() and getBBox returns nothing on detached SVG nodes.
       const center = vfxBBoxCenterWorld(el);
-      // Freeze a digest of the visual state for layer-sensitive elements
-      // (data-l3 means the host's data-active-layer drives the look). Used
-      // to detect persisting elements whose appearance crossed the layer
-      // boundary so we can overlay-drain the OLD look on top of the NEW
-      // dim render — bright "drains" to reveal the grey skeleton.
-      let frozen = null;
-      if (el.hasAttribute('data-l3')) {
-        const cs = window.getComputedStyle(el);
-        frozen = `${cs.opacity}|${cs.filter}`;
-      }
+      // Freeze a digest of the visual state. Combines:
+      //   - computed opacity + filter: catches CSS-driven dim flips (a
+      //     non-L3 device fading on entry into routing layer)
+      //   - innerHTML: catches re-rendered structure (a link's VLAN stripes
+      //     appearing on entry into vlan layer, or its m002-link-dim class
+      //     swapping in/out on entry into routing). Without this, links
+      //     never overlay-drained on layer flips because their wrapper <g>
+      //     stayed at the same key and the data-l3-only opacity check
+      //     skipped them entirely.
+      const cs = window.getComputedStyle(el);
+      const frozen = `${cs.opacity}|${cs.filter}|${el.innerHTML}`;
       // Key includes the container so a stack envelope and a stack icon —
       // both keyed by data-stack-id but in different groups — don't collide.
       map.set(grp.container + '|' + grp.idAttr + '|' + id, { el, center, frozen });
