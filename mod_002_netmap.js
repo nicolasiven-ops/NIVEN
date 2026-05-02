@@ -1777,10 +1777,13 @@ function bindBoard(s) {
       const st = findStackById(s, stackEl.dataset.stackId);
       if (!st) return;
       if (e.shiftKey) { toggleMultiSelect(s, 'stack', st.id); e.preventDefault(); return; }
-      select(s, 'stack', st.id);
+      // Select without recentering — the recenter fires on mouseup if the
+      // gesture stayed a click (no drag). Otherwise dragging would fight the
+      // camera glide and the icon would slide out from under the pointer.
+      select(s, 'stack', st.id, { skipRecenter: true });
       snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
-      s.drag = { kind: 'stack', id: st.id, dx: st.x - w.x, dy: st.y - w.y };
+      s.drag = { kind: 'stack', id: st.id, dx: st.x - w.x, dy: st.y - w.y, startX: e.clientX, startY: e.clientY, recenterPending: true };
       s.host.classList.add('m002-dragging');
       e.preventDefault();
       return;
@@ -1801,10 +1804,10 @@ function bindBoard(s) {
         e.preventDefault();
         return;
       }
-      select(s, 'device', dev.id);
+      select(s, 'device', dev.id, { skipRecenter: true });
       snapshot(s);
       const w = clientToWorld(s, e.clientX, e.clientY);
-      s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y };
+      s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, recenterPending: true };
       s.host.classList.add('m002-dragging');
       e.preventDefault();
       return;
@@ -1865,9 +1868,17 @@ function bindBoard(s) {
         const moved = Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4;
         if (moved) {
           s.drag.jumpPending = false;
-          select(s, 'device', s.drag.id);
+          select(s, 'device', s.drag.id, { skipRecenter: true });
         } else {
           return; // still ambiguous, don't move yet
+        }
+      }
+      // Auto-recenter is deferred to mouseup so the camera doesn't fight an
+      // active drag. Once the pointer crosses 4px we know the gesture is a
+      // drag, not a clean click.
+      if (s.drag.recenterPending && s.drag.startX != null) {
+        if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
+          s.drag.recenterPending = false;
         }
       }
       const w = clientToWorld(s, e.clientX, e.clientY);
@@ -1933,6 +1944,11 @@ function bindBoard(s) {
         }
       }
     } else if (s.drag.kind === 'stack') {
+      if (s.drag.recenterPending && s.drag.startX != null) {
+        if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
+          s.drag.recenterPending = false;
+        }
+      }
       const w = clientToWorld(s, e.clientX, e.clientY);
       const st = findStackById(s, s.drag.id);
       if (!st) return;
@@ -1987,6 +2003,12 @@ function bindBoard(s) {
       if (dev) jumpToReference(s, dev);
       return;
     }
+    // Auto-recenter on mouseup: only fires when the gesture stayed a click
+    // (no drag past 4px). Avoids the camera fighting an active drag and
+    // letting the icon slip out from under the pointer.
+    const recenterClick = s.drag?.recenterPending === true && (s.drag.kind === 'device' || s.drag.kind === 'stack');
+    const recenterId = recenterClick ? s.drag.id : null;
+    const recenterKind = recenterClick ? s.drag.kind : null;
     // Drop-to-stack: a device was dragged onto another device or stack.
     if (s.drag?.kind === 'device' && s.dragStackTarget) {
       const [tk, tid] = s.dragStackTarget.split(':');
@@ -2034,6 +2056,12 @@ function bindBoard(s) {
     }
     s.drag = null;
     s.host.classList.remove('m002-dragging');
+    // Fire the deferred auto-recenter now that the gesture is done. Skipped
+    // if the pointer moved (full drag) — recenterPending was flipped off in
+    // onMove. Stays gated by the user's preference.
+    if (recenterClick && s.prefs?.autoRecenter && recenterKind && recenterId) {
+      recenterOnSelection(s, recenterKind, recenterId);
+    }
   };
 
   const onDblClick = (e) => {
