@@ -2469,10 +2469,13 @@ function jumpToReference(s, dev) {
   // select the peer so the user lands directly on the wormhole's other end.
   const peer = couplePeer(s, dev);
   if (peer) {
-    // Coupled peers share world coordinates by invariant — keep the current
-    // view through the hop so the peer materialises at the exact same screen
-    // position as the source JUMP. Anything else would be visible drift.
-    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone, { keepView: true });
+    // Restore the saved Z2 view so the camera glides to where the user last
+    // worked in that zone. Because coupled peers share world coords, the
+    // visual transition is now coherent — the JUMP icon doesn't teleport
+    // mid-glide, only the surrounding scenery does.
+    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone);
+    // Zone glide already animated us to the saved view — don't override
+    // it with an auto-recenter on the peer.
     select(s, 'device', peer.id, { skipRecenter: true });
     return;
   }
@@ -6637,7 +6640,7 @@ function refreshZoneBar(s) {
   `;
 }
 
-function switchZone(s, zoneId, opts = {}) {
+function switchZone(s, zoneId) {
   if (!zoneId || zoneId === s.activeZone) return;
   // Persist the position we're leaving so a return trip lands on the same
   // spot. Zoom is held instead of restored — the user keeps whatever scale
@@ -6645,9 +6648,7 @@ function switchZone(s, zoneId, opts = {}) {
   if (!s.view.zoneViews) s.view.zoneViews = {};
   s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
-  // keepView: caller (JUMP couple hop) wants the camera to stay put — the
-  // peer JUMP shares world coords so it'll appear at the same screen spot.
-  const saved = opts.keepView ? null : s.view.zoneViews[zoneId];
+  const saved = s.view.zoneViews[zoneId];
   const to = saved
     ? { x: saved.x, y: saved.y, zoom: from.zoom } // keep current zoom
     : from;
