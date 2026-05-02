@@ -2745,7 +2745,10 @@ function drawDevice(s, dev) {
   if (isReference(dev)) cls.push('m002-device-ref');
   if (peer) cls.push('m002-device-coupled');
   const memberStack = findStack(s, dev.id);
-  if (memberStack && !isStackCollapsed(s, memberStack)) cls.push('m002-stack-member');
+  if (memberStack && !isStackCollapsed(s, memberStack)) {
+    cls.push('m002-stack-member');
+    if (stackHasVip(memberStack)) cls.push('m002-stack-member-vip');
+  }
   g.setAttribute('class', cls.join(' '));
   g.setAttribute('data-device-id', dev.id);
   // Layer-aware data hooks. CSS dims data-l3="false" devices in the routing
@@ -7431,18 +7434,17 @@ const MOD002_CSS = `
 .m002-stack-collapsed.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
-.m002-stack-envelope{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 24px var(--accent));}
-.m002-stack-envelope:hover{filter:drop-shadow(0 0 11px var(--accent)) drop-shadow(0 0 32px var(--accent));}
-.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 14px var(--accent)) drop-shadow(0 0 40px var(--accent));}
-.m002-stack-env-bg{fill:color-mix(in srgb, var(--accent) 6%, transparent);stroke:var(--accent);stroke-width:2;stroke-dasharray:6 4;opacity:1;}
+.m002-stack-envelope{filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 12px var(--accent));}
+.m002-stack-envelope:hover{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 16px var(--accent));}
+.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 22px var(--accent));}
+.m002-stack-env-bg{fill:transparent;stroke:var(--accent);stroke-width:1.6;stroke-dasharray:6 4;opacity:1;}
 .m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke-width:2.4;}
 .m002-stack-envelope.m002-selected .m002-stack-env-label{fill:var(--accent);}
 .m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.8;}
-/* Routing layer: envelope stops glowing — the L3 members themselves carry
-   the light. L2 envelopes recede; L3 envelopes keep an accent outline so the
-   group is still visible without competing with the member glow. */
-.m002-host[data-active-layer="routing"] .m002-stack-envelope{filter:none;}
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{opacity:.45;}
+/* Routing layer: a stack's envelope only glows when the stack itself is an
+   L3 entity (data-l3="true" iff stackHasVip). Non-VIP envelopes recede so
+   the eye lands on the actual IP-bearing members instead. */
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{filter:none;opacity:.45;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;fill:transparent;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-label{fill:#5a5f6e;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.7;}
@@ -7458,6 +7460,16 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"].m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
 .m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"] .m002-dev-bg{stroke:var(--accent);}
 .m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"] .m002-dev-type{fill:var(--accent);opacity:.85;}
+/* Members of a VIP'd stack: the stack speaks for them in routing — keep them
+   muted so the envelope is the visual L3 entity, not the individual nodes. */
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"]{filter:none;}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip:hover,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"]:hover{filter:drop-shadow(0 0 2px rgba(245,243,255,.45)) drop-shadow(0 0 7px rgba(245,243,255,.25));}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip .m002-dev-bg,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"] .m002-dev-bg{stroke:rgba(245,243,255,.45);}
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip .m002-dev-type,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"] .m002-dev-type{fill:rgba(245,243,255,.65);opacity:1;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
 .m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
 .m002-stack-cable-label{font-size:9px;font-family:'Share Tech Mono',monospace;fill:#9aa0a8;letter-spacing:1px;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
