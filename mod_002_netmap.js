@@ -6426,16 +6426,19 @@ function switchZone(s, zoneId) {
   if (!zoneId || zoneId === s.activeZone) return;
   // Persist the view we're leaving so the user lands back on the same
   // canvas position next time they return to this zone. Each zone gets
-  // its own saved x/y/zoom slot under s.view.zoneViews.
+  // its own saved x/y/zoom slot under s.view.zoneViews. First-time
+  // visits inherit the current view (no surprise teleport to 0,0,1).
   if (!s.view.zoneViews) s.view.zoneViews = {};
   s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const saved = s.view.zoneViews[zoneId];
-  const to = saved || { x: 0, y: 0, zoom: 1 };
+  const to = saved || from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
   render(s);
-  animateZoneView(s, from, to, 520);
+  if (from.x !== to.x || from.y !== to.y || from.zoom !== to.zoom) {
+    animateZoneView(s, from, to, 520);
+  }
   schedSave(s);
 }
 
