@@ -1328,7 +1328,7 @@ function createState(stage, ctx) {
     activeZone: null,
 
     host: null, board: null, svg: null, gWorld: null,
-    gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null,
+    gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null, gPulse: null,
     palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
 
     devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], interfaces:[{id,name,ip,subnetId?}], routes:[{id,dst,nextHop,interfaceId?,metric?}], ports: [{n,name,vlans:[]}] }
@@ -1442,6 +1442,7 @@ function buildDOM(s) {
           <g class="m002-world">
             <rect class="m002-grid-bg" x="-50000" y="-50000" width="100000" height="100000" fill="url(#m002-grid)"/>
             <rect class="m002-grid-bg2" x="-50000" y="-50000" width="100000" height="100000" fill="url(#m002-grid-major)"/>
+            <g class="m002-vfx-pulse" pointer-events="none"></g>
             <g class="m002-stacks-bg"></g>
             <g class="m002-links"></g>
             <g class="m002-l3-paths"></g>
@@ -1523,6 +1524,7 @@ function buildDOM(s) {
   s.gL3Paths = host.querySelector('.m002-l3-paths');
   s.gDevices = host.querySelector('.m002-devices');
   s.gOverlay = host.querySelector('.m002-overlay');
+  s.gPulse = host.querySelector('.m002-vfx-pulse');
   s.gExits = host.querySelector('.m002-vfx-exits');
   s.palette = host.querySelector('.m002-leftpanel');
   s.inspector = host.querySelector('.m002-inspector');
@@ -6440,15 +6442,18 @@ function vfxResetInlineParts(parts) {
 const VFX_PULSE_COUNT_MIN = 6;        // tendrils per drop
 const VFX_PULSE_COUNT_MAX = 10;
 const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
-const VFX_PULSE_SEGS_MAX = 6;
+const VFX_PULSE_SEGS_MAX = 4;
 const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
-const VFX_PULSE_SEG_CELLS_MAX = 3;
+const VFX_PULSE_SEG_CELLS_MAX = 2;
 const VFX_PULSE_FILL_MS = 620;        // tendril draw-in duration
 const VFX_PULSE_FADE_MS = 620;        // tendril fade-out duration
 const VFX_PULSE_STAGGER_MS = 220;     // max random per-tendril start delay
 
 function vfxGridPulse(s, wx, wy, color) {
-  if (!s.gOverlay || !color) return;
+  // Render into the dedicated pulse layer that sits BEHIND stacks/links/
+  // devices, so tendrils never cover other elements.
+  const layer = s.gPulse || s.gOverlay;
+  if (!layer || !color) return;
   const cx = Math.round(wx / GRID) * GRID;
   const cy = Math.round(wy / GRID) * GRID;
   // Element half-extents, snapped to grid so launch points and the
@@ -6549,7 +6554,7 @@ function vfxGridPulse(s, wx, wy, color) {
       peak: 0.55 + Math.random() * 0.4,
     });
   }
-  s.gOverlay.appendChild(group);
+  layer.appendChild(group);
 
   const totalMs = VFX_PULSE_STAGGER_MS + VFX_PULSE_FILL_MS + VFX_PULSE_FADE_MS;
   const start = performance.now();
