@@ -6342,12 +6342,11 @@ function vfxApplyDrain(parts, p, phase) {
   //   - 'head':     dash from 0 to k (bright clings to path start)
   //   - 'tail':     dash from L-k to L (bright clings to path end)
   //   - 'centered': dash of length k centered on perimeter offset .offset
-  // Non-strokeable bits (rect fills, text) ride a matching inline opacity
-  // ramp tied to drain progress, so the drop-shadow halo (which renders
-  // a shadow of all painted descendants) shrinks in lockstep with what
-  // the drain leaves behind. Wrapper opacity is NOT touched — the user
-  // wants the drain itself to be the only mechanism that makes elements
-  // disappear, no separate "verblassen" of the whole element.
+  // For phase === 'build' the wrapper opacity owns the fade (and the glow
+  // halo fades with it), so we skip the inline fill/text opacity work to
+  // avoid double-fading. For phase === 'drain' we still want the fills/
+  // texts to vanish on top of the dasharray drain so the clone fully
+  // disappears before it's removed.
   for (const sh of parts.shapes) {
     const L = sh.len;
     const k = L * (1 - p); // surviving bright length
@@ -6387,11 +6386,37 @@ function vfxApplyDrain(parts, p, phase) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  // Inline fade for non-strokeable bits — text opacity and rect fillOpacity
-  // ramp 1 → 0 with drain progress (and 0 → 1 for builds, since builds call
-  // this with p = 1 - e). Same formula in both phases.
-  const v = String(1 - p);
-  for (const f of parts.fades) f.el.style[f.prop] = v;
+  // Visibility (fill / text / glow) rides the wrapper's opacity in BOTH
+  // phases so the drop-shadow halo fades smoothly with the rest of the
+  // element instead of popping. Inline fades aren't needed here.
+}
+
+function vfxSuppressFilters(el) {
+  // Glow off on the wrapper + every SVG descendant so exit clones don't
+  // carry a halo while their stroke drains away (and read as a "flash").
+  el.style.filter = 'none';
+  el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = 'none'; });
+}
+
+function vfxRestoreFilters(el) {
+  el.style.filter = '';
+  el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = ''; });
+}
+
+// For builds: capture the natural CSS opacity as the fade target, then drop
+// the wrapper to opacity 0 inline. The rAF step ramps it back up to target
+// over the same window the dasharray builds in. The drop-shadow halo is
+// part of the wrapper's render output so it scales with this opacity —
+// glow now fades in instead of popping at the end.
+function vfxStartBuildFade(el) {
+  const cs = window.getComputedStyle(el);
+  const target = parseFloat(cs.opacity || '1');
+  el.style.opacity = '0';
+  return Number.isFinite(target) ? target : 1;
+}
+
+function vfxClearBuildFade(el) {
+  el.style.opacity = '';
 }
 
 function vfxResetInlineParts(parts) {
@@ -6497,6 +6522,14 @@ function vfxGridPulse(s, wx, wy, color) {
   requestAnimationFrame(step);
 }
 
+function vfxFrozenOpacity(entry) {
+  // Pull the leading opacity component out of the frozen digest. Falls back
+  // to 1 when no digest was captured.
+  const f = entry?.frozen || '';
+  const v = parseFloat((f.split('|')[0] || '1'));
+  return Number.isFinite(v) ? v : 1;
+}
+
 function vfxCentroid(snapshot) {
   let cx = 0, cy = 0, n = 0;
   for (const [, entry] of snapshot) {
@@ -6524,47 +6557,35 @@ function vfxAnimateView(s, doRender, anchor) {
   const drainAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(after) || vfxCentroid(before);
   const buildAnchor = anchor || vfxCentroid(persisting) || vfxCentroid(before) || vfxCentroid(after);
 
-  // Companions that share a path with the main stroke and would otherwise
-  // read as a "glow halo" or "fade" alongside the drain — strip from drain
-  // clones outright, hide on builds for the duration of the animation:
-  //   - .m002-link-flow         : white moving dasharray on links
-  //   - .m002-l3-path-glow      : 8px-wide blurred halo behind L3 routes
-  //   - .m002-l3-path-flow      : drop-shadow flow ribbon on L3 routes
-  // Without this, the user sees the soft blur trailing the drain and reads
-  // it as the line "verblassend" instead of just receding.
-  const VFX_COMPANION_SELECTOR = '.m002-link-flow, .m002-l3-path-glow, .m002-l3-path-flow';
-
-  // EXITS — clone old element, drain it, remove. Wrapper opacity is left
-  // alone: the drain itself (dasharray + inline fill/text fade) is the
-  // only mechanism that makes the clone disappear. The drop-shadow halo
-  // shrinks naturally because it renders a shadow of the painted
-  // descendants, which the drain empties out in lockstep.
+  // EXITS — clone old element, drain it, remove. Wrapper opacity rides
+  // OLD-opacity → 0 over the same window so the drop-shadow halo fades
+  // smoothly with the wall (no glow-pop at start of drain).
   const drains = [];
   for (const [key, entry] of before) {
     if (after.has(key)) continue;
     const clone = entry.el.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    clone.querySelectorAll(VFX_COMPANION_SELECTOR).forEach((n) => n.remove());
+    // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
+    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
     const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
-    drains.push({ clone, parts });
+    const startOpacity = vfxFrozenOpacity(entry);
+    clone.style.opacity = String(startOpacity);
+    drains.push({ clone, parts, startOpacity });
   }
 
   // BUILDS — fresh element in its real container, build it up from empty.
-  // No wrapper opacity ramp: the dasharray builds the strokes and the
-  // inline fill/text ramp brings the rest in. Frame 0 is painted
-  // synchronously below, so the element never flashes at full opacity
-  // before its drain state lands. Companion paths are hidden for the
-  // duration so only the crisp main stroke draws in.
+  // Wrapper opacity rides 0 → CSS-target so the drop-shadow halo fades in
+  // along with the wall (no end-of-animation glow pop).
   const builds = [];
   for (const [key, entry] of after) {
     if (before.has(key)) continue;
     const newEl = entry.el;
     const parts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (parts.shapes.length === 0 && parts.fades.length === 0) continue;
-    const aux = vfxHideCompanions(newEl, VFX_COMPANION_SELECTOR);
-    builds.push({ el: newEl, parts, aux });
+    const target = vfxStartBuildFade(newEl);
+    builds.push({ el: newEl, parts, target });
   }
 
   // PERSISTING with changed look (e.g. layer flip dimmed a non-L3 device, or
@@ -6576,25 +6597,30 @@ function vfxAnimateView(s, doRender, anchor) {
     if (!newEntry) continue;
     if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
 
-    // Overlay-drain the OLD look on top of the new render. Same as exits:
-    // wrapper opacity stays put, only the drain mechanism takes it down.
+    // Overlay-drain the OLD look on top of the new render. Wrapper opacity
+    // rides oldOpacity → 0 in lockstep with the dasharray drain, so the
+    // glow halo fades along with everything else.
     const clone = oldEntry.el.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    clone.querySelectorAll(VFX_COMPANION_SELECTOR).forEach((n) => n.remove());
+    const startOpacity = vfxFrozenOpacity(oldEntry);
+    clone.style.opacity = String(startOpacity);
+    clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
     const drainParts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (drainParts.shapes.length > 0 || drainParts.fades.length > 0) {
-      drains.push({ clone, parts: drainParts });
+      drains.push({ clone, parts: drainParts, startOpacity });
     } else {
       clone.remove();
     }
 
-    // Build up the NEW look on the underlying real element.
+    // Build up the NEW look on the underlying real element. Same machinery
+    // as fresh-entry builds — wrapper opacity 0 → target, glow naturally
+    // scales with it, no filter suppression / restore pop at the end.
     const newEl = newEntry.el;
     const buildParts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (buildParts.shapes.length > 0 || buildParts.fades.length > 0) {
-      const aux = vfxHideCompanions(newEl, VFX_COMPANION_SELECTOR);
-      builds.push({ el: newEl, parts: buildParts, aux });
+      const target = vfxStartBuildFade(newEl);
+      builds.push({ el: newEl, parts: buildParts, target });
     }
   }
 
@@ -6609,30 +6635,22 @@ function vfxAnimateView(s, doRender, anchor) {
   function step(now) {
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
-    for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
-    for (const b of builds) vfxApplyDrain(b.parts, 1 - e, 'build');
+    for (const d of drains) {
+      vfxApplyDrain(d.parts, e, 'drain');
+      d.clone.style.opacity = String(d.startOpacity * (1 - e));
+    }
+    for (const b of builds) {
+      vfxApplyDrain(b.parts, 1 - e, 'build');
+      b.el.style.opacity = String(b.target * e);
+    }
     if (t < 1) { requestAnimationFrame(step); return; }
     for (const d of drains) d.clone.remove();
     for (const b of builds) {
       vfxResetInlineParts(b.parts);
-      vfxRestoreCompanions(b.aux);
+      vfxClearBuildFade(b.el);
     }
   }
   requestAnimationFrame(step);
-}
-
-function vfxHideCompanions(rootEl, selector) {
-  const list = [];
-  rootEl.querySelectorAll(selector).forEach((n) => {
-    list.push(n);
-    n.style.visibility = 'hidden';
-  });
-  return list;
-}
-
-function vfxRestoreCompanions(list) {
-  if (!list) return;
-  for (const n of list) n.style.visibility = '';
 }
 
 // =============================================================================
