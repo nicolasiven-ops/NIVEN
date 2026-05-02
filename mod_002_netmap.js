@@ -1338,6 +1338,7 @@ function createState(stage, ctx) {
     spawnIdx: 0,
 
     drag: null,
+    dragVisual: null, // active "lift + inertia" animation state for the dragged element
     dragStackTarget: null, // "device:ID" or "stack:ID" — drop-target while dragging a device
     dragStackTargetCompat: null, // 'ok' | 'bad' — green/red glow state for current target
     saveTimer: null,
@@ -1697,6 +1698,146 @@ function ensureStyles() {
 }
 
 // =============================================================================
+// Drag lift + inertia — picks the dragged element up off the board (small
+// scale-up, deeper shadow) and lets it wobble around the cursor with a spring
+// so quick side-to-side swings feel fluid instead of glued. The rAF loop owns
+// the dragged element's transform attribute for the duration of the gesture
+// (and a brief settle animation afterwards), so every other code path that
+// would normally write `translate(x y)` to that element is suppressed via
+// `el.dataset.m002LiftLock`.
+// =============================================================================
+const DRAG_LIFT_SCALE = 1.07;
+const DRAG_LIFT_TILT_FACTOR = 7;     // px/ms of pointer velocity → degrees
+const DRAG_LIFT_TILT_MAX = 11;       // clamp degrees so it stays subtle
+const DRAG_LIFT_SPRING_STIFF = 0.18; // 0..1 — pull toward target tilt
+const DRAG_LIFT_SPRING_DAMP = 0.55;  // 0..1 — bleed velocity each frame
+const DRAG_LIFT_TARGET_DECAY = 0.82; // target tilt fades when pointer stalls
+const DRAG_LIFT_SCALE_LERP = 0.22;
+const DRAG_LIFT_END_EPS = 0.0015;    // stop animating once inside this band
+
+function dragLiftElement(s) {
+  if (!s.dragVisual) return null;
+  const { kind, id } = s.dragVisual;
+  if (kind === 'device') return s.gDevices?.querySelector(`[data-device-id="${id}"]`) || null;
+  if (kind === 'stack')  return s.gDevices?.querySelector(`[data-stack-id="${id}"]`)  || null;
+  return null;
+}
+
+function dragLiftPosition(s) {
+  if (!s.dragVisual) return null;
+  const { kind, id } = s.dragVisual;
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === id);
+    return dev ? { x: dev.x, y: dev.y } : null;
+  }
+  if (kind === 'stack') {
+    const st = findStackById(s, id);
+    return st ? { x: st.x, y: st.y } : null;
+  }
+  return null;
+}
+
+function applyDragLiftTransform(s) {
+  const dv = s.dragVisual;
+  if (!dv) return;
+  const el = dragLiftElement(s);
+  const pos = dragLiftPosition(s);
+  if (!el || !pos) return;
+  el.setAttribute('transform', `translate(${pos.x} ${pos.y}) rotate(${dv.tilt.toFixed(3)}) scale(${dv.scale.toFixed(4)})`);
+}
+
+function startDragLift(s, kind, id) {
+  // Cancel any settle-animation still running from a previous gesture.
+  if (s.dragVisual?.raf) cancelAnimationFrame(s.dragVisual.raf);
+  if (s.dragVisual) {
+    const prev = dragLiftElement(s);
+    if (prev) { delete prev.dataset.m002LiftLock; prev.classList.remove('m002-lifted'); }
+  }
+  s.dragVisual = {
+    kind, id,
+    scale: 1,
+    scaleTarget: DRAG_LIFT_SCALE,
+    tilt: 0,
+    tiltVel: 0,
+    targetTilt: 0,
+    lastClientX: null,
+    lastTime: performance.now(),
+    ending: false,
+    raf: null,
+  };
+  const el = dragLiftElement(s);
+  if (el) {
+    el.dataset.m002LiftLock = '1';
+    el.classList.add('m002-lifted');
+  }
+  const tick = () => {
+    const dv = s.dragVisual;
+    if (!dv) return;
+    // Scale lerp
+    dv.scale += (dv.scaleTarget - dv.scale) * DRAG_LIFT_SCALE_LERP;
+    // Tilt spring
+    const accel = (dv.targetTilt - dv.tilt) * DRAG_LIFT_SPRING_STIFF - dv.tiltVel * DRAG_LIFT_SPRING_DAMP;
+    dv.tiltVel += accel;
+    dv.tilt += dv.tiltVel;
+    // Target tilt decays toward 0 each frame so a still pointer settles.
+    dv.targetTilt *= DRAG_LIFT_TARGET_DECAY;
+    if (Math.abs(dv.targetTilt) < 0.01) dv.targetTilt = 0;
+    applyDragLiftTransform(s);
+    const settled = dv.ending
+      && Math.abs(dv.scaleTarget - dv.scale) < DRAG_LIFT_END_EPS
+      && Math.abs(dv.tilt) < 0.05
+      && Math.abs(dv.tiltVel) < 0.05;
+    if (settled) {
+      const el2 = dragLiftElement(s);
+      const pos = dragLiftPosition(s);
+      if (el2 && pos) {
+        delete el2.dataset.m002LiftLock;
+        el2.classList.remove('m002-lifted');
+        el2.setAttribute('transform', `translate(${pos.x} ${pos.y})`);
+      }
+      s.dragVisual = null;
+      return;
+    }
+    dv.raf = requestAnimationFrame(tick);
+  };
+  s.dragVisual.raf = requestAnimationFrame(tick);
+}
+
+function updateDragLiftFromPointer(s, clientX) {
+  const dv = s.dragVisual;
+  if (!dv || dv.ending) return;
+  const now = performance.now();
+  if (dv.lastClientX != null) {
+    const dt = Math.max(1, now - dv.lastTime);
+    const vx = (clientX - dv.lastClientX) / dt; // px/ms
+    const target = -vx * DRAG_LIFT_TILT_FACTOR;
+    dv.targetTilt = Math.max(-DRAG_LIFT_TILT_MAX, Math.min(DRAG_LIFT_TILT_MAX, target));
+  }
+  dv.lastClientX = clientX;
+  dv.lastTime = now;
+}
+
+function endDragLift(s) {
+  const dv = s.dragVisual;
+  if (!dv) return;
+  dv.ending = true;
+  dv.scaleTarget = 1;
+  dv.targetTilt = 0;
+}
+
+function cancelDragLift(s) {
+  // Immediate teardown — used when the lifted element is about to be replaced
+  // (drop-to-stack merges the source into a freshly-rendered stack icon, so a
+  // soft settle would tick against a stale dom node).
+  const dv = s.dragVisual;
+  if (!dv) return;
+  if (dv.raf) cancelAnimationFrame(dv.raf);
+  const el = dragLiftElement(s);
+  if (el) { delete el.dataset.m002LiftLock; el.classList.remove('m002-lifted'); }
+  s.dragVisual = null;
+}
+
+// =============================================================================
 // Board interaction — pan / zoom / drag
 // =============================================================================
 function bindBoard(s) {
@@ -1874,6 +2015,7 @@ function bindBoard(s) {
         if (moved) {
           s.drag.jumpPending = false;
           select(s, 'device', s.drag.id, { skipRecenter: true });
+          if (!s.dragVisual) startDragLift(s, 'device', s.drag.id);
         } else {
           return; // still ambiguous, don't move yet
         }
@@ -1884,6 +2026,7 @@ function bindBoard(s) {
       if (s.drag.recenterPending && s.drag.startX != null) {
         if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
           s.drag.recenterPending = false;
+          if (!s.dragVisual) startDragLift(s, 'device', s.drag.id);
         }
       }
       const w = clientToWorld(s, e.clientX, e.clientY);
@@ -1956,6 +2099,7 @@ function bindBoard(s) {
       if (s.drag.recenterPending && s.drag.startX != null) {
         if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
           s.drag.recenterPending = false;
+          if (!s.dragVisual) startDragLift(s, 'stack', s.drag.id);
         }
       }
       const w = clientToWorld(s, e.clientX, e.clientY);
@@ -1979,9 +2123,10 @@ function bindBoard(s) {
       // If part of a multi-selection, also move other selected items
       const group = collectGroupTargets(s, { kind: 'stack', id: st.id });
       group.filter((it) => !(it.kind === 'stack' && it.id === st.id)).forEach((it) => moveItemBy(s, it, ddx, ddy));
-      // Move the collapsed icon if present
+      // Move the collapsed icon if present (skip while the lift loop owns its
+      // transform — the rAF tick keeps wobble + position in sync)
       const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
-      g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
+      if (g && !g.dataset.m002LiftLock) g.setAttribute('transform', `translate(${st.x} ${st.y})`);
       // Move envelope + cables if expanded
       if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
       // Redraw links touching the stack — absorbed ones (owned by a LAG-pair
@@ -2000,6 +2145,13 @@ function bindBoard(s) {
       if (s.activeLayer === 'routing') drawL3Paths(s);
       refreshAggregates(s);
     }
+    // Lift / inertia: read pointer velocity, refresh the wobble target, and
+    // re-write the dragged element's transform so the rAF settle never lags
+    // a frame behind the cursor.
+    if (s.dragVisual && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
+      updateDragLiftFromPointer(s, e.clientX);
+      applyDragLiftTransform(s);
+    }
   };
   const onUp = () => {
     // JUMP click without drag → hop to the referenced zone / map. Drag past
@@ -2009,6 +2161,7 @@ function bindBoard(s) {
       const dev = s.devices.find((d) => d.id === s.drag.id);
       s.drag = null;
       s.host.classList.remove('m002-dragging');
+      cancelDragLift(s); // jumping unmounts the zone — no settle animation possible
       if (dev) jumpToReference(s, dev);
       return;
     }
@@ -2030,6 +2183,7 @@ function bindBoard(s) {
       s.dragStackTarget = null;
       s.dragStackTargetCompat = null;
       s.drag = null;
+      cancelDragLift(s); // merging re-renders the source — kill the wobble before its element vanishes
       if (!compat) {
         toast(s, 'Stack only allowed between same device types');
         return;
@@ -2065,6 +2219,9 @@ function bindBoard(s) {
     }
     s.drag = null;
     s.host.classList.remove('m002-dragging');
+    // Spring the lifted element back to rest (1.0 scale, 0° tilt) — settles
+    // smoothly over a few frames after release so the gesture has follow-through.
+    endDragLift(s);
     // Fire the deferred auto-recenter now that the gesture is done. Skipped
     // if the pointer moved (full drag) — recenterPending was flipped off in
     // onMove. Stays gated by the user's preference.
@@ -2552,6 +2709,10 @@ function drawDevice(s, dev) {
 function updateDeviceTransform(_s, dev, gEl) {
   const g = gEl || document.querySelector(`[data-device-id="${dev.id}"]`);
   if (!g) return;
+  // While the lift+inertia animation owns this element's transform, leave it
+  // alone — the rAF loop composes translate+rotate+scale every frame and a
+  // bare translate write here would erase the wobble for one frame.
+  if (g.dataset.m002LiftLock) return;
   g.setAttribute('transform', `translate(${dev.x} ${dev.y})`);
 }
 
@@ -2929,7 +3090,7 @@ function moveItemBy(s, target, ddx, ddy) {
       }
     });
     const g = s.gDevices.querySelector(`[data-stack-id="${st.id}"]`);
-    g?.setAttribute('transform', `translate(${st.x} ${st.y})`);
+    if (g && !g.dataset.m002LiftLock) g.setAttribute('transform', `translate(${st.x} ${st.y})`);
     if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
   }
   // Redraw links touching this item
@@ -7120,6 +7281,7 @@ const MOD002_CSS = `
 .m002-device{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-device:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-device.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-device.m002-lifted{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 22px var(--accent)) drop-shadow(0 7px 14px rgba(0,0,0,.55));}
 .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.2;}
 .m002-device.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-device.m002-link-pending .m002-dev-bg{stroke-dasharray:4 3;}
@@ -7151,6 +7313,7 @@ const MOD002_CSS = `
 .m002-stack-collapsed{cursor:move;filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
 .m002-stack-collapsed:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-stack-collapsed.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-stack-collapsed.m002-lifted{filter:drop-shadow(0 0 8px var(--accent)) drop-shadow(0 0 22px var(--accent)) drop-shadow(0 7px 14px rgba(0,0,0,.55));}
 .m002-stack-collapsed.m002-stack-pending .m002-dev-bg{stroke-dasharray:4 3;}
 .m002-stack-ghost{fill:#0a0a10;stroke:var(--accent);stroke-width:1;opacity:.55;}
 .m002-stack-collapsed .m002-dev-bg{fill:#0a0a10;stroke:var(--accent);stroke-width:1.4;}
