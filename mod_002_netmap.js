@@ -3515,6 +3515,7 @@ function updateLinksFor(s, deviceId) {
 // the user sees the actual physical port-links and the LAG itself is implicit.
 function computeAbsorbedLinkIds(s) {
   const absorbed = new Set();
+  // First pass: per-LAG-pair port absorption (the canonical case).
   s.stacks.forEach((stA) => {
     (stA.lags || []).forEach((lag) => {
       if (!lag.counterpart?.lagId) return;
@@ -3541,6 +3542,33 @@ function computeAbsorbedLinkIds(s) {
       });
     });
   });
+  // Second pass: a paired LAG between two collapsed stacks already speaks
+  // for the bundle visually. Any LEFTOVER member-member links between those
+  // same two stacks (extra wires, single-sided LAGs that didn't match a
+  // port set) get swallowed too — otherwise they pile up as overlapping
+  // stubs underneath the proper LAG-pair line.
+  const pairedStackPairs = new Set();
+  s.stacks.forEach((stA) => {
+    (stA.lags || []).forEach((lag) => {
+      if (!lag.counterpart?.lagId) return;
+      const peer = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+      if (!peer) return;
+      if (!isStackCollapsed(s, stA) || !isStackCollapsed(s, peer.stack)) return;
+      pairedStackPairs.add([stA.id, peer.stack.id].sort().join('::'));
+    });
+  });
+  if (pairedStackPairs.size) {
+    const memberToStack = new Map();
+    s.stacks.forEach((st) => (st.members || []).forEach((mid) => memberToStack.set(mid, st.id)));
+    s.links.forEach((l) => {
+      if (absorbed.has(l.id)) return;
+      const aStack = memberToStack.get(l.from);
+      const bStack = memberToStack.get(l.to);
+      if (!aStack || !bStack || aStack === bStack) return;
+      const key = [aStack, bStack].sort().join('::');
+      if (pairedStackPairs.has(key)) absorbed.add(l.id);
+    });
+  }
   return absorbed;
 }
 function redrawLink(s, link) {
