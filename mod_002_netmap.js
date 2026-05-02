@@ -1642,7 +1642,7 @@ function buildDOM(s) {
       s._routingAutoCollapsed = null;
       s._routingAutoExpanded = null;
     }
-    vfxDrainExits(s, () => render(s));
+    vfxAnimateView(s, () => render(s));
   });
   s.activeLayer = 'physical';
   s.host.setAttribute('data-active-layer', s.activeLayer);
@@ -6238,7 +6238,27 @@ function vfxApplyDrain(parts, p) {
   for (const f of parts.fades) f.el.style[f.prop] = inv;
 }
 
-function vfxDrainExits(s, doRender) {
+function vfxSuppressFilters(el) {
+  // Glow off on the wrapper + every SVG descendant so neither exit clones
+  // nor builds-in-progress carry a halo before the wall is even drawn.
+  el.style.filter = 'none';
+  el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = 'none'; });
+}
+
+function vfxRestoreFilters(el) {
+  el.style.filter = '';
+  el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = ''; });
+}
+
+function vfxResetInlineParts(parts) {
+  for (const sh of parts.shapes) {
+    sh.el.style.strokeDasharray = '';
+    sh.el.style.strokeDashoffset = '';
+  }
+  for (const f of parts.fades) f.el.style[f.prop] = '';
+}
+
+function vfxAnimateView(s, doRender) {
   if (!s.gExits) { doRender(); return; }
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
@@ -6246,19 +6266,13 @@ function vfxDrainExits(s, doRender) {
   doRender();
   const after = vfxSnapshot(s);
 
+  // EXITS — clone old element, drain it, remove.
   const drains = [];
   for (const [key, oldEl] of before) {
     if (after.has(key)) continue;
     const clone = oldEl.cloneNode(true);
     clone.style.pointerEvents = 'none';
-    // Kill the drop-shadow glow on clones immediately — otherwise the box
-    // sits there at full halo intensity for the first frames of the drain
-    // and reads as a "flash" before any water has actually drained out.
-    // The user wants the shadow to fade out, the outline to drain.
-    clone.style.filter = 'none';
-    // Same reason for any nested element that owns its own filter (collapsed
-    // stack icons, default-gateway badges, etc).
-    clone.querySelectorAll('*').forEach((el) => { if (el instanceof SVGElement) el.style.filter = 'none'; });
+    vfxSuppressFilters(clone);
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
@@ -6266,18 +6280,40 @@ function vfxDrainExits(s, doRender) {
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
     drains.push({ clone, parts });
   }
-  if (drains.length === 0) return;
 
-  // Paint frame 0 immediately to lock the bright-full state before rAF.
-  for (const d of drains) vfxApplyDrain(d.parts, 0);
+  // BUILDS — fresh element in its real container, build it up from empty,
+  // restore CSS-driven styles at the end so the glow returns naturally.
+  const builds = [];
+  for (const [key, newEl] of after) {
+    if (before.has(key)) continue;
+    vfxSuppressFilters(newEl);
+    const parts = vfxCollectAnimatables(newEl);
+    if (parts.shapes.length === 0 && parts.fades.length === 0) {
+      vfxRestoreFilters(newEl);
+      continue;
+    }
+    builds.push({ el: newEl, parts });
+  }
+
+  if (drains.length === 0 && builds.length === 0) return;
+
+  // Paint frame 0 immediately so neither exits nor builds flash for a frame
+  // before the first rAF tick lands.
+  for (const d of drains) vfxApplyDrain(d.parts, 0); // exits start full
+  for (const b of builds) vfxApplyDrain(b.parts, 1); // builds start empty
 
   const start = performance.now();
   function step(now) {
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
     for (const d of drains) vfxApplyDrain(d.parts, e);
-    if (t < 1) requestAnimationFrame(step);
-    else for (const d of drains) d.clone.remove();
+    for (const b of builds) vfxApplyDrain(b.parts, 1 - e);
+    if (t < 1) { requestAnimationFrame(step); return; }
+    for (const d of drains) d.clone.remove();
+    for (const b of builds) {
+      vfxResetInlineParts(b.parts);
+      vfxRestoreFilters(b.el);
+    }
   }
   requestAnimationFrame(step);
 }
@@ -7075,7 +7111,7 @@ function switchZone(s, zoneId) {
     : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
-  vfxDrainExits(s, () => render(s));
+  vfxAnimateView(s, () => render(s));
   if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
