@@ -3451,6 +3451,8 @@ function drawStackEnvelope(s, stack) {
   env.setAttribute('data-stack-id', stack.id);
   const t = typeOf(stackTypeOf(s, stack));
   if (t?.accent) env.style.setProperty('--accent', t.accent);
+  const stackIsL3 = stackHasVip(stack) || members.some((m) => isL3Device(m));
+  env.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
     <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
@@ -7426,12 +7428,17 @@ const MOD002_CSS = `
 .m002-stack-collapsed.m002-selected .m002-dev-bg{stroke-width:2;}
 .m002-stack-badge{font-size:11px;font-family:'Share Tech Mono',monospace;font-weight:600;fill:var(--accent);letter-spacing:1px;}
 
-.m002-stack-envelope{filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 10px var(--accent));}
-.m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:var(--accent);stroke-width:1.2;stroke-dasharray:5 4;opacity:.85;}
-.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 16px var(--accent));}
-.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke-width:1.6;opacity:1;}
+.m002-stack-envelope{filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 9px var(--accent));}
+.m002-stack-envelope:hover{filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+.m002-stack-envelope.m002-selected{filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 18px var(--accent));}
+.m002-stack-env-bg{fill:rgba(255,255,255,0.02);stroke:var(--accent);stroke-width:1.4;stroke-dasharray:5 4;opacity:.9;}
+.m002-stack-envelope.m002-selected .m002-stack-env-bg{stroke-width:1.8;opacity:1;}
 .m002-stack-envelope.m002-selected .m002-stack-env-label{fill:var(--accent);}
-.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.7;}
+.m002-stack-env-label{font-size:10px;font-family:'Share Tech Mono',monospace;fill:var(--accent);letter-spacing:1.5px;opacity:.75;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{filter:none;opacity:.45;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-label{fill:#5a5f6e;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.7;}
 .m002-device.m002-stack-member{filter:none;}
 .m002-device.m002-stack-member:hover{filter:drop-shadow(0 0 2px rgba(245,243,255,.45)) drop-shadow(0 0 7px rgba(245,243,255,.25));}
 .m002-device.m002-stack-member.m002-selected{filter:drop-shadow(0 0 3px rgba(245,243,255,.6)) drop-shadow(0 0 10px rgba(245,243,255,.35));}
