@@ -3638,7 +3638,9 @@ function recenterOnSelection(s, kind, id) {
   let world = null;
   if (kind === 'device') {
     const dev = s.devices.find((d) => d.id === id);
-    if (dev) world = { x: dev.x, y: dev.y };
+    // JUMPs are navigation portals — auto-recentering on them fights the
+    // intent (the zone-switch animation already moves the camera).
+    if (dev && !isReference(dev)) world = { x: dev.x, y: dev.y };
   } else if (kind === 'stack') {
     const st = s.stacks.find((x) => x.id === id);
     if (st) world = { x: st.x, y: st.y };
@@ -6558,19 +6560,20 @@ function refreshZoneBar(s) {
 
 function switchZone(s, zoneId) {
   if (!zoneId || zoneId === s.activeZone) return;
-  // Persist the view we're leaving so the user lands back on the same
-  // canvas position next time they return to this zone. Each zone gets
-  // its own saved x/y/zoom slot under s.view.zoneViews. First-time
-  // visits inherit the current view (no surprise teleport to 0,0,1).
+  // Persist the position we're leaving so a return trip lands on the same
+  // spot. Zoom is held instead of restored — the user keeps whatever scale
+  // they had, so zone hopping never surprises them with a different scale.
   if (!s.view.zoneViews) s.view.zoneViews = {};
   s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const saved = s.view.zoneViews[zoneId];
-  const to = saved || from;
+  const to = saved
+    ? { x: saved.x, y: saved.y, zoom: from.zoom } // keep current zoom
+    : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
   render(s);
-  if (from.x !== to.x || from.y !== to.y || from.zoom !== to.zoom) {
+  if (from.x !== to.x || from.y !== to.y) {
     animateZoneView(s, from, to, 900);
   }
   schedSave(s);
