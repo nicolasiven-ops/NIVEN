@@ -2324,6 +2324,24 @@ function bindBoard(s) {
           && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
         snapDropToGrid(s, s.drag.kind, s.drag.id);
       }
+      // Grid energy pulse on real drops (palette spawn handled separately
+      // in spawnDeviceAt). Skip stacks-being-merged-into-other-stacks —
+      // they don't really land on the grid, they fold into another entity.
+      if (realDrag && (s.drag.kind === 'device' || s.drag.kind === 'stack') && !s.dragStackTarget) {
+        if (s.drag.kind === 'device') {
+          const dev = s.devices.find((d) => d.id === s.drag.id);
+          if (dev) {
+            const t = typeOf(dev.type);
+            if (t?.accent) vfxGridPulse(s, dev.x, dev.y, t.accent);
+          }
+        } else {
+          const st = (s.stacks || []).find((x) => x.id === s.drag.id);
+          if (st) {
+            const t = typeOf(stackTypeOf(s, st));
+            if (t?.accent) vfxGridPulse(s, st.x, st.y, t.accent);
+          }
+        }
+      }
       if (s.drag.kind === 'device' || s.drag.kind === 'pan' || s.drag.kind === 'stack') schedSave(s);
     }
     s.drag = null;
@@ -2635,6 +2653,7 @@ function spawnDeviceAt(s, typeId, wx, wy) {
   }
   s.devices.push(dev);
   drawDevice(s, dev);
+  vfxGridPulse(s, dev.x, dev.y, t.accent);
   select(s, 'device', dev.id);
   updateStatus(s);
   schedSave(s);
@@ -6406,6 +6425,101 @@ function vfxResetInlineParts(parts) {
     sh.el.style.strokeDashoffset = '';
   }
   for (const f of parts.fades) f.el.style[f.prop] = '';
+}
+
+// =============================================================================
+// VFX — grid energy pulse on element drop
+// =============================================================================
+// When an element lands on the grid (palette spawn or drag-drop), spawn a
+// short-lived halo of grid-aligned lines emanating from the drop point in
+// the element's accent colour. Lines further from the centre light up later
+// (radial wave), each line draws itself in from its midpoint outward, then
+// fades. Conveys the element "wiring into" the grid.
+
+const VFX_PULSE_SPAN_CELLS = 6;     // lines on each side of the drop axes
+const VFX_PULSE_REACH_CELLS = 8;    // half-length of each line, in grid cells
+const VFX_PULSE_FILL_MS = 320;      // line draw-in duration
+const VFX_PULSE_FADE_MS = 520;      // line fade-out duration
+const VFX_PULSE_STAGGER_MS = 38;    // delay per grid step (radial wave speed)
+
+function vfxGridPulse(s, wx, wy, color) {
+  if (!s.gOverlay || !color) return;
+  const cx = Math.round(wx / GRID) * GRID;
+  const cy = Math.round(wy / GRID) * GRID;
+  const SPAN = VFX_PULSE_SPAN_CELLS * GRID;
+  const REACH = VFX_PULSE_REACH_CELLS * GRID;
+  const totalLen = 2 * REACH;
+
+  const group = document.createElementNS(SVG_NS, 'g');
+  group.setAttribute('class', 'm002-vfx-grid-pulse');
+  group.setAttribute('pointer-events', 'none');
+  group.style.color = color;
+
+  const lines = [];
+  for (let i = -SPAN; i <= SPAN; i += GRID) {
+    const dist = Math.abs(i);
+    const hl = document.createElementNS(SVG_NS, 'line');
+    hl.setAttribute('x1', String(cx - REACH));
+    hl.setAttribute('x2', String(cx + REACH));
+    hl.setAttribute('y1', String(cy + i));
+    hl.setAttribute('y2', String(cy + i));
+    hl.setAttribute('stroke', 'currentColor');
+    hl.setAttribute('stroke-width', '1');
+    hl.setAttribute('stroke-linecap', 'round');
+    hl.style.opacity = '0';
+    group.appendChild(hl);
+    lines.push({ el: hl, dist });
+
+    const vl = document.createElementNS(SVG_NS, 'line');
+    vl.setAttribute('x1', String(cx + i));
+    vl.setAttribute('x2', String(cx + i));
+    vl.setAttribute('y1', String(cy - REACH));
+    vl.setAttribute('y2', String(cy + REACH));
+    vl.setAttribute('stroke', 'currentColor');
+    vl.setAttribute('stroke-width', '1');
+    vl.setAttribute('stroke-linecap', 'round');
+    vl.style.opacity = '0';
+    group.appendChild(vl);
+    lines.push({ el: vl, dist });
+  }
+  s.gOverlay.appendChild(group);
+
+  const maxDelay = VFX_PULSE_STAGGER_MS * (SPAN / GRID);
+  const totalMs = maxDelay + VFX_PULSE_FILL_MS + VFX_PULSE_FADE_MS;
+  const start = performance.now();
+
+  function step(now) {
+    const t = now - start;
+    if (t >= totalMs) { group.remove(); return; }
+    for (const ln of lines) {
+      const delay = (ln.dist / GRID) * VFX_PULSE_STAGGER_MS;
+      const local = t - delay;
+      if (local < 0) {
+        ln.el.style.opacity = '0';
+        ln.el.style.strokeDasharray = `0 ${totalLen}`;
+        continue;
+      }
+      // Stroke draws in from line midpoint outward.
+      const fillProgress = Math.min(1, local / VFX_PULSE_FILL_MS);
+      const k = totalLen * fillProgress;
+      const startPos = (totalLen - k) / 2;
+      ln.el.style.strokeDasharray = `${k} ${totalLen}`;
+      ln.el.style.strokeDashoffset = `${-startPos}`;
+      // Opacity ramps up during fill, then decays during fade.
+      let opacity;
+      if (local < VFX_PULSE_FILL_MS) {
+        opacity = fillProgress;
+      } else {
+        const fadeProgress = Math.min(1, (local - VFX_PULSE_FILL_MS) / VFX_PULSE_FADE_MS);
+        opacity = 1 - fadeProgress;
+      }
+      // Lines further from centre are dimmer (energy decays with distance).
+      const decay = Math.max(0.15, 1 - (ln.dist / SPAN) * 0.55);
+      ln.el.style.opacity = String(opacity * decay);
+    }
+    requestAnimationFrame(step);
+  }
+  requestAnimationFrame(step);
 }
 
 function vfxFrozenOpacity(entry) {
