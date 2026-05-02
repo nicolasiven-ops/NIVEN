@@ -6251,6 +6251,14 @@ function vfxDrainExits(s, doRender) {
     if (after.has(key)) continue;
     const clone = oldEl.cloneNode(true);
     clone.style.pointerEvents = 'none';
+    // Kill the drop-shadow glow on clones immediately — otherwise the box
+    // sits there at full halo intensity for the first frames of the drain
+    // and reads as a "flash" before any water has actually drained out.
+    // The user wants the shadow to fade out, the outline to drain.
+    clone.style.filter = 'none';
+    // Same reason for any nested element that owns its own filter (collapsed
+    // stack icons, default-gateway badges, etc).
+    clone.querySelectorAll('*').forEach((el) => { if (el instanceof SVGElement) el.style.filter = 'none'; });
     // Strip the live link-flow overlay — its stroke-dashoffset would fight ours.
     clone.querySelectorAll('.m002-link-flow').forEach((n) => n.remove());
     s.gExits.appendChild(clone);
