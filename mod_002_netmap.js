@@ -6197,9 +6197,10 @@ function deletePort(s, deviceId, portN) {
 // Texts and rect fills fade in lockstep so labels don't float over an
 // emptied frame.
 
-const VFX_DRAIN_MS = 620;       // dasharray drain (the leading visual)
-const VFX_GLOW_TAIL_MS = 360;   // extra tail for wrapper opacity / glow halo
-                                // so the shadow lingers past the source drain
+const VFX_DRAIN_MS = 620;       // dasharray drain — the leading visual.
+                                // Wrapper opacity / glow halo runs on the
+                                // same window so the element doesn't keep
+                                // brightening after the dasharray is done.
 
 const VFX_GROUPS = [
   // Links (paths)
@@ -6388,13 +6389,16 @@ function vfxApplyDrain(parts, p, phase) {
       sh.el.style.strokeDashoffset = '0';
     }
   }
-  // Fills + texts ride inline opacity in lockstep with the dasharray drain.
-  // The dasharray IS the drain (leading visual); fade-out of fills/texts
-  // makes the element actually disappear. The drop-shadow halo follows the
-  // wrapper's opacity, which is animated separately in vfxAnimateView with
-  // a longer tail so the glow lingers softly past the source's drain.
-  const inv = 1 - p;
-  for (const f of parts.fades) f.el.style[f.prop] = inv;
+  // Inline fill / text opacity is only used during the DRAIN phase — that's
+  // where the dasharray is the LEADING visual and we need the non-stroke
+  // parts to disappear in lockstep so the element actually vanishes.
+  // For BUILD phase, the wrapper opacity (animated in vfxAnimateView) owns
+  // the fade-in for everything, including fills/texts/glow — applying
+  // inline fades here would double-fade and slow the build perceptibly.
+  if (phase === 'drain') {
+    const inv = 1 - p;
+    for (const f of parts.fades) f.el.style[f.prop] = inv;
+  }
 }
 
 function vfxSuppressFilters(el) {
@@ -6642,20 +6646,15 @@ function vfxAnimateView(s, doRender, anchor) {
   for (const d of drains) vfxApplyDrain(d.parts, 0, 'drain'); // exits start full
   for (const b of builds) vfxApplyDrain(b.parts, 1, 'build'); // builds start empty
 
-  // Two timelines run in parallel:
-  //   - DRAIN dasharray (the leading visual): runs over VFX_DRAIN_MS
-  //   - Wrapper opacity / glow halo: runs over VFX_DRAIN_MS + VFX_GLOW_TAIL_MS
-  //     so the shadow lingers softly past the source's drain instead of
-  //     popping out the moment the dasharray hits zero. Builds get the same
-  //     longer ramp-in for symmetry.
+  // Single timeline: dasharray drain + wrapper opacity / glow halo all
+  // share VFX_DRAIN_MS so the element doesn't keep brightening (or fading)
+  // after the dasharray is done. Cancellation via s._vfxStop hands the
+  // next vfxAnimateView call a way to abort us cleanly and finalize any
+  // in-flight builds (otherwise inline opacity:0 stays and elements
+  // remain invisible).
   const start = performance.now();
-  const TOTAL_MS = VFX_DRAIN_MS + VFX_GLOW_TAIL_MS;
   let cancelled = false;
   let rafId = 0;
-
-  // The cleanup we hand to s._vfxStop — runs to settle any in-flight builds
-  // back to their natural CSS-driven look (otherwise inline opacity:0 stays
-  // forever and the element vanishes).
   const finalize = () => {
     for (const d of drains) d.clone.remove();
     for (const b of builds) {
@@ -6671,24 +6670,17 @@ function vfxAnimateView(s, doRender, anchor) {
 
   function step(now) {
     if (cancelled) return;
-    const t = now - start;
-    // Dasharray drain progress (0..1) — finishes at VFX_DRAIN_MS
-    const dashT = Math.min(1, t / VFX_DRAIN_MS);
-    const dashE = vfxEaseInOutQuad(dashT);
-    // Wrapper opacity progress (0..1) — extended by GLOW_TAIL_MS
-    const fadeT = Math.min(1, t / TOTAL_MS);
-    const fadeE = vfxEaseInOutQuad(fadeT);
-
+    const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
+    const e = vfxEaseInOutQuad(t);
     for (const d of drains) {
-      vfxApplyDrain(d.parts, dashE, 'drain');
-      d.clone.style.opacity = String(d.startOpacity * (1 - fadeE));
+      vfxApplyDrain(d.parts, e, 'drain');
+      d.clone.style.opacity = String(d.startOpacity * (1 - e));
     }
     for (const b of builds) {
-      vfxApplyDrain(b.parts, 1 - dashE, 'build');
-      b.el.style.opacity = String(b.target * fadeE);
+      vfxApplyDrain(b.parts, 1 - e, 'build');
+      b.el.style.opacity = String(b.target * e);
     }
-
-    if (t < TOTAL_MS) { rafId = requestAnimationFrame(step); return; }
+    if (t < 1) { rafId = requestAnimationFrame(step); return; }
     s._vfxStop = null;
     finalize();
   }
