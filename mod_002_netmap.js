@@ -1284,9 +1284,24 @@ function stopFlowTicker(s) {
   s.flowFrame = null;
 }
 
+const DEFAULT_PREFS = { autoRecenter: false };
+const PREFS_KEY = 'm002.preferences';
+function loadPrefs() {
+  try {
+    const raw = localStorage.getItem(PREFS_KEY);
+    if (!raw) return { ...DEFAULT_PREFS };
+    const parsed = JSON.parse(raw);
+    return { ...DEFAULT_PREFS, ...(parsed && typeof parsed === 'object' ? parsed : {}) };
+  } catch { return { ...DEFAULT_PREFS }; }
+}
+function savePrefs(prefs) {
+  try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
+}
+
 function createState(stage, ctx) {
   return {
     stage, sb: ctx.sb, project: ctx.project, code: ctx.code, exit: ctx.exit,
+    prefs: loadPrefs(),
     // Maps come from Supabase. Each entry mirrors a row's id+name; the heavy
     // map content lives in the table's `data` jsonb and is loaded on demand
     // (or on mount, for the active map).
@@ -1385,6 +1400,10 @@ function buildDOM(s) {
         <div>DRAG NODE → NODE = GROUP</div>
         <div>DBL-CLICK GROUP = EXPAND</div>
       </section>
+
+      <button type="button" class="m002-prefs-btn" data-prefs title="Preferences">
+        <span class="m002-prefs-glyph">⚙</span><span>SETTINGS</span>
+      </button>
     </aside>
 
     <main class="m002-center">
@@ -1543,6 +1562,15 @@ function buildDOM(s) {
   s.palette.addEventListener('click', (e) => {
     const spawn = e.target.closest('[data-spawn]');
     if (spawn) { spawnDevice(s, spawn.dataset.spawn); return; }
+    const prefsBtn = e.target.closest('[data-prefs]');
+    if (prefsBtn) {
+      // Settings panel — uses a synthetic selection kind so openInspector
+      // routes the body to renderPrefsInspector.
+      s.selected = { kind: 'prefs', id: 'prefs' };
+      markSelected(s);
+      openInspector(s);
+      return;
+    }
     const tool = e.target.closest('[data-tool]');
     if (!tool) return;
     if (tool.dataset.tool === 'select') {
@@ -3528,6 +3556,30 @@ function select(s, kind, id) {
   s.selected = { kind, id };
   markSelected(s);
   openInspector(s);
+  if (s.prefs?.autoRecenter) recenterOnSelection(s, kind, id);
+}
+
+// Pan the camera so a freshly-selected device or stack lands in the middle
+// of the canvas. Skipped for non-positional selections (link / lag / agg /
+// prefs). Reuses the zone-switch animation helper for a smooth glide.
+function recenterOnSelection(s, kind, id) {
+  let world = null;
+  if (kind === 'device') {
+    const dev = s.devices.find((d) => d.id === id);
+    if (dev) world = { x: dev.x, y: dev.y };
+  } else if (kind === 'stack') {
+    const st = s.stacks.find((x) => x.id === id);
+    if (st) world = { x: st.x, y: st.y };
+  }
+  if (!world) return;
+  const rect = s.svg.getBoundingClientRect();
+  const cx = rect.width / 2;
+  const cy = rect.height / 2;
+  const z = s.view.zoom;
+  const target = { x: cx - world.x * z, y: cy - world.y * z, zoom: z };
+  const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+  if (Math.abs(target.x - from.x) < 1 && Math.abs(target.y - from.y) < 1) return;
+  animateZoneView(s, from, target, 520);
 }
 
 function deselect(s) {
@@ -4112,6 +4164,32 @@ function renderAggInspector(s, body, idEl) {
     if (lagA && stkA) select(s, 'lag', `${stkA.id}|${lagA.id}`);
     else if (lagB && stkB) select(s, 'lag', `${stkB.id}|${lagB.id}`);
     else deselect(s);
+  });
+}
+
+// Settings inspector — opens via the gear button at the bottom of the
+// left panel. Hosts user-preference toggles persisted in localStorage so
+// they outlive map switches and unmounts.
+function renderPrefsInspector(s, body, idEl) {
+  idEl.textContent = '// SETTINGS';
+  const prefs = s.prefs || (s.prefs = loadPrefs());
+  body.innerHTML = `
+    <p class="m002-link-hint">Preferences are stored locally and apply across all maps.</p>
+    <label class="m002-prefs-row">
+      <span>
+        <span class="m002-prefs-label">Auto-recenter on selection</span>
+        <span class="m002-prefs-sublabel">Pan the camera so the clicked element ends up in the middle of the canvas.</span>
+      </span>
+      <input type="checkbox" data-pref="autoRecenter" ${prefs.autoRecenter ? 'checked' : ''}/>
+    </label>
+  `;
+  body.querySelectorAll('[data-pref]').forEach((el) => {
+    el.addEventListener('change', () => {
+      const key = el.dataset.pref;
+      const val = el.type === 'checkbox' ? el.checked : el.value;
+      s.prefs[key] = val;
+      savePrefs(s.prefs);
+    });
   });
 }
 
@@ -4713,6 +4791,8 @@ function openInspector(s) {
     renderInspectorVlanPickers(s);
   } else if (s.selected.kind === 'agg') {
     renderAggInspector(s, body, idEl);
+  } else if (s.selected.kind === 'prefs') {
+    renderPrefsInspector(s, body, idEl);
   } else if (s.selected.kind === 'lag') {
     // LAG editor — symmetric, both sides are stacks. FROM LAG / TO LAG pick
     // sibling and peer LAGs; per-side blocks edit each stack's own NAME and
@@ -6828,6 +6908,14 @@ const MOD002_CSS = `
 .m002-panel-title{margin:0 0 4px 0;font-family:'Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:2px;font-weight:400;text-transform:uppercase;}
 .m002-panel-grid{display:flex;flex-direction:column;gap:3px;}
 .m002-panel-hints{display:flex;flex-direction:column;gap:2px;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding-top:6px;border-top:1px solid #1a1a22;}
+.m002-prefs-btn{flex:0 0 auto;display:flex;align-items:center;gap:8px;background:transparent;border:1px solid transparent;color:#7a7f8e;padding:6px 10px;font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.5px;cursor:pointer;margin-top:auto;}
+.m002-prefs-btn:hover{border-color:#1a1a22;color:#e8e8ee;}
+.m002-prefs-glyph{font-size:14px;line-height:1;}
+.m002-prefs-row{display:flex;align-items:flex-start;gap:10px;justify-content:space-between;padding:8px 10px;background:#06060a;border:1px solid #1a1a22;}
+.m002-prefs-row > span{display:flex;flex-direction:column;gap:2px;}
+.m002-prefs-label{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;letter-spacing:1.4px;}
+.m002-prefs-sublabel{font-family:'Rajdhani',sans-serif;font-size:11px;color:#7a7f8e;}
+.m002-prefs-row input[type="checkbox"]{flex:0 0 auto;width:16px;height:16px;accent-color:#ff003c;cursor:pointer;}
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
 .m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
