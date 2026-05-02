@@ -2391,8 +2391,13 @@ function bindBoard(s) {
       }
     }
     const stackEl = e.target.closest('[data-stack-id]');
-    if (!stackEl) return;
-    toggleStackExpanded(s, stackEl.dataset.stackId);
+    if (stackEl) {
+      toggleStackExpanded(s, stackEl.dataset.stackId);
+      e.preventDefault();
+      return;
+    }
+    // Background: open radial action menu at the cursor.
+    openRadialMenu(s, e.clientX, e.clientY);
     e.preventDefault();
   };
   svg.addEventListener('dblclick', onDblClick);
@@ -6495,6 +6500,220 @@ function dragSnapAccent(s, kind, id) {
 }
 
 // =============================================================================
+// Radial action menu — opens on background double-click
+// =============================================================================
+// 4 outer segments arranged at the cardinal directions:
+//   N (top)    NEW       → expands inward into a 6-segment device picker
+//   E (right)  LINK      → toggle link mode at click pos
+//   S (bottom) DELETE    → toggle delete mode
+//   W (left)   UNDO      → step back in history
+// Click anywhere outside / ESC dismiss the menu. Submenu picks spawn the
+// chosen device at the original double-click world position.
+
+const RADIAL_OUTER_R = 130;
+const RADIAL_INNER_R = 50;
+const RADIAL_GAP_DEG = 4;          // gap between outer-ring segments
+const RADIAL_SUB_GAP_DEG = 3;      // gap inside the device submenu
+
+const RADIAL_PRIMARY = [
+  { id: 'new',    dir: 'N', center: -90, label: 'NEW',    glyph: '+'  },
+  { id: 'link',   dir: 'E', center:   0, label: 'LINK',   glyph: '⌇' },
+  { id: 'delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×'  },
+  { id: 'undo',   dir: 'W', center: 180, label: 'UNDO',   glyph: '↶' },
+];
+
+function polarXY(cx, cy, r, deg) {
+  const rad = (deg * Math.PI) / 180;
+  return { x: cx + r * Math.cos(rad), y: cy + r * Math.sin(rad) };
+}
+
+function donutArcPath(cx, cy, rIn, rOut, startDeg, endDeg) {
+  const sOut = polarXY(cx, cy, rOut, startDeg);
+  const eOut = polarXY(cx, cy, rOut, endDeg);
+  const sIn  = polarXY(cx, cy, rIn,  endDeg);
+  const eIn  = polarXY(cx, cy, rIn,  startDeg);
+  const large = (endDeg - startDeg) > 180 ? 1 : 0;
+  return `M ${sOut.x} ${sOut.y}
+          A ${rOut} ${rOut} 0 ${large} 1 ${eOut.x} ${eOut.y}
+          L ${sIn.x} ${sIn.y}
+          A ${rIn} ${rIn} 0 ${large} 0 ${eIn.x} ${eIn.y} Z`;
+}
+
+function openRadialMenu(s, clientX, clientY) {
+  closeRadialMenu(s);
+  const w = clientToWorld(s, clientX, clientY);
+  const hostRect = s.host.getBoundingClientRect();
+  // Keep the menu inside the host with a small margin.
+  const margin = RADIAL_OUTER_R + 8;
+  const localX = Math.max(margin, Math.min(hostRect.width - margin, clientX - hostRect.left));
+  const localY = Math.max(margin, Math.min(hostRect.height - margin, clientY - hostRect.top));
+
+  const root = document.createElement('div');
+  root.className = 'm002-radial';
+  root.style.left = `${localX}px`;
+  root.style.top  = `${localY}px`;
+  root.dataset.level = 'primary';
+  root.innerHTML = renderRadialPrimary();
+  s.host.appendChild(root);
+  s.radial = { el: root, world: w, level: 'primary' };
+
+  // Animate in next frame so the CSS transition kicks in.
+  requestAnimationFrame(() => root.classList.add('m002-radial-in'));
+
+  root.addEventListener('mousedown', (e) => e.stopPropagation());
+  root.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const seg = e.target.closest('[data-radial-action]');
+    if (!seg) return;
+    handleRadialAction(s, seg.dataset.radialAction);
+  });
+
+  const onDocDown = (e) => {
+    if (!s.radial) return;
+    if (s.radial.el.contains(e.target)) return;
+    closeRadialMenu(s);
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape' && s.radial) {
+      e.stopPropagation();
+      closeRadialMenu(s);
+    }
+  };
+  setTimeout(() => {
+    document.addEventListener('mousedown', onDocDown, true);
+    document.addEventListener('keydown', onKey, true);
+  }, 0);
+  s.radial.cleanup = () => {
+    document.removeEventListener('mousedown', onDocDown, true);
+    document.removeEventListener('keydown', onKey, true);
+  };
+}
+
+function closeRadialMenu(s) {
+  if (!s.radial) return;
+  const r = s.radial;
+  s.radial = null;
+  r.cleanup?.();
+  r.el.classList.remove('m002-radial-in');
+  r.el.classList.add('m002-radial-out');
+  setTimeout(() => r.el.remove(), 160);
+}
+
+function handleRadialAction(s, action) {
+  if (action === 'new') {
+    showRadialDeviceSubmenu(s);
+    return;
+  }
+  if (action === 'back') {
+    swapRadialContent(s, renderRadialPrimary(), 'primary');
+    return;
+  }
+  if (action === 'link') {
+    closeRadialMenu(s);
+    if (!s.linkMode) toggleLinkMode(s);
+    return;
+  }
+  if (action === 'delete') {
+    closeRadialMenu(s);
+    if (!s.deleteMode) toggleDeleteMode(s);
+    return;
+  }
+  if (action === 'undo') {
+    closeRadialMenu(s);
+    undo(s);
+    return;
+  }
+  if (action.startsWith('spawn:')) {
+    const typeId = action.slice('spawn:'.length);
+    const w = s.radial?.world;
+    closeRadialMenu(s);
+    if (w) spawnDeviceAt(s, typeId, w.x, w.y);
+    return;
+  }
+}
+
+function showRadialDeviceSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialDevices(), 'devices');
+}
+
+function swapRadialContent(s, html, level) {
+  if (!s.radial) return;
+  const r = s.radial.el;
+  r.classList.add('m002-radial-swap');
+  setTimeout(() => {
+    r.innerHTML = html;
+    r.dataset.level = level;
+    s.radial.level = level;
+    r.classList.remove('m002-radial-swap');
+  }, 120);
+}
+
+function renderRadialPrimary() {
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / RADIAL_PRIMARY.length) / 2; // 45
+  let segs = '';
+  RADIAL_PRIMARY.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    // Glyph closer to inner edge, label closer to outer edge — radial reading
+    // order from centre outward stays consistent across all four directions.
+    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
+    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+      <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">SELECT</text>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialDevices() {
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const N = DEVICE_TYPES.length; // 6
+  const slice = 360 / N;
+  const half = slice / 2;
+  // Place the first slice's center at -90° (top) so the picker reads from top.
+  let segs = '';
+  DEVICE_TYPES.forEach((t, i) => {
+    const center = -90 + i * slice;
+    const start = center - half + RADIAL_SUB_GAP_DEG / 2;
+    const end   = center + half - RADIAL_SUB_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const labelPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2, center);
+    const dotPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2 - 16, center);
+    segs += `
+      <g class="m002-rad-seg m002-rad-seg-dev" data-radial-action="spawn:${t.id}" style="--accent:${t.accent}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <circle class="m002-rad-seg-dot" cx="${dotPos.x}" cy="${dotPos.y}" r="3"/>
+        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${t.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+// =============================================================================
 // VFX — grid energy pulse on element drop
 // =============================================================================
 // When an element lands on the grid, send out a small handful of tendrils
@@ -8637,6 +8856,33 @@ body.m002-tool-delete .cursor.active.down .cur-bracket{width:5px;height:5px;}
 body.m002-tool-select .cursor.active.down .m002-cursor-frame,
 body.m002-tool-link .cursor.active.down .m002-cursor-frame,
 body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45deg) scale(0.8);}
+
+/* Radial action menu — opens on background dblclick. Centered on the
+   click point with a small tint backdrop, scales in with a fast spring. */
+.m002-radial{position:absolute;width:${RADIAL_OUTER_R * 2}px;height:${RADIAL_OUTER_R * 2}px;transform:translate(-50%,-50%) scale(0.7);transform-origin:center;opacity:0;pointer-events:auto;z-index:60;transition:transform 180ms cubic-bezier(0.34,1.56,0.64,1),opacity 140ms ease-out;filter:drop-shadow(0 8px 22px rgba(0,0,0,0.55));}
+.m002-radial.m002-radial-in{transform:translate(-50%,-50%) scale(1);opacity:1;}
+.m002-radial.m002-radial-out{transform:translate(-50%,-50%) scale(0.85);opacity:0;transition:transform 140ms ease-in,opacity 140ms ease-in;}
+.m002-radial.m002-radial-swap .m002-rad-svg{opacity:0;transform:scale(0.92);}
+.m002-rad-svg{display:block;width:100%;height:100%;overflow:visible;transition:opacity 110ms ease-out,transform 110ms ease-out;transform-origin:center;}
+.m002-rad-bg{fill:rgba(8,8,14,0.72);stroke:rgba(255,0,60,0.18);stroke-width:1;}
+.m002-rad-core{fill:rgba(10,10,16,0.96);stroke:#1a1a22;stroke-width:1;}
+.m002-rad-core-label{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.6px;fill:#5a5f6e;pointer-events:none;text-transform:uppercase;}
+.m002-rad-seg{cursor:pointer;}
+.m002-rad-seg-path{fill:rgba(14,14,22,0.92);stroke:#2a2a36;stroke-width:1;transition:fill 120ms ease-out,stroke 120ms ease-out;}
+.m002-rad-seg:hover .m002-rad-seg-path{fill:rgba(255,0,60,0.14);stroke:#ff003c;}
+.m002-rad-seg-glyph{font-family:'Share Tech Mono',monospace;font-size:22px;fill:#e8e8ee;pointer-events:none;letter-spacing:0;}
+.m002-rad-seg-label{font-family:'Share Tech Mono',monospace;font-size:10px;letter-spacing:1.8px;fill:#cfd2d8;pointer-events:none;text-transform:uppercase;}
+.m002-rad-seg-hint{font-family:'Share Tech Mono',monospace;font-size:8px;letter-spacing:1.4px;fill:#5a5f6e;pointer-events:none;text-transform:uppercase;}
+.m002-rad-seg:hover .m002-rad-seg-glyph,
+.m002-rad-seg:hover .m002-rad-seg-label{fill:#ff003c;}
+.m002-rad-seg:hover .m002-rad-seg-hint{fill:#9aa0a8;}
+/* Device picker: per-segment accent colour drives hover & dot. */
+.m002-rad-seg-dev .m002-rad-seg-dot{fill:var(--accent);filter:drop-shadow(0 0 4px var(--accent));}
+.m002-rad-seg-dev:hover .m002-rad-seg-path{fill:color-mix(in srgb,var(--accent) 14%,rgba(14,14,22,0.92));stroke:var(--accent);}
+.m002-rad-seg-dev:hover .m002-rad-seg-label{fill:var(--accent);}
+.m002-rad-seg-back{cursor:pointer;}
+.m002-rad-seg-back:hover .m002-rad-core{stroke:#ff003c;fill:rgba(255,0,60,0.08);}
+.m002-rad-seg-back:hover .m002-rad-core-label{fill:#ff003c;}
 `;
 
 // =============================================================================
