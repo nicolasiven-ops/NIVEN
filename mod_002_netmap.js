@@ -4376,7 +4376,10 @@ function refreshStackVisuals(s, stack) {
   s.gStacksBg.querySelectorAll(`[data-stack-id="${stack.id}"]`).forEach((el) => el.remove());
   // Stack cables sit in gStacksBg too without an id wrapper — easier to rebuild fully.
   s.gStacksBg.innerHTML = '';
-  s.stacks.forEach((st) => { if (!isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
+  // Active-zone gate: without it, cross-zone envelopes (and their click-eating
+  // hit areas) bleed into the current view whenever any stack moves.
+  const inZone = (st) => !s.activeZone || !st.zone || st.zone === s.activeZone;
+  s.stacks.forEach((st) => { if (inZone(st) && !isStackCollapsed(s, st)) drawStackEnvelope(s, st); });
 }
 
 function drawStackEnvelope(s, stack) {
