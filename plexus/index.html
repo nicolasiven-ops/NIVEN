@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PLEXUS</title>
-  <meta name="description" content="Plexus — network topology, alive.">
+  <title>PLEXUS // Network Topology</title>
+  <meta name="description" content="Plexus — network topology, alive. Built by network engineers, for network engineers.">
   <link rel="icon" type="image/svg+xml" href="../favicon.svg">
   <meta name="theme-color" content="#07070c">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,10 +21,14 @@
     <a href="#hero" class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">PLEXUS</span>
+      <span class="brand-tag">// v1.0</span>
     </a>
-    <a href="#price" class="topcta">
-      <span>// 19 €</span>
-    </a>
+    <nav class="topnav">
+      <a href="#capabilities">Capabilities</a>
+      <a href="#showcase">Preview</a>
+      <a href="#price">Price</a>
+    </nav>
+    <a href="#price" class="topcta">// 19 €</a>
   </header>
 
   <main>
@@ -32,98 +36,322 @@
     <section class="hero" id="hero">
       <canvas class="topo-canvas" id="topo-canvas" aria-hidden="true"></canvas>
       <div class="hero-overlay">
+        <div class="hero-meta">
+          <span class="bracket">[</span>
+          <span>NET.MAP &nbsp;//&nbsp; v1.0</span>
+          <span class="bracket">]</span>
+        </div>
         <h1 class="hero-title" data-text="PLEXUS">PLEXUS</h1>
         <p class="hero-tagline">Network topology. Alive.</p>
+        <p class="hero-sub">Built by a network engineer. For network engineers.</p>
         <div class="hero-actions">
           <a href="#" class="cta cta-primary" data-action="demo">
             <span>// LAUNCH DEMO</span>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+            </svg>
           </a>
+          <a href="#price" class="cta cta-ghost">// 19 € — BUY</a>
         </div>
       </div>
-      <div class="hero-scroll" aria-hidden="true">
-        <span>SCROLL</span>
-        <span class="scroll-line"></span>
+    </section>
+
+    <!-- ============ PROBLEM ============ -->
+    <section class="problem container" id="problem">
+      <div class="section-header">
+        <span class="section-tag">// 01</span>
+        <h2>THE STATE OF NETWORK DOCS</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="problem-grid">
+        <div class="prob-card">
+          <div class="card-corners"></div>
+          <div class="prob-icon">
+            <svg viewBox="0 0 40 40" aria-hidden="true">
+              <rect x="4" y="6" width="32" height="28" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="4" y1="14" x2="36" y2="14" stroke="currentColor" stroke-width="1"/>
+              <line x1="4" y1="22" x2="36" y2="22" stroke="currentColor" stroke-width="1"/>
+              <line x1="4" y1="30" x2="36" y2="30" stroke="currentColor" stroke-width="1"/>
+              <line x1="14" y1="6" x2="14" y2="34" stroke="currentColor" stroke-width="1"/>
+              <line x1="24" y1="6" x2="24" y2="34" stroke="currentColor" stroke-width="1"/>
+            </svg>
+          </div>
+          <h3>EXCEL</h3>
+          <p>Cells. Tabs. Stale.</p>
+        </div>
+
+        <div class="prob-card">
+          <div class="card-corners"></div>
+          <div class="prob-icon">
+            <svg viewBox="0 0 40 40" aria-hidden="true">
+              <rect x="6" y="8" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="24" y="8" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <rect x="15" y="26" width="10" height="8" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="11" y1="16" x2="20" y2="26" stroke="currentColor" stroke-width="1.2"/>
+              <line x1="29" y1="16" x2="20" y2="26" stroke="currentColor" stroke-width="1.2"/>
+            </svg>
+          </div>
+          <h3>DRAW.IO</h3>
+          <p>Boxes. Lines. Dumb.</p>
+        </div>
+
+        <div class="prob-card">
+          <div class="card-corners"></div>
+          <div class="prob-icon">
+            <svg viewBox="0 0 40 40" aria-hidden="true">
+              <circle cx="20" cy="20" r="14" fill="none" stroke="currentColor" stroke-width="1.5"/>
+              <circle cx="20" cy="20" r="3" fill="currentColor"/>
+              <line x1="20" y1="6" x2="20" y2="11" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="20" y1="29" x2="20" y2="34" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="6" y1="20" x2="11" y2="20" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="29" y1="20" x2="34" y2="20" stroke="currentColor" stroke-width="1.5"/>
+            </svg>
+          </div>
+          <h3>VISIO</h3>
+          <p>License. Generic. Heavy.</p>
+        </div>
+
+        <div class="prob-card highlight">
+          <div class="card-corners"></div>
+          <div class="prob-icon">
+            <svg viewBox="0 0 40 40" aria-hidden="true">
+              <circle cx="10" cy="14" r="3" fill="currentColor"/>
+              <circle cx="30" cy="14" r="3" fill="currentColor"/>
+              <circle cx="20" cy="28" r="3" fill="currentColor"/>
+              <line x1="10" y1="14" x2="30" y2="14" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="10" y1="14" x2="20" y2="28" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="30" y1="14" x2="20" y2="28" stroke="currentColor" stroke-width="1.5"/>
+              <circle cx="10" cy="14" r="6" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+              <circle cx="30" cy="14" r="6" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+              <circle cx="20" cy="28" r="6" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+            </svg>
+          </div>
+          <h3>PLEXUS</h3>
+          <p>A real tool. Real primitives.</p>
+        </div>
       </div>
     </section>
 
-    <!-- ============ STATEMENT 1 ============ -->
-    <section class="statement">
-      <p class="state-tag">// 01 · THE TRUTH</p>
-      <h2 class="state-text">
-        <span class="strike">Excel.</span>
-        <span class="strike">Visio.</span>
-        <span class="strike">Draw.io.</span>
-      </h2>
-      <p class="state-sub">None of them know what a LAG is.</p>
-    </section>
+    <!-- ============ CAPABILITIES ============ -->
+    <section class="capabilities container" id="capabilities">
+      <div class="section-header">
+        <span class="section-tag">// 02</span>
+        <h2>BUILT FROM THE WIRE UP</h2>
+        <div class="section-line"></div>
+      </div>
 
-    <!-- ============ STATEMENT 2 ============ -->
-    <section class="statement big">
-      <p class="state-tag">// 02 · THE FIX</p>
-      <h2 class="state-text huge">
-        Built<br>
-        from the<br>
-        <span class="accent">wire up.</span>
-      </h2>
-    </section>
-
-    <!-- ============ FEATURES — 3 BIG WORDS ============ -->
-    <section class="primitives">
-      <p class="state-tag">// 03 · PRIMITIVES</p>
-      <div class="prim-row">
-        <div class="prim">
-          <span class="prim-num">01</span>
+      <div class="cap-grid">
+        <article class="cap">
+          <div class="card-corners"></div>
+          <div class="cap-id">F.01</div>
+          <div class="cap-visual" aria-hidden="true">
+            <svg viewBox="0 0 200 100">
+              <!-- Zone 1 -->
+              <rect x="10" y="20" width="80" height="60" rx="6" fill="none" stroke="currentColor" stroke-width="1" opacity="0.45" stroke-dasharray="4 3"/>
+              <text x="14" y="32" font-family="Share Tech Mono" font-size="7" fill="currentColor" opacity="0.7">CORE</text>
+              <circle cx="30" cy="50" r="4" fill="currentColor"/>
+              <circle cx="60" cy="40" r="4" fill="currentColor"/>
+              <circle cx="60" cy="65" r="4" fill="currentColor"/>
+              <line x1="30" y1="50" x2="60" y2="40" stroke="currentColor" stroke-width="1"/>
+              <line x1="30" y1="50" x2="60" y2="65" stroke="currentColor" stroke-width="1"/>
+              <!-- Zone 2 -->
+              <rect x="110" y="20" width="80" height="60" rx="6" fill="none" stroke="currentColor" stroke-width="1" opacity="0.45" stroke-dasharray="4 3"/>
+              <text x="114" y="32" font-family="Share Tech Mono" font-size="7" fill="currentColor" opacity="0.7">DMZ</text>
+              <circle cx="140" cy="50" r="4" fill="currentColor"/>
+              <circle cx="170" cy="40" r="4" fill="currentColor"/>
+              <circle cx="170" cy="65" r="4" fill="currentColor"/>
+              <line x1="140" y1="50" x2="170" y2="40" stroke="currentColor" stroke-width="1"/>
+              <line x1="140" y1="50" x2="170" y2="65" stroke="currentColor" stroke-width="1"/>
+              <!-- Cross-zone link -->
+              <line x1="60" y1="40" x2="140" y2="50" stroke="currentColor" stroke-width="1.5" stroke-dasharray="3 2"/>
+            </svg>
+          </div>
           <h3>ZONES</h3>
-        </div>
-        <div class="prim">
-          <span class="prim-num">02</span>
-          <h3>STACKS</h3>
-        </div>
-        <div class="prim">
-          <span class="prim-num">03</span>
-          <h3>TUNNELS</h3>
-        </div>
+          <p>Core. Access. DMZ. Edge. First-class containers, not colored rectangles.</p>
+        </article>
+
+        <article class="cap">
+          <div class="card-corners"></div>
+          <div class="cap-id">F.02</div>
+          <div class="cap-visual" aria-hidden="true">
+            <svg viewBox="0 0 200 100">
+              <!-- Stack frame -->
+              <rect x="50" y="20" width="100" height="60" rx="4" fill="none" stroke="currentColor" stroke-width="1" opacity="0.5" stroke-dasharray="3 2"/>
+              <!-- Switch 1 -->
+              <rect x="60" y="28" width="80" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+              <circle cx="68" cy="35" r="1.5" fill="currentColor"/>
+              <circle cx="76" cy="35" r="1.5" fill="currentColor"/>
+              <circle cx="84" cy="35" r="1.5" fill="currentColor"/>
+              <circle cx="92" cy="35" r="1.5" fill="currentColor"/>
+              <circle cx="100" cy="35" r="1.5" fill="currentColor"/>
+              <circle cx="108" cy="35" r="1.5" fill="currentColor"/>
+              <!-- Switch 2 -->
+              <rect x="60" y="58" width="80" height="14" rx="2" fill="none" stroke="currentColor" stroke-width="1.2"/>
+              <circle cx="68" cy="65" r="1.5" fill="currentColor"/>
+              <circle cx="76" cy="65" r="1.5" fill="currentColor"/>
+              <circle cx="84" cy="65" r="1.5" fill="currentColor"/>
+              <circle cx="92" cy="65" r="1.5" fill="currentColor"/>
+              <circle cx="100" cy="65" r="1.5" fill="currentColor"/>
+              <circle cx="108" cy="65" r="1.5" fill="currentColor"/>
+              <!-- Stack indicator -->
+              <line x1="145" y1="35" x2="155" y2="35" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="155" y1="35" x2="155" y2="65" stroke="currentColor" stroke-width="1.5"/>
+              <line x1="145" y1="65" x2="155" y2="65" stroke="currentColor" stroke-width="1.5"/>
+              <text x="160" y="53" font-family="Share Tech Mono" font-size="7" fill="currentColor">LAG</text>
+            </svg>
+          </div>
+          <h3>STACKS &amp; LAGS</h3>
+          <p>Aggregations and redundant pairs as semantic relationships, not duplicate lines.</p>
+        </article>
+
+        <article class="cap">
+          <div class="card-corners"></div>
+          <div class="cap-id">F.03</div>
+          <div class="cap-visual" aria-hidden="true">
+            <svg viewBox="0 0 200 100">
+              <!-- Left node -->
+              <circle cx="30" cy="50" r="5" fill="currentColor"/>
+              <circle cx="30" cy="50" r="9" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+              <!-- Tunnel -->
+              <ellipse cx="100" cy="50" rx="50" ry="14" fill="none" stroke="currentColor" stroke-width="1" stroke-dasharray="4 3" opacity="0.6"/>
+              <text x="80" y="40" font-family="Share Tech Mono" font-size="7" fill="currentColor" opacity="0.7">JUMP</text>
+              <line x1="30" y1="50" x2="170" y2="50" stroke="currentColor" stroke-width="1.5"/>
+              <!-- Pulse dot mid-tunnel -->
+              <circle cx="100" cy="50" r="2.5" fill="currentColor"/>
+              <!-- Right node -->
+              <circle cx="170" cy="50" r="5" fill="currentColor"/>
+              <circle cx="170" cy="50" r="9" fill="none" stroke="currentColor" stroke-width="0.8" opacity="0.5"/>
+            </svg>
+          </div>
+          <h3>HUB-TUNNELS</h3>
+          <p>Collapse trunk relationships into single navigable links — without losing the truth underneath.</p>
+        </article>
       </div>
-      <p class="prim-foot">First-class. Not afterthoughts.</p>
     </section>
 
-    <!-- ============ SHOWCASE PLACEHOLDER ============ -->
-    <section class="showcase">
-      <p class="state-tag">// 04 · IN MOTION</p>
+    <!-- ============ SHOWCASE ============ -->
+    <section class="showcase container" id="showcase">
+      <div class="section-header">
+        <span class="section-tag">// 03</span>
+        <h2>SEE IT MOVE</h2>
+        <div class="section-line"></div>
+      </div>
       <div class="showcase-frame">
         <div class="card-corners"></div>
         <div class="frame-meta">
           <span class="pulse"></span>
-          <span>SCREEN_FEED</span>
+          <span>SCREEN_FEED &nbsp;//&nbsp; PREVIEW_MODE</span>
+          <span class="frame-meta-right">v1.0</span>
         </div>
         <div class="frame-body">
-          <p class="frame-hint">Live demo recording lands here.</p>
+          <svg class="topo-mock" viewBox="0 0 800 400" preserveAspectRatio="xMidYMid meet" aria-hidden="true">
+            <!-- Background grid -->
+            <defs>
+              <pattern id="mockgrid" width="40" height="40" patternUnits="userSpaceOnUse">
+                <path d="M 40 0 L 0 0 0 40" fill="none" stroke="rgba(255,0,60,0.06)" stroke-width="0.5"/>
+              </pattern>
+            </defs>
+            <rect width="800" height="400" fill="url(#mockgrid)"/>
+
+            <!-- Zone A -->
+            <rect x="60" y="60" width="280" height="280" rx="10" fill="rgba(255,0,60,0.04)" stroke="rgba(255,0,60,0.4)" stroke-width="1" stroke-dasharray="6 4"/>
+            <text x="76" y="84" font-family="Share Tech Mono" font-size="11" fill="#ff003c" opacity="0.85">ZONE.CORE</text>
+
+            <!-- Zone B -->
+            <rect x="460" y="60" width="280" height="280" rx="10" fill="rgba(255,0,60,0.04)" stroke="rgba(255,0,60,0.4)" stroke-width="1" stroke-dasharray="6 4"/>
+            <text x="476" y="84" font-family="Share Tech Mono" font-size="11" fill="#ff003c" opacity="0.85">ZONE.DMZ</text>
+
+            <!-- Stack core -->
+            <rect x="140" y="130" width="120" height="32" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1.2"/>
+            <rect x="140" y="170" width="120" height="32" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1.2"/>
+            <text x="146" y="150" font-family="Share Tech Mono" font-size="9" fill="#e8e8f0">CORE-SW-01</text>
+            <text x="146" y="190" font-family="Share Tech Mono" font-size="9" fill="#e8e8f0">CORE-SW-02</text>
+            <!-- Stack bracket -->
+            <line x1="265" y1="146" x2="272" y2="146" stroke="#ff003c" stroke-width="1.5"/>
+            <line x1="272" y1="146" x2="272" y2="186" stroke="#ff003c" stroke-width="1.5"/>
+            <line x1="265" y1="186" x2="272" y2="186" stroke="#ff003c" stroke-width="1.5"/>
+            <text x="278" y="170" font-family="Share Tech Mono" font-size="8" fill="#ff003c">STACK</text>
+
+            <!-- Access -->
+            <rect x="120" y="240" width="60" height="24" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1"/>
+            <text x="125" y="256" font-family="Share Tech Mono" font-size="7" fill="#e8e8f0">ACC-01</text>
+            <rect x="220" y="240" width="60" height="24" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1"/>
+            <text x="225" y="256" font-family="Share Tech Mono" font-size="7" fill="#e8e8f0">ACC-02</text>
+
+            <line x1="170" y1="202" x2="150" y2="240" stroke="#ff003c" stroke-width="1" opacity="0.7"/>
+            <line x1="230" y1="202" x2="250" y2="240" stroke="#ff003c" stroke-width="1" opacity="0.7"/>
+
+            <!-- DMZ stack -->
+            <rect x="540" y="130" width="120" height="32" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1.2"/>
+            <rect x="540" y="170" width="120" height="32" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1.2"/>
+            <text x="546" y="150" font-family="Share Tech Mono" font-size="9" fill="#e8e8f0">DMZ-SW-01</text>
+            <text x="546" y="190" font-family="Share Tech Mono" font-size="9" fill="#e8e8f0">DMZ-SW-02</text>
+            <line x1="665" y1="146" x2="672" y2="146" stroke="#ff003c" stroke-width="1.5"/>
+            <line x1="672" y1="146" x2="672" y2="186" stroke="#ff003c" stroke-width="1.5"/>
+            <line x1="665" y1="186" x2="672" y2="186" stroke="#ff003c" stroke-width="1.5"/>
+            <text x="678" y="170" font-family="Share Tech Mono" font-size="8" fill="#ff003c">STACK</text>
+
+            <!-- Firewall -->
+            <rect x="570" y="250" width="60" height="24" rx="3" fill="#0f0f17" stroke="#ff003c" stroke-width="1"/>
+            <text x="580" y="266" font-family="Share Tech Mono" font-size="7" fill="#e8e8f0">FW-01</text>
+            <line x1="600" y1="202" x2="600" y2="250" stroke="#ff003c" stroke-width="1" opacity="0.7"/>
+
+            <!-- Cross-zone LAG-pair -->
+            <line x1="260" y1="146" x2="540" y2="146" stroke="#ff003c" stroke-width="1.6" opacity="0.85"/>
+            <line x1="260" y1="186" x2="540" y2="186" stroke="#ff003c" stroke-width="1.6" opacity="0.85"/>
+            <rect x="385" y="155" width="30" height="22" rx="2" fill="#07070c" stroke="#ff003c" stroke-width="1"/>
+            <text x="390" y="170" font-family="Share Tech Mono" font-size="7" fill="#ff003c">LAG</text>
+
+            <!-- HUD label -->
+            <text x="20" y="384" font-family="Share Tech Mono" font-size="9" fill="#8a8a98">// PLEXUS · PREVIEW · 12 NODES · 4 ZONES · 6 LINKS</text>
+          </svg>
         </div>
       </div>
+      <p class="showcase-note">Mock-up. Real screenshots land here when v1.0 ships.</p>
     </section>
 
-    <!-- ============ PRICING — ONE BIG NUMBER ============ -->
-    <section class="price-section" id="price">
-      <p class="state-tag">// 05 · PRICE</p>
-      <div class="price-mega">
+    <!-- ============ PRICING ============ -->
+    <section class="pricing container" id="price">
+      <div class="section-header">
+        <span class="section-tag">// 04</span>
+        <h2>ONE PRICE. NO SUBSCRIPTION.</h2>
+        <div class="section-line"></div>
+      </div>
+
+      <div class="price-card">
+        <div class="card-corners"></div>
+        <div class="price-flag">
+          <span class="pulse"></span>
+          <span>FULL LICENSE</span>
+        </div>
         <div class="price-amount">
           <span class="price-num">19</span>
           <span class="price-currency">€</span>
         </div>
-        <p class="price-label">Once. Yours. Forever.</p>
+        <p class="price-label">One-time. Yours. Forever.</p>
+
+        <ul class="price-list">
+          <li><span class="check">✓</span> Unlimited devices, zones, stacks</li>
+          <li><span class="check">✓</span> Save / load topologies</li>
+          <li><span class="check">✓</span> Export (PNG · SVG · JSON)</li>
+          <li><span class="check">✓</span> Self-hosted — runs in your browser</li>
+          <li><span class="check">✓</span> Free updates within v1.x</li>
+        </ul>
+
+        <div class="price-actions">
+          <a href="#" class="cta cta-primary full" data-action="buy">
+            <span>// GET LICENSE</span>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+            </svg>
+          </a>
+          <a href="#" class="cta cta-ghost full" data-action="demo">
+            <span>// OR LAUNCH DEMO FIRST</span>
+          </a>
+        </div>
+
+        <p class="price-fine">Self-hosted. Your topology never leaves your machine.</p>
       </div>
-      <div class="price-actions">
-        <a href="#" class="cta cta-primary big" data-action="buy">
-          <span>// GET PLEXUS</span>
-          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
-          </svg>
-        </a>
-        <a href="#" class="cta cta-ghost" data-action="demo">
-          <span>// OR TRY DEMO</span>
-        </a>
-      </div>
-      <p class="price-fine">Self-hosted. One-time. No subscription.</p>
     </section>
   </main>
 
@@ -134,7 +362,7 @@
       <span class="dot">·</span>
       <span>2026</span>
       <span class="dot">·</span>
-      <a href="../" class="footer-link">N.IVEN</a>
+      <a href="../" class="footer-link">A N.IVEN PROJECT</a>
     </div>
   </footer>
 
@@ -144,29 +372,27 @@
       const canvas = document.getElementById('topo-canvas');
       if (!canvas) return;
       const ctx = canvas.getContext('2d');
-      let W = 0, H = 0, dpr = window.devicePixelRatio || 1;
-
-      function resize() {
-        const rect = canvas.getBoundingClientRect();
-        W = rect.width;
-        H = rect.height;
-        canvas.width = W * dpr;
-        canvas.height = H * dpr;
-        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-        layout();
-      }
-
-      // Nodes laid out in a loose mesh — feels like a network, not a circle
+      const dpr = Math.min(window.devicePixelRatio || 1, 2);
+      let W = 0, H = 0;
       let nodes = [];
       let links = [];
       let pulses = [];
 
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        W = Math.max(1, rect.width);
+        H = Math.max(1, rect.height);
+        canvas.width  = Math.round(W * dpr);
+        canvas.height = Math.round(H * dpr);
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        layout();
+      }
+
       function layout() {
-        // Three "zones" — left, right, center cluster
         const zones = [
-          { cx: W * 0.22, cy: H * 0.55, r: Math.min(W, H) * 0.18, count: 5 },
-          { cx: W * 0.78, cy: H * 0.45, r: Math.min(W, H) * 0.18, count: 5 },
-          { cx: W * 0.50, cy: H * 0.72, r: Math.min(W, H) * 0.14, count: 4 },
+          { cx: W * 0.22, cy: H * 0.45, r: Math.min(W, H) * 0.18, count: 5 },
+          { cx: W * 0.78, cy: H * 0.40, r: Math.min(W, H) * 0.18, count: 5 },
+          { cx: W * 0.50, cy: H * 0.78, r: Math.min(W, H) * 0.14, count: 4 },
         ];
         nodes = [];
         zones.forEach((z, zi) => {
@@ -179,11 +405,10 @@
               ox: 0, oy: 0,
               t: Math.random() * Math.PI * 2,
               zone: zi,
-              size: 3 + Math.random() * 2,
+              size: 2.5 + Math.random() * 1.5,
             });
           }
         });
-        // Links: each node to nearest 2 in any zone
         links = [];
         for (let i = 0; i < nodes.length; i++) {
           const dists = nodes
@@ -201,40 +426,33 @@
       function spawnPulse() {
         if (links.length === 0) return;
         const link = links[(Math.random() * links.length) | 0];
-        pulses.push({
-          a: link.a,
-          b: link.b,
-          t: 0,
-          speed: 0.005 + Math.random() * 0.008,
-        });
+        pulses.push({ a: link.a, b: link.b, t: 0, speed: 0.005 + Math.random() * 0.008 });
       }
 
       let lastSpawn = 0;
       function tick(now) {
+        if (W === 0 || H === 0) { requestAnimationFrame(tick); return; }
         ctx.clearRect(0, 0, W, H);
 
-        // gentle node breathing
         nodes.forEach((n) => {
           n.t += 0.012;
           n.ox = Math.sin(n.t) * 1.2;
           n.oy = Math.cos(n.t * 0.8) * 1.2;
         });
 
-        // links
         ctx.lineWidth = 1;
         links.forEach((l) => {
           const a = nodes[l.a], b = nodes[l.b];
           const ax = a.x + a.ox, ay = a.y + a.oy;
           const bx = b.x + b.ox, by = b.y + b.oy;
           const cross = a.zone !== b.zone;
-          ctx.strokeStyle = cross ? 'rgba(255, 0, 60, 0.35)' : 'rgba(255, 0, 60, 0.14)';
+          ctx.strokeStyle = cross ? 'rgba(255, 0, 60, 0.32)' : 'rgba(255, 0, 60, 0.13)';
           ctx.beginPath();
           ctx.moveTo(ax, ay);
           ctx.lineTo(bx, by);
           ctx.stroke();
         });
 
-        // pulses
         pulses = pulses.filter((p) => p.t < 1);
         pulses.forEach((p) => {
           p.t += p.speed;
@@ -243,47 +461,31 @@
           const bx = b.x + b.ox, by = b.y + b.oy;
           const px = ax + (bx - ax) * p.t;
           const py = ay + (by - ay) * p.t;
-          const grd = ctx.createRadialGradient(px, py, 0, px, py, 14);
-          grd.addColorStop(0, 'rgba(255, 80, 110, 0.95)');
+          const grd = ctx.createRadialGradient(px, py, 0, px, py, 12);
+          grd.addColorStop(0, 'rgba(255, 80, 110, 0.9)');
           grd.addColorStop(1, 'rgba(255, 0, 60, 0)');
           ctx.fillStyle = grd;
           ctx.beginPath();
-          ctx.arc(px, py, 14, 0, Math.PI * 2);
+          ctx.arc(px, py, 12, 0, Math.PI * 2);
           ctx.fill();
         });
 
-        // nodes
         nodes.forEach((n) => {
           const x = n.x + n.ox, y = n.y + n.oy;
-          // glow
           const grd = ctx.createRadialGradient(x, y, 0, x, y, n.size * 4);
-          grd.addColorStop(0, 'rgba(255, 0, 60, 0.6)');
+          grd.addColorStop(0, 'rgba(255, 0, 60, 0.55)');
           grd.addColorStop(1, 'rgba(255, 0, 60, 0)');
           ctx.fillStyle = grd;
           ctx.beginPath();
           ctx.arc(x, y, n.size * 4, 0, Math.PI * 2);
           ctx.fill();
-          // core
           ctx.fillStyle = '#ff6080';
           ctx.beginPath();
           ctx.arc(x, y, n.size, 0, Math.PI * 2);
           ctx.fill();
-          // crosshair
-          ctx.strokeStyle = 'rgba(255, 0, 60, 0.55)';
-          ctx.lineWidth = 1;
-          ctx.beginPath();
-          ctx.moveTo(x - n.size * 2.3, y);
-          ctx.lineTo(x - n.size * 1.3, y);
-          ctx.moveTo(x + n.size * 1.3, y);
-          ctx.lineTo(x + n.size * 2.3, y);
-          ctx.moveTo(x, y - n.size * 2.3);
-          ctx.lineTo(x, y - n.size * 1.3);
-          ctx.moveTo(x, y + n.size * 1.3);
-          ctx.lineTo(x, y + n.size * 2.3);
-          ctx.stroke();
         });
 
-        if (now - lastSpawn > 250) {
+        if (now - lastSpawn > 280) {
           spawnPulse();
           lastSpawn = now;
         }
@@ -292,8 +494,15 @@
       }
 
       window.addEventListener('resize', resize);
-      resize();
-      requestAnimationFrame(tick);
+      // Defer init until layout settles
+      const init = () => {
+        resize();
+        // Some browsers report 0 height for an instant — re-measure on next frame
+        requestAnimationFrame(() => { resize(); });
+        requestAnimationFrame(tick);
+      };
+      if (document.readyState === 'complete') init();
+      else window.addEventListener('load', init);
     })();
 
     // ============ Placeholder click handler ============
