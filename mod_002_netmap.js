@@ -7083,8 +7083,8 @@ function renderRadialDevices() {
 const VFX_PULSE_COUNT_MIN = 9;        // tendrils per drop
 const VFX_PULSE_COUNT_MAX = 13;
 const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
-const VFX_PULSE_SEGS_MAX = 4;
-const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
+const VFX_PULSE_SEGS_MAX = 3;
+const VFX_PULSE_SEG_CELLS_MIN = 2;    // cells per segment
 const VFX_PULSE_SEG_CELLS_MAX = 2;
 const VFX_PULSE_FILL_MS = 435;        // tendril draw-in duration
 const VFX_PULSE_DRAIN_MS = 435;       // tendril drain-out duration (origin → tip)
