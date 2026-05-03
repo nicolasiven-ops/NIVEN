@@ -2311,12 +2311,21 @@ function alreadyLinkedDevices(s, deviceId) {
   return set;
 }
 
+// Member of a collapsed stack? Then it's not visually distinct — the stack
+// icon stands in for the whole bundle, and a per-member wire makes no sense.
+function isHiddenInCollapsedStack(s, devId) {
+  const st = findStack(s, devId);
+  return !!(st && isStackCollapsed(s, st));
+}
+
 function findAutoLinkCandidate(s, dev) {
-  // Skip when dragged inside a stack — links between stack members are
-  // stack-internal and have their own UI.
-  if (findStack(s, dev.id)) return null;
+  // Dragged member of a collapsed stack: only the icon is visible, no per-member
+  // wire to draw. Member of an EXPANDED stack is fair game — its body is on
+  // screen and the user can pull a wire out of it.
+  if (isHiddenInCollapsedStack(s, dev.id)) return null;
   const linked = alreadyLinkedDevices(s, dev.id);
   const devZone = dev.zone || null;
+  const fromStack = findStack(s, dev.id);
   let best = null;
   let bestDist = Infinity;
   for (const d of s.devices) {
@@ -2325,9 +2334,12 @@ function findAutoLinkCandidate(s, dev) {
     // JUMP↔JUMP couplings happen via the inspector, not the canvas — skip the
     // pair where both ends are JUMPs. JUMP + non-JUMP is a valid hub-leg.
     if (isReference(dev) && isReference(d)) continue;
-    // Stack members surface the stack as the visual end, not the member —
-    // skip them; the user can still link to a stack via the regular L tool.
-    if (findStack(s, d.id)) continue;
+    // Hidden inside a collapsed stack → invisible target, skip.
+    if (isHiddenInCollapsedStack(s, d.id)) continue;
+    // Same-stack siblings would be intra-stack links, owned by the stack-link
+    // editor — not auto-link's job.
+    const toStack = findStack(s, d.id);
+    if (fromStack && toStack && fromStack === toStack) continue;
     // Cross-zone candidates aren't visible in the current view — never
     // suggest a wire to a hidden node.
     if ((d.zone || null) !== devZone) continue;
