@@ -7886,7 +7886,12 @@ function vfxAnimateView(s, doRender, anchor) {
     }
   }
 
-  if (__dbg.length) console.warn('[VFX persisting-changed devices]', __dbg);
+  if (__dbg.length) {
+    window._lastVfxDbg = __dbg;
+    console.warn('[VFX persisting-changed devices]', __dbg);
+    // Print each innerHTMLDiff inline so the console doesn't fold it under "…".
+    __dbg.forEach((d, i) => console.warn(`  [${i}] ${d.id}:`, d.innerHTMLDiff));
+  }
 
   if (drains.length === 0 && builds.length === 0) return;
 
