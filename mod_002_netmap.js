@@ -1506,10 +1506,10 @@ function buildDOM(s) {
         <svg class="m002-svg" xmlns="${SVG_NS}">
           <defs>
             <pattern id="m002-grid" width="${GRID}" height="${GRID}" patternUnits="userSpaceOnUse">
-              <circle cx="0.5" cy="0.5" r="0.6" fill="#2a2a36"/>
+              <circle cx="0.5" cy="0.5" r="0.72" fill="#2a2a36"/>
             </pattern>
             <pattern id="m002-grid-major" width="${GRID * 5}" height="${GRID * 5}" patternUnits="userSpaceOnUse">
-              <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.6"/>
+              <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.72"/>
             </pattern>
             <filter id="m002-glow" x="-30%" y="-30%" width="160%" height="160%">
               <feGaussianBlur stdDeviation="2.4" result="b"/>
