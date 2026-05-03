@@ -3,8 +3,8 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>PLEXUS // Network Topology, Reimagined</title>
-  <meta name="description" content="Plexus — a network topology mapper built by network engineers, for network engineers. Stop documenting your stack in Excel.">
+  <title>PLEXUS</title>
+  <meta name="description" content="Plexus — network topology, alive.">
   <link rel="icon" type="image/svg+xml" href="../favicon.svg">
   <meta name="theme-color" content="#07070c">
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -21,263 +21,291 @@
     <a href="#hero" class="brand">
       <span class="brand-mark" aria-hidden="true"></span>
       <span class="brand-name">PLEXUS</span>
-      <span class="brand-tag">// NETMAP</span>
     </a>
-    <nav class="topnav">
-      <a href="#problem">Problem</a>
-      <a href="#features">Features</a>
-      <a href="#pricing">Pricing</a>
-      <a href="#about">About</a>
-    </nav>
-    <a href="#pricing" class="topcta">
-      <span>// GET PLEXUS</span>
+    <a href="#price" class="topcta">
+      <span>// 19 €</span>
     </a>
   </header>
 
   <main>
     <!-- ============ HERO ============ -->
     <section class="hero" id="hero">
-      <div class="hero-meta">
-        <span class="bracket">[</span>
-        <span>NETWORK_TOPOLOGY &nbsp;//&nbsp; v1.0</span>
-        <span class="bracket">]</span>
+      <canvas class="topo-canvas" id="topo-canvas" aria-hidden="true"></canvas>
+      <div class="hero-overlay">
+        <h1 class="hero-title" data-text="PLEXUS">PLEXUS</h1>
+        <p class="hero-tagline">Network topology. Alive.</p>
+        <div class="hero-actions">
+          <a href="#" class="cta cta-primary" data-action="demo">
+            <span>// LAUNCH DEMO</span>
+          </a>
+        </div>
       </div>
-      <h1 class="hero-title" data-text="PLEXUS">PLEXUS</h1>
-      <p class="hero-tagline">Network topology, reimagined.</p>
-      <p class="hero-sub">
-        Designed by network engineers, for network engineers.<br>
-        Stop documenting your stack in Excel.
-      </p>
-      <div class="hero-actions">
-        <a href="#" class="cta cta-primary" data-action="demo">
-          <span>// TRY DEMO</span>
-          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
-          </svg>
-        </a>
-        <a href="#pricing" class="cta cta-ghost">
-          <span>// BUY — 19 €</span>
-        </a>
-      </div>
-      <div class="hero-stats">
-        <div class="stat">
-          <span class="stat-label">DEVICES</span>
-          <span class="stat-value">UNLIMITED</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">LICENSE</span>
-          <span class="stat-value">ONE-TIME</span>
-        </div>
-        <div class="stat">
-          <span class="stat-label">HOSTING</span>
-          <span class="stat-value">SELF</span>
-        </div>
+      <div class="hero-scroll" aria-hidden="true">
+        <span>SCROLL</span>
+        <span class="scroll-line"></span>
       </div>
     </section>
 
-    <!-- ============ PROBLEM ============ -->
-    <section class="problem" id="problem">
-      <div class="section-header">
-        <span class="section-tag">// 01</span>
-        <h2>THE STATE OF NETWORK DOCS</h2>
-        <div class="section-line"></div>
-      </div>
-      <div class="problem-grid">
-        <div class="problem-card">
-          <span class="problem-tool">EXCEL</span>
-          <p>Spreadsheets full of IPs and VLAN tags nobody updates after week one.</p>
-        </div>
-        <div class="problem-card">
-          <span class="problem-tool">DRAW.IO</span>
-          <p>Boxes and lines that lose their meaning the moment your topology changes.</p>
-        </div>
-        <div class="problem-card">
-          <span class="problem-tool">VISIO</span>
-          <p>License-locked, generic shapes, no concept of what a LAG or stack actually is.</p>
-        </div>
-        <div class="problem-card highlight">
-          <span class="problem-tool">PLEXUS</span>
-          <p>A real tool, built around real network primitives — zones, stacks, LAGs, hub-tunnels. Documentation that survives change.</p>
-        </div>
-      </div>
+    <!-- ============ STATEMENT 1 ============ -->
+    <section class="statement">
+      <p class="state-tag">// 01 · THE TRUTH</p>
+      <h2 class="state-text">
+        <span class="strike">Excel.</span>
+        <span class="strike">Visio.</span>
+        <span class="strike">Draw.io.</span>
+      </h2>
+      <p class="state-sub">None of them know what a LAG is.</p>
     </section>
 
-    <!-- ============ FEATURES ============ -->
-    <section class="features" id="features">
-      <div class="section-header">
-        <span class="section-tag">// 02</span>
-        <h2>BUILT FROM THE WIRE UP</h2>
-        <div class="section-line"></div>
-      </div>
+    <!-- ============ STATEMENT 2 ============ -->
+    <section class="statement big">
+      <p class="state-tag">// 02 · THE FIX</p>
+      <h2 class="state-text huge">
+        Built<br>
+        from the<br>
+        <span class="accent">wire up.</span>
+      </h2>
+    </section>
 
-      <div class="feature-grid">
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.01</div>
+    <!-- ============ FEATURES — 3 BIG WORDS ============ -->
+    <section class="primitives">
+      <p class="state-tag">// 03 · PRIMITIVES</p>
+      <div class="prim-row">
+        <div class="prim">
+          <span class="prim-num">01</span>
           <h3>ZONES</h3>
-          <p>Map your network the way you already think about it. Core, access, DMZ, edge — first-class containers, not just colored rectangles.</p>
-        </article>
-
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.02</div>
-          <h3>LAG &amp; STACKS</h3>
-          <p>Link aggregations, redundant pairs, cross-zone bonds — modeled as semantic relationships, not duplicate lines you have to clean up.</p>
-        </article>
-
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.03</div>
-          <h3>HUB-TUNNELS</h3>
-          <p>Collapse trunk relationships into single, navigable links. Skip the visual clutter without losing the underlying truth.</p>
-        </article>
-
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.04</div>
-          <h3>LIVE EDITING</h3>
-          <p>Drag, snap, restructure. No layout fights, no PDF exports that go stale the moment someone re-cables a switch.</p>
-        </article>
-
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.05</div>
-          <h3>RADIAL TOOLS</h3>
-          <p>Right-click anywhere for a context-aware tool wheel. Move, link, edit — without ever leaving the canvas.</p>
-        </article>
-
-        <article class="feature">
-          <div class="card-corners"></div>
-          <div class="feature-id">F.06</div>
-          <h3>SELF-HOSTED</h3>
-          <p>Runs in your browser, on your machine. Your topology never leaves your network. Compliance and ops both happy.</p>
-        </article>
+        </div>
+        <div class="prim">
+          <span class="prim-num">02</span>
+          <h3>STACKS</h3>
+        </div>
+        <div class="prim">
+          <span class="prim-num">03</span>
+          <h3>TUNNELS</h3>
+        </div>
       </div>
+      <p class="prim-foot">First-class. Not afterthoughts.</p>
     </section>
 
-    <!-- ============ SHOWCASE ============ -->
+    <!-- ============ SHOWCASE PLACEHOLDER ============ -->
     <section class="showcase">
-      <div class="section-header">
-        <span class="section-tag">// 03</span>
-        <h2>SEE IT MOVE</h2>
-        <div class="section-line"></div>
-      </div>
+      <p class="state-tag">// 04 · IN MOTION</p>
       <div class="showcase-frame">
         <div class="card-corners"></div>
         <div class="frame-meta">
           <span class="pulse"></span>
-          <span>SCREENSHOT_PLACEHOLDER</span>
+          <span>SCREEN_FEED</span>
         </div>
         <div class="frame-body">
-          <p class="frame-hint">Live screenshots / demo recording will live here.</p>
-          <p class="frame-hint dim">— Try the actual interface in the demo.</p>
+          <p class="frame-hint">Live demo recording lands here.</p>
         </div>
       </div>
     </section>
 
-    <!-- ============ PRICING ============ -->
-    <section class="pricing" id="pricing">
-      <div class="section-header">
-        <span class="section-tag">// 04</span>
-        <h2>PRICING</h2>
-        <div class="section-line"></div>
+    <!-- ============ PRICING — ONE BIG NUMBER ============ -->
+    <section class="price-section" id="price">
+      <p class="state-tag">// 05 · PRICE</p>
+      <div class="price-mega">
+        <div class="price-amount">
+          <span class="price-num">19</span>
+          <span class="price-currency">€</span>
+        </div>
+        <p class="price-label">Once. Yours. Forever.</p>
       </div>
-
-      <div class="price-grid">
-        <article class="price-card">
-          <div class="card-corners"></div>
-          <div class="price-tag">DEMO</div>
-          <div class="price-amount">
-            <span class="price-num">FREE</span>
-          </div>
-          <p class="price-sub">No license, no signup. Try it in your browser.</p>
-          <ul class="price-list">
-            <li><span class="check">✓</span> Up to 5 devices</li>
-            <li><span class="check">✓</span> 1 zone</li>
-            <li><span class="check">✓</span> All editor tools</li>
-            <li class="dim"><span class="cross">×</span> Export disabled</li>
-            <li class="dim"><span class="cross">×</span> Save / load disabled</li>
-          </ul>
-          <a href="#" class="cta cta-ghost full" data-action="demo">
-            <span>// LAUNCH DEMO</span>
-          </a>
-        </article>
-
-        <article class="price-card featured">
-          <div class="card-corners"></div>
-          <div class="featured-flag">RECOMMENDED</div>
-          <div class="price-tag">FULL</div>
-          <div class="price-amount">
-            <span class="price-num">19</span>
-            <span class="price-currency">€</span>
-          </div>
-          <p class="price-sub">One-time. No subscription. Yours forever.</p>
-          <ul class="price-list">
-            <li><span class="check">✓</span> Unlimited devices</li>
-            <li><span class="check">✓</span> Unlimited zones</li>
-            <li><span class="check">✓</span> Save / load topologies</li>
-            <li><span class="check">✓</span> Export (PNG, SVG, JSON)</li>
-            <li><span class="check">✓</span> Free updates within v1.x</li>
-          </ul>
-          <a href="#" class="cta cta-primary full" data-action="buy">
-            <span>// GET LICENSE</span>
-            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-              <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
-            </svg>
-          </a>
-        </article>
+      <div class="price-actions">
+        <a href="#" class="cta cta-primary big" data-action="buy">
+          <span>// GET PLEXUS</span>
+          <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </a>
+        <a href="#" class="cta cta-ghost" data-action="demo">
+          <span>// OR TRY DEMO</span>
+        </a>
       </div>
-
-      <p class="price-note">
-        Self-hosted. Runs entirely in your browser. Your data stays on your machine.
-      </p>
-    </section>
-
-    <!-- ============ ABOUT ============ -->
-    <section class="about" id="about">
-      <div class="section-header">
-        <span class="section-tag">// 05</span>
-        <h2>WHO BUILT THIS</h2>
-        <div class="section-line"></div>
-      </div>
-      <div class="about-frame">
-        <div class="card-corners"></div>
-        <p class="about-lead">
-          Plexus is built by a network engineer with five years on the wire.
-        </p>
-        <p>
-          Every Visio license you've ever cursed at, every Excel sheet you've ever
-          cried over, every draw.io diagram that died the moment a switch got
-          replaced — Plexus exists because the tools we have aren't built by
-          people who actually do this work.
-        </p>
-        <p>
-          It's small, it's focused, and it does one thing properly:
-          <span class="emph">documenting networks the way networks actually behave.</span>
-        </p>
-      </div>
+      <p class="price-fine">Self-hosted. One-time. No subscription.</p>
     </section>
   </main>
 
   <footer class="footer">
     <div class="footer-content">
-      <span>© 2026 &nbsp;//&nbsp; PLEXUS</span>
-      <span class="footer-sig">A &nbsp;<a href="../" class="footer-link">N.IVEN</a>&nbsp; PROJECT</span>
-      <span class="footer-end">END_OF_TRANSMISSION</span>
+      <span class="brand-mini" aria-hidden="true"></span>
+      <span>PLEXUS</span>
+      <span class="dot">·</span>
+      <span>2026</span>
+      <span class="dot">·</span>
+      <a href="../" class="footer-link">N.IVEN</a>
     </div>
   </footer>
 
-  <!-- Placeholder click handler — until demo & buy flows exist -->
   <script>
+    // ============ Animated topology canvas ============
+    (() => {
+      const canvas = document.getElementById('topo-canvas');
+      if (!canvas) return;
+      const ctx = canvas.getContext('2d');
+      let W = 0, H = 0, dpr = window.devicePixelRatio || 1;
+
+      function resize() {
+        const rect = canvas.getBoundingClientRect();
+        W = rect.width;
+        H = rect.height;
+        canvas.width = W * dpr;
+        canvas.height = H * dpr;
+        ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+        layout();
+      }
+
+      // Nodes laid out in a loose mesh — feels like a network, not a circle
+      let nodes = [];
+      let links = [];
+      let pulses = [];
+
+      function layout() {
+        // Three "zones" — left, right, center cluster
+        const zones = [
+          { cx: W * 0.22, cy: H * 0.55, r: Math.min(W, H) * 0.18, count: 5 },
+          { cx: W * 0.78, cy: H * 0.45, r: Math.min(W, H) * 0.18, count: 5 },
+          { cx: W * 0.50, cy: H * 0.72, r: Math.min(W, H) * 0.14, count: 4 },
+        ];
+        nodes = [];
+        zones.forEach((z, zi) => {
+          for (let i = 0; i < z.count; i++) {
+            const a = (i / z.count) * Math.PI * 2 + zi * 0.4;
+            const rr = z.r * (0.55 + Math.random() * 0.45);
+            nodes.push({
+              x: z.cx + Math.cos(a) * rr,
+              y: z.cy + Math.sin(a) * rr,
+              ox: 0, oy: 0,
+              t: Math.random() * Math.PI * 2,
+              zone: zi,
+              size: 3 + Math.random() * 2,
+            });
+          }
+        });
+        // Links: each node to nearest 2 in any zone
+        links = [];
+        for (let i = 0; i < nodes.length; i++) {
+          const dists = nodes
+            .map((n, j) => ({ j, d: i === j ? Infinity : Math.hypot(n.x - nodes[i].x, n.y - nodes[i].y) }))
+            .sort((a, b) => a.d - b.d);
+          for (let k = 0; k < 2; k++) {
+            const j = dists[k].j;
+            if (!links.find((l) => (l.a === i && l.b === j) || (l.a === j && l.b === i))) {
+              links.push({ a: i, b: j });
+            }
+          }
+        }
+      }
+
+      function spawnPulse() {
+        if (links.length === 0) return;
+        const link = links[(Math.random() * links.length) | 0];
+        pulses.push({
+          a: link.a,
+          b: link.b,
+          t: 0,
+          speed: 0.005 + Math.random() * 0.008,
+        });
+      }
+
+      let lastSpawn = 0;
+      function tick(now) {
+        ctx.clearRect(0, 0, W, H);
+
+        // gentle node breathing
+        nodes.forEach((n) => {
+          n.t += 0.012;
+          n.ox = Math.sin(n.t) * 1.2;
+          n.oy = Math.cos(n.t * 0.8) * 1.2;
+        });
+
+        // links
+        ctx.lineWidth = 1;
+        links.forEach((l) => {
+          const a = nodes[l.a], b = nodes[l.b];
+          const ax = a.x + a.ox, ay = a.y + a.oy;
+          const bx = b.x + b.ox, by = b.y + b.oy;
+          const cross = a.zone !== b.zone;
+          ctx.strokeStyle = cross ? 'rgba(255, 0, 60, 0.35)' : 'rgba(255, 0, 60, 0.14)';
+          ctx.beginPath();
+          ctx.moveTo(ax, ay);
+          ctx.lineTo(bx, by);
+          ctx.stroke();
+        });
+
+        // pulses
+        pulses = pulses.filter((p) => p.t < 1);
+        pulses.forEach((p) => {
+          p.t += p.speed;
+          const a = nodes[p.a], b = nodes[p.b];
+          const ax = a.x + a.ox, ay = a.y + a.oy;
+          const bx = b.x + b.ox, by = b.y + b.oy;
+          const px = ax + (bx - ax) * p.t;
+          const py = ay + (by - ay) * p.t;
+          const grd = ctx.createRadialGradient(px, py, 0, px, py, 14);
+          grd.addColorStop(0, 'rgba(255, 80, 110, 0.95)');
+          grd.addColorStop(1, 'rgba(255, 0, 60, 0)');
+          ctx.fillStyle = grd;
+          ctx.beginPath();
+          ctx.arc(px, py, 14, 0, Math.PI * 2);
+          ctx.fill();
+        });
+
+        // nodes
+        nodes.forEach((n) => {
+          const x = n.x + n.ox, y = n.y + n.oy;
+          // glow
+          const grd = ctx.createRadialGradient(x, y, 0, x, y, n.size * 4);
+          grd.addColorStop(0, 'rgba(255, 0, 60, 0.6)');
+          grd.addColorStop(1, 'rgba(255, 0, 60, 0)');
+          ctx.fillStyle = grd;
+          ctx.beginPath();
+          ctx.arc(x, y, n.size * 4, 0, Math.PI * 2);
+          ctx.fill();
+          // core
+          ctx.fillStyle = '#ff6080';
+          ctx.beginPath();
+          ctx.arc(x, y, n.size, 0, Math.PI * 2);
+          ctx.fill();
+          // crosshair
+          ctx.strokeStyle = 'rgba(255, 0, 60, 0.55)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(x - n.size * 2.3, y);
+          ctx.lineTo(x - n.size * 1.3, y);
+          ctx.moveTo(x + n.size * 1.3, y);
+          ctx.lineTo(x + n.size * 2.3, y);
+          ctx.moveTo(x, y - n.size * 2.3);
+          ctx.lineTo(x, y - n.size * 1.3);
+          ctx.moveTo(x, y + n.size * 1.3);
+          ctx.lineTo(x, y + n.size * 2.3);
+          ctx.stroke();
+        });
+
+        if (now - lastSpawn > 250) {
+          spawnPulse();
+          lastSpawn = now;
+        }
+
+        requestAnimationFrame(tick);
+      }
+
+      window.addEventListener('resize', resize);
+      resize();
+      requestAnimationFrame(tick);
+    })();
+
+    // ============ Placeholder click handler ============
     document.addEventListener('click', (e) => {
       const link = e.target.closest('[data-action]');
       if (!link) return;
       e.preventDefault();
       const action = link.dataset.action;
       if (action === 'demo') {
-        alert('// DEMO_NOT_YET_DEPLOYED\n\nDie Demo wird im nächsten Schritt eingebaut.');
+        alert('// DEMO_NOT_YET_DEPLOYED\n\nKommt im nächsten Schritt.');
       } else if (action === 'buy') {
-        alert('// CHECKOUT_NOT_YET_DEPLOYED\n\nDer Kauf-Flow (Gumroad o.ä.) wird im nächsten Schritt angebunden.');
+        alert('// CHECKOUT_NOT_YET_DEPLOYED\n\nGumroad-Anbindung kommt im nächsten Schritt.');
       }
     });
   </script>
