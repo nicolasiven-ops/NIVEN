@@ -10335,28 +10335,24 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
-/* VLAN solo dim — three diagnostic tiers:
-   - isolated unmatched: no VLAN here, no neighbor with it → fade to grey
-   - adjacent unmatched: no VLAN here, but linked neighbor has it → yellow
-     ("you probably want to extend the VLAN to this device")
-   - configured-only: VLAN at device level but no port carries it → orange
+/* VLAN solo dim — two diagnostic tiers:
+   - unmatched (isolated OR adjacent): no VLAN configured here → fade to grey
+   - configured-only: VLAN at device level but no port carries it → amber
      ("declared but not wired") */
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]:hover{opacity:.45 !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]{filter:drop-shadow(0 0 4px #f5d65a) drop-shadow(0 0 12px #f5d65a) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"]:hover,
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover{filter:drop-shadow(0 0 6px #f5d65a) drop-shadow(0 0 18px #f5d65a) !important;}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"] .m002-dev-bg,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"] .m002-dev-bg{stroke:#f5d65a;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ff9b3c) drop-shadow(0 0 12px #ff9b3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ffbf3c) drop-shadow(0 0 12px #ffbf3c) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ff9b3c) drop-shadow(0 0 18px #ff9b3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ffbf3c) drop-shadow(0 0 18px #ffbf3c) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ff9b3c;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ffbf3c;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
