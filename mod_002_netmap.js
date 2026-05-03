@@ -2275,7 +2275,7 @@ function cancelRopeDrag(s) {
 // =============================================================================
 const AUTOLINK_MIN_DIST = 95;       // a hair above the stack-merge threshold so
                                     // they don't both fight for the same hover
-const AUTOLINK_MAX_DIST = 360;      // suggestion starts pre-fading from here so
+const AUTOLINK_MAX_DIST = 540;      // suggestion starts pre-fading from here so
                                     // approaching a device feels magnetic well
                                     // before the link actually arms
 const AUTOLINK_CONNECT_T  = 0.50;   // mid-band: stubs snap into one solid line
@@ -2437,8 +2437,8 @@ function snakePathD(ax, ay, bx, by, ux, uy, time, phase, amp) {
     // Envelope is 0 at endpoints, 1 in the middle — sin(πt) does that smoothly.
     const env = Math.sin(t * Math.PI);
     // Two superimposed waves give a more organic, less metronome motion.
-    const w  = Math.sin(t * Math.PI * 1.6 + time * 0.0035 + phase) * 0.7
-             + Math.sin(t * Math.PI * 2.6 - time * 0.0024 + phase * 1.7) * 0.3;
+    const w  = Math.sin(t * Math.PI * 1.6 + time * 0.0055 + phase) * 0.7
+             + Math.sin(t * Math.PI * 2.6 - time * 0.0038 + phase * 1.7) * 0.3;
     return amp * env * w;
   };
   const o1 = sample(0.33);
@@ -2545,8 +2545,8 @@ function applyAutoLinkFrame(al) {
   // other, then tames down once armed so the joined line reads as a calm
   // commitment rather than a wriggling worm.
   const baseAmp = g.armed
-    ? 2.5 + 1.0 * Math.sin(time * 0.0025)         // breathy idle pulse
-    : 4.5 + 8.0 * g.reach * (1 - g.reach * 0.5);  // peak around mid-reach
+    ? 4.0 + 2.0 * Math.sin(time * 0.0030)         // gentle live pulse, more presence
+    : 8.0 + 16.0 * g.reach * (1 - g.reach * 0.5); // bigger swing, especially mid-reach
   // Two stubs run at different phases so they don't mirror each other.
   const dFrom = snakePathD(g.ax, g.ay, g.aTipX, g.aTipY, g.ux, g.uy, time, 0,    baseAmp);
   const dTo   = snakePathD(g.bx, g.by, g.bTipX, g.bTipY, -g.ux, -g.uy, time, 2.1, baseAmp);
