@@ -3537,33 +3537,49 @@ function hubFarLegs(s, jumpId) {
   return hubLocalLegs(s, peer.id);
 }
 
-// If a link is a hub-leg whose member-side port lives in a counterparted LAG
-// AND that counterpart LAG sits on the JUMP's couple peer's far-side, return
-// the cross-zone LAG-pair payload. Used by drawLink so the in-zone visual for
-// a hub-leg participating in a couple-bonded LAG-pair reads as the LAG-pair
-// itself (double-line + cross-zone LAG names) instead of "<port> ⇄ ?".
+// If a link is a hub-leg from a stack member to a JUMP whose couple peer
+// terminates a counterparted LAG on the far-side stack, return the cross-zone
+// LAG-pair payload. Port assignment on the link itself is optional — the LAG
+// counterpart relationship + hub-leg presence on both sides is enough to
+// claim the link as part of the LAG-pair visual.
 function hubTunnelLagPair(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
   if (!a || !b) return null;
   const aIsJump = isReference(a);
   const bIsJump = isReference(b);
-  if (aIsJump === bIsJump) return null; // both or neither — not a hub-leg
+  if (aIsJump === bIsJump) return null;
   const memberDev = aIsJump ? b : a;
-  const memberPort = aIsJump ? link.toPort : link.fromPort;
   const jumpDev = aIsJump ? a : b;
-  if (!memberPort) return null;
-  const localInfo = findPortLag(s, memberDev.id, memberPort);
-  if (!localInfo?.lag?.counterpart?.lagId) return null;
-  const peerInfo = findStackLag(s, localInfo.lag.counterpart.stackId, localInfo.lag.counterpart.lagId);
-  if (!peerInfo) return null;
-  // Hub-tunnel pairs cross zones via the JUMP couple. Same-zone counterparts
-  // are direct LAG-pairs and have their own renderer (drawLagLink).
-  if (peerInfo.stack.zone === localInfo.stack.zone) return null;
+  const memberStack = findStack(s, memberDev.id);
+  if (!memberStack) return null;
   const peerJump = couplePeer(s, jumpDev);
   if (!peerJump) return null;
-  if ((peerJump.zone || null) !== (peerInfo.stack.zone || null)) return null;
-  return { localLag: localInfo.lag, localStack: localInfo.stack, peerLag: peerInfo.lag, peerStack: peerInfo.stack, jumpDev, peerJump, memberDev, memberPort };
+  for (const lag of (memberStack.lags || [])) {
+    if (!lag.counterpart?.lagId) continue;
+    const peerInfo = findStackLag(s, lag.counterpart.stackId, lag.counterpart.lagId);
+    if (!peerInfo) continue;
+    if (peerInfo.stack.zone === memberStack.zone) continue;
+    if ((peerJump.zone || null) !== (peerInfo.stack.zone || null)) continue;
+    const peerMembers = new Set(peerInfo.stack.members || []);
+    const peerHasHubLeg = s.links.some((l) => {
+      if (l.from === peerJump.id) return peerMembers.has(l.to);
+      if (l.to === peerJump.id) return peerMembers.has(l.from);
+      return false;
+    });
+    if (!peerHasHubLeg) continue;
+    return {
+      localLag: lag,
+      localStack: memberStack,
+      peerLag: peerInfo.lag,
+      peerStack: peerInfo.stack,
+      jumpDev,
+      peerJump,
+      memberDev,
+      memberPort: aIsJump ? link.toPort : link.fromPort,
+    };
+  }
+  return null;
 }
 
 // All stacks reachable from this stack via either a direct member-to-member
@@ -6197,6 +6213,15 @@ function openInspector(s) {
   } else if (s.selected.kind === 'link') {
     const link = s.links.find((l) => l.id === s.selected.id);
     if (!link) return;
+    // Hub-tunnel LAG-pair leg — redirect the user to the LAG inspector instead
+    // of the misleading "switch ⇄ JUMP — no port" link form. The LAG editor
+    // already speaks the right language (counterpart, ports, VLANs across the
+    // pair) and edits both sides in one place.
+    const tp = hubTunnelLagPair(s, link);
+    if (tp) {
+      select(s, 'lag', `${tp.localStack.id}|${tp.localLag.id}`);
+      return;
+    }
     const a = s.devices.find((d) => d.id === link.from);
     const b = s.devices.find((d) => d.id === link.to);
     const aRef = isReference(a), bRef = isReference(b);
