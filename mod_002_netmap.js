@@ -1393,7 +1393,7 @@ function createState(stage, ctx) {
 
     host: null, board: null, svg: null, gWorld: null,
     gStacksBg: null, gLinks: null, gDevices: null, gOverlay: null, gPulse: null,
-    palette: null, inspector: null, layerBar: null, statusBar: null, toastEl: null,
+    palette: null, inspector: null, layerBar: null, statusBar: null, toastStackEl: null,
 
     devices: [],   // { id, type, x, y, name, ip, notes, vlans:[], interfaces:[{id,name,ip,subnetId?}], routes:[{id,dst,nextHop,interfaceId?,metric?}], ports: [{n,name,vlans:[]}] }
     links: [],     // { id, from, to, fromPort, toPort }
@@ -1576,7 +1576,7 @@ function buildDOM(s) {
       </div>
     </div>
 
-    <div class="m002-toast"></div>
+    <div class="m002-toast-stack"></div>
   `;
   s.stage.appendChild(host);
   s.host = host;
@@ -1594,7 +1594,7 @@ function buildDOM(s) {
   s.inspector = host.querySelector('.m002-inspector');
   s.layerBar = host.querySelector('.m002-layerbar');
   s.statusBar = host.querySelector('.m002-statusbar');
-  s.toastEl = host.querySelector('.m002-toast');
+  s.toastStackEl = host.querySelector('.m002-toast-stack');
   // Legend body lives in the left panel; the picker calls still target the body
   s.legendEl = host.querySelector('.m002-vlan-legend-body')?.parentElement || null;
   s.zoneBarEl = host.querySelector('.m002-zonebar');
@@ -8672,11 +8672,19 @@ function truncate(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, 
 function escSvg(s) { return String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
 function escAttr(s) { return String(s ?? '').replace(/[&<>"']/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
 function toast(s, msg) {
-  if (!s.toastEl) return;
-  s.toastEl.textContent = msg;
-  s.toastEl.classList.add('show');
-  clearTimeout(s.toastTimer);
-  s.toastTimer = setTimeout(() => s.toastEl.classList.remove('show'), 1400);
+  if (!s.toastStackEl) return;
+  const item = document.createElement('div');
+  item.className = 'm002-toast-item';
+  item.textContent = msg;
+  s.toastStackEl.appendChild(item);
+  // force reflow so the enter transition plays
+  void item.offsetWidth;
+  item.classList.add('show');
+  setTimeout(() => {
+    item.classList.remove('show');
+    item.classList.add('leave');
+    setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 260);
+  }, 2800);
 }
 
 // =============================================================================
@@ -9198,8 +9206,10 @@ const MOD002_CSS = `
 .m002-stat-sep{color:#2a2a36;}
 .m002-stat-mode{color:#e8e8ee;}
 
-.m002-toast{position:absolute;bottom:24px;left:50%;transform:translateX(-50%) translateY(20px);background:rgba(8,8,14,0.95);border:1px solid #ff003c;padding:8px 16px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#ff003c;opacity:0;pointer-events:none;transition:.25s;}
-.m002-toast.show{opacity:1;transform:translateX(-50%) translateY(0);}
+.m002-toast-stack{position:absolute;bottom:24px;left:50%;transform:translateX(-50%);display:flex;flex-direction:column;align-items:center;gap:6px;pointer-events:none;z-index:1000;}
+.m002-toast-item{background:rgba(8,8,14,0.95);border:1px solid #ff003c;padding:8px 16px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;color:#ff003c;opacity:0;transform:translateY(20px);transition:opacity .25s ease,transform .25s ease;white-space:nowrap;box-shadow:0 0 12px rgba(255,0,60,0.25);}
+.m002-toast-item.show{opacity:1;transform:translateY(0);}
+.m002-toast-item.leave{opacity:0;transform:translateY(-6px);}
 
 .m002-inspector::-webkit-scrollbar,.m002-ports-grid::-webkit-scrollbar{width:6px;}
 .m002-inspector::-webkit-scrollbar-thumb,.m002-ports-grid::-webkit-scrollbar-thumb{background:#1a1a22;}
