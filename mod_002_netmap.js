@@ -2407,22 +2407,42 @@ function setAutoLinkTarget(s, fromDev, candidate) {
   drawAutoLinkReach(s, fromDev, candidate.dev, candidate.dist);
 }
 
+// Ray from a centred rectangle's centre along (ux, uy) hits the rect border at:
+//   t = min(hw / |ux|, hh / |uy|)
+// The clamp keeps a near-axial line from blowing the divisor up.
+function rectEdgeAlongDir(cx, cy, hw, hh, ux, uy) {
+  const ax = Math.max(Math.abs(ux), 1e-6);
+  const ay = Math.max(Math.abs(uy), 1e-6);
+  const t = Math.min(hw / ax, hh / ay);
+  return { x: cx + ux * t, y: cy + uy * t };
+}
+
 function drawAutoLinkReach(s, fromDev, toDev, dist) {
   const al = s.autoLink;
   if (!al) return;
-  const a = effectivePos(s, fromDev.id);
-  const b = effectivePos(s, toDev.id);
-  if (!a || !b) return;
+  const aCenter = effectivePos(s, fromDev.id);
+  const bCenter = effectivePos(s, toDev.id);
+  if (!aCenter || !bCenter) return;
 
   const span = AUTOLINK_MAX_DIST - AUTOLINK_MIN_DIST;
   const raw  = 1 - Math.min(1, Math.max(0, (dist - AUTOLINK_MIN_DIST) / span));
   // Smoothstep — slow start, smooth into the meeting point.
   const reach = raw * raw * (3 - 2 * raw);
 
-  const dx = b.x - a.x, dy = b.y - a.y;
+  // Direction along the centre-to-centre line; the edge intersections inherit
+  // it so both stubs start exactly on each device's border (no more wires
+  // sprouting out of the centre and crossing the icon's interior).
+  const dx = bCenter.x - aCenter.x, dy = bCenter.y - aCenter.y;
   const dlen = Math.hypot(dx, dy) || 1;
   const ux = dx / dlen, uy = dy / dlen;
-  const half = dlen / 2;
+  const a = rectEdgeAlongDir(aCenter.x, aCenter.y, DEVICE_W / 2, DEVICE_H / 2,  ux,  uy);
+  const b = rectEdgeAlongDir(bCenter.x, bCenter.y, DEVICE_W / 2, DEVICE_H / 2, -ux, -uy);
+  // Recompute the gap between the two edge points — the stubs grow into THIS
+  // gap, not the full centre-to-centre distance, so the meeting point sits
+  // visually between the two icons.
+  const gx = b.x - a.x, gy = b.y - a.y;
+  const glen = Math.hypot(gx, gy) || 1;
+  const half = glen / 2;
 
   // Stubs scale so they fully meet at midpoint exactly when reach hits
   // CONNECT_T. Past that they hold the meeting visual instead of overshooting
