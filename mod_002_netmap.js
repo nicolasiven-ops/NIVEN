@@ -7626,6 +7626,13 @@ function vfxCentroid(snapshot) {
 
 function vfxAnimateView(s, doRender, anchor) {
   if (!s.gExits) { doRender(); return; }
+  // A prior transition may still be mid-flight: build elements carry inline
+  // opacity / dasharray that would poison the next `before` snapshot's digest
+  // (cs.opacity + innerHTML), making unchanged elements look "changed" and
+  // triggering a spurious drain+build on top of the next view. Snap any
+  // in-flight builds to their finished state and drop their drains so the
+  // snapshot reads CSS-derived values only.
+  if (s._vfxFinish) s._vfxFinish();
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
   const before = vfxSnapshot(s);
@@ -7715,8 +7722,26 @@ function vfxAnimateView(s, doRender, anchor) {
   for (const d of drains) vfxApplyDrain(d.parts, 0, 'drain'); // exits start full
   for (const b of builds) vfxApplyDrain(b.parts, 1, 'build'); // builds start empty
 
+  // Cleanup that snaps the animation to its final state. Stored on s so a
+  // follow-up vfxAnimateView (e.g. layer toggle right after a zone jump) can
+  // call it before snapshotting, ensuring the digest reads CSS-derived values
+  // instead of mid-fade inline noise.
+  let finished = false;
+  function finish() {
+    if (finished) return;
+    finished = true;
+    for (const d of drains) d.clone.remove();
+    for (const b of builds) {
+      vfxResetInlineParts(b.parts);
+      vfxClearBuildFade(b.el);
+    }
+    if (s._vfxFinish === finish) s._vfxFinish = null;
+  }
+  s._vfxFinish = finish;
+
   const start = performance.now();
   function step(now) {
+    if (finished) return;
     const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
     const e = vfxEaseInOutQuad(t);
     for (const d of drains) {
@@ -7728,11 +7753,7 @@ function vfxAnimateView(s, doRender, anchor) {
       b.el.style.opacity = String(b.target * e);
     }
     if (t < 1) { requestAnimationFrame(step); return; }
-    for (const d of drains) d.clone.remove();
-    for (const b of builds) {
-      vfxResetInlineParts(b.parts);
-      vfxClearBuildFade(b.el);
-    }
+    finish();
   }
   requestAnimationFrame(step);
 }
