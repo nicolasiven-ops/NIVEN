@@ -7210,16 +7210,33 @@ function vfxStartBuildFade(el) {
   return Number.isFinite(target) ? target : 1;
 }
 
+// Setting individual style properties to '' empties them, but Firefox keeps
+// an empty `style=""` attribute on the element. The next vfxSnapshot reads
+// el.innerHTML, where `style=""` vs no style attribute serializes
+// differently — a digest mismatch that drags unchanged elements into the
+// persisting-changed branch and triggers a spurious drain+build pair on
+// the next layer toggle. Drop the attribute outright when nothing's left.
+function vfxStripEmptyStyle(el) {
+  if (el.style && el.style.length === 0 && el.hasAttribute('style')) {
+    el.removeAttribute('style');
+  }
+}
+
 function vfxClearBuildFade(el) {
   el.style.opacity = '';
+  vfxStripEmptyStyle(el);
 }
 
 function vfxResetInlineParts(parts) {
   for (const sh of parts.shapes) {
     sh.el.style.strokeDasharray = '';
     sh.el.style.strokeDashoffset = '';
+    vfxStripEmptyStyle(sh.el);
   }
-  for (const f of parts.fades) f.el.style[f.prop] = '';
+  for (const f of parts.fades) {
+    f.el.style[f.prop] = '';
+    vfxStripEmptyStyle(f.el);
+  }
 }
 
 // =============================================================================
@@ -7843,30 +7860,10 @@ function vfxAnimateView(s, doRender, anchor) {
   // a link's VLAN stripes appeared) — overlay-drain the OLD clone on top
   // AND build the NEW underlying element so both halves of the transition
   // animate in parallel: bright drains away while dim/new look builds up.
-  const __dbg = [];
   for (const [key, oldEntry] of before) {
     const newEntry = after.get(key);
     if (!newEntry) continue;
     if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
-    if (key.includes('data-device-id')) {
-      const oldF = oldEntry.frozen.split('|');
-      const newF = newEntry.frozen.split('|');
-      const oldH = oldF.slice(2).join('|');
-      const newH = newF.slice(2).join('|');
-      let diffSnippet = 'same';
-      if (oldH !== newH) {
-        let i = 0;
-        while (i < oldH.length && i < newH.length && oldH[i] === newH[i]) i++;
-        const start = Math.max(0, i - 30);
-        diffSnippet = `@${i}: …${oldH.slice(start, i + 80)} ⟹ …${newH.slice(start, i + 80)}`;
-      }
-      __dbg.push({
-        id: key.split('|').pop(),
-        opacity: oldF[0] === newF[0] ? 'same' : `${oldF[0]} → ${newF[0]}`,
-        filter:  oldF[1] === newF[1] ? 'same' : `${oldF[1]} → ${newF[1]}`,
-        innerHTMLDiff: diffSnippet,
-      });
-    }
 
     // Overlay-drain the OLD look on top of the new render. Wrapper opacity
     // rides oldOpacity → 0 in lockstep with the dasharray drain, so the
@@ -7893,13 +7890,6 @@ function vfxAnimateView(s, doRender, anchor) {
       const target = vfxStartBuildFade(newEl);
       builds.push({ el: newEl, parts: buildParts, target });
     }
-  }
-
-  if (__dbg.length) {
-    window._lastVfxDbg = __dbg;
-    console.warn('[VFX persisting-changed devices]', __dbg);
-    // Print each innerHTMLDiff inline so the console doesn't fold it under "…".
-    __dbg.forEach((d, i) => console.warn(`  [${i}] ${d.id}:`, d.innerHTMLDiff));
   }
 
   if (drains.length === 0 && builds.length === 0) return;
