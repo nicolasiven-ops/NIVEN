@@ -3537,6 +3537,35 @@ function hubFarLegs(s, jumpId) {
   return hubLocalLegs(s, peer.id);
 }
 
+// If a link is a hub-leg whose member-side port lives in a counterparted LAG
+// AND that counterpart LAG sits on the JUMP's couple peer's far-side, return
+// the cross-zone LAG-pair payload. Used by drawLink so the in-zone visual for
+// a hub-leg participating in a couple-bonded LAG-pair reads as the LAG-pair
+// itself (double-line + cross-zone LAG names) instead of "<port> ⇄ ?".
+function hubTunnelLagPair(s, link) {
+  const a = s.devices.find((d) => d.id === link.from);
+  const b = s.devices.find((d) => d.id === link.to);
+  if (!a || !b) return null;
+  const aIsJump = isReference(a);
+  const bIsJump = isReference(b);
+  if (aIsJump === bIsJump) return null; // both or neither — not a hub-leg
+  const memberDev = aIsJump ? b : a;
+  const memberPort = aIsJump ? link.toPort : link.fromPort;
+  const jumpDev = aIsJump ? a : b;
+  if (!memberPort) return null;
+  const localInfo = findPortLag(s, memberDev.id, memberPort);
+  if (!localInfo?.lag?.counterpart?.lagId) return null;
+  const peerInfo = findStackLag(s, localInfo.lag.counterpart.stackId, localInfo.lag.counterpart.lagId);
+  if (!peerInfo) return null;
+  // Hub-tunnel pairs cross zones via the JUMP couple. Same-zone counterparts
+  // are direct LAG-pairs and have their own renderer (drawLagLink).
+  if (peerInfo.stack.zone === localInfo.stack.zone) return null;
+  const peerJump = couplePeer(s, jumpDev);
+  if (!peerJump) return null;
+  if ((peerJump.zone || null) !== (peerInfo.stack.zone || null)) return null;
+  return { localLag: localInfo.lag, localStack: localInfo.stack, peerLag: peerInfo.lag, peerStack: peerInfo.stack, jumpDev, peerJump, memberDev, memberPort };
+}
+
 // All stacks reachable from this stack via either a direct member-to-member
 // link OR a JUMP hub-tunnel (same-zone hub-leg + the coupled peer's hub-legs).
 // Used by the LAG counterpart picker so a LAG can pair with another stack's
@@ -4699,6 +4728,58 @@ function drawLink(s, link) {
 
   let inner = `<path class="m002-link-hit" d="${base.d}"/>`;
 
+  // Hub-tunnel LAG-pair representative — when this hub-leg link is the
+  // chosen draw of a couple-bonded LAG-pair, render the LAG-pair visual
+  // (double line + cross-zone LAG names) instead of the per-port "1 (Po1)
+  // ⇄ ?" label. Other hub-leg links in the same group are absorbed in
+  // render(), so this single path speaks for the whole bundle.
+  const tunnelRepCount = s._hubTunnelRep?.get(link.id);
+  if (tunnelRepCount) {
+    const tp = hubTunnelLagPair(s, link);
+    if (tp) {
+      g.classList.add('m002-link-bundle');
+      if (layer === 'vlan') {
+        const vlans = (tp.localLag.vlans || []).map(String).filter((v) =>
+          (tp.peerLag.vlans || []).map(String).includes(v)
+        );
+        const filter = effectiveVlanSolo(s);
+        const isFiltered = filter.length > 0;
+        const drawn = isFiltered ? vlans.filter((v) => filter.includes(v)) : [];
+        if (drawn.length > 0) {
+          const gap = 6;
+          drawn.forEach((v, i) => {
+            const off = lane + (i - (drawn.length - 1) / 2) * gap;
+            const p = orthPath(aPos, bPos, off);
+            const c = vlanColor(s, v);
+            inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
+            inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
+          });
+        } else if (vlans.length === 0) {
+          inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+        } else {
+          inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
+          if (!isFiltered) {
+            inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
+          }
+        }
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
+      } else if (layer === 'routing') {
+        inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
+      } else {
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane });
+      }
+      if (layer !== 'routing') {
+        const lbl = `${tp.localLag.name} ⇄ ${tp.peerLag.name}`;
+        inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
+        inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(`${tp.localStack.name} ⇄ ${tp.peerStack.name} · via ${tp.jumpDev.name}⇄${tp.peerJump.name}`)}</text>`;
+      }
+      g.innerHTML = inner;
+      g.setAttribute('data-flow-d', base.d);
+      s.gLinks.appendChild(g);
+      return;
+    }
+  }
+
   if (layer === 'vlan') {
     const vlans = linkVlans(s, link);
     const filter = effectiveVlanSolo(s);
@@ -4789,6 +4870,24 @@ function updateLinksFor(s, deviceId) {
 // the user sees the actual physical port-links and the LAG itself is implicit.
 function computeAbsorbedLinkIds(s) {
   const absorbed = new Set();
+  // Hub-tunnel LAG-pair: collapse every (stack, JUMP, LAG) group of hub-leg
+  // links into one drawn representative; the others get absorbed. The rep
+  // map is stashed on `s` so drawLink knows which link to render with the
+  // LAG-pair visual.
+  const tunnelGroups = new Map();
+  s.links.forEach((l) => {
+    const tp = hubTunnelLagPair(s, l);
+    if (!tp) return;
+    const key = `${tp.localStack.id}|${tp.jumpDev.id}|${tp.localLag.id}`;
+    if (!tunnelGroups.has(key)) tunnelGroups.set(key, []);
+    tunnelGroups.get(key).push(l.id);
+  });
+  s._hubTunnelRep = new Map();
+  tunnelGroups.forEach((ids) => {
+    const [rep, ...rest] = ids;
+    s._hubTunnelRep.set(rep, ids.length);
+    rest.forEach((id) => absorbed.add(id));
+  });
   // First pass: per-LAG-pair port absorption (the canonical case).
   s.stacks.forEach((stA) => {
     (stA.lags || []).forEach((lag) => {
@@ -8450,6 +8549,9 @@ function render(s) {
     });
   });
   const absorbed = computeAbsorbedLinkIds(s);
+  // computeAbsorbedLinkIds also populates s._hubTunnelRep with the chosen
+  // representative link per cross-zone LAG-pair group; drawLink consults it
+  // to render the LAG-pair visual on that single link.
   // Stack-pair aggregations: every non-paired-LAG link involving at least
   // one collapsed stack collapses into one summary line. Replaces the
   // per-link / non-paired-LAG-bundle visuals between collapsed stacks.
