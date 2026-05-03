@@ -2207,6 +2207,7 @@ function commitRopeLink(s, fromId, toId) {
   updateStatus(s);
   schedSave(s);
   select(s, 'link', link.id);
+  toast(s, `Linked ${devA.name} ⇄ ${devB.name}`);
   return true;
 }
 
@@ -3268,6 +3269,7 @@ function spawnDeviceAt(s, typeId, wx, wy) {
   vfxGridPulse(s, dev.x, dev.y, t.accent);
   select(s, 'device', dev.id);
   updateStatus(s);
+  toast(s, `Added ${dev.name}`);
   schedSave(s);
 }
 
@@ -3477,6 +3479,7 @@ function toggleLinkMode(s) {
   s.linkPending = null;
   s.host.classList.toggle('m002-linking', s.linkMode);
   setMode(s, s.linkMode ? 'LINK · pick first node' : 'SELECT');
+  toast(s, s.linkMode ? 'LINK mode' : 'SELECT mode');
   refreshToolHighlights(s);
 }
 
@@ -3558,6 +3561,7 @@ function handleLinkClick(s, deviceId) {
   setMode(s, 'LINK · pick first node');
   schedSave(s);
   select(s, 'link', link.id);
+  toast(s, `Linked ${devA.name} ⇄ ${devB.name}`);
 }
 
 // =============================================================================
@@ -3853,6 +3857,7 @@ function toggleDeleteMode(s) {
   if (s.deleteMode && s.linkMode) toggleLinkMode(s);
   s.host.classList.toggle('m002-deleting', s.deleteMode);
   setMode(s, s.deleteMode ? 'DELETE · click anything to remove' : 'SELECT');
+  toast(s, s.deleteMode ? 'DELETE mode' : 'SELECT mode');
   refreshToolHighlights(s);
 }
 
@@ -3888,6 +3893,7 @@ function createStack(s, deviceIds) {
   s.stacks.push(st);
   render(s);
   schedSave(s);
+  toast(s, `Stack created: ${st.name} (×${st.members.length})`);
   return st.id;
 }
 
@@ -3922,18 +3928,21 @@ function mergeStacks(s, idA, idB) {
   s.stacks = s.stacks.filter((st) => st.id !== idB);
   render(s);
   schedSave(s);
+  toast(s, `Stacks merged → ${a.name} (×${a.members.length})`);
   return a.id;
 }
 
 function removeFromStack(s, stackId, deviceId) {
   const st = findStackById(s, stackId);
   if (!st) return;
+  const stName = st.name;
   snapshot(s);
   st.members = st.members.filter((m) => m !== deviceId);
   if (st.members.length < 2) {
     // Stack collapses entirely → every LAG dies with it (LAGs only exist on
     // stacks). Reciprocal counterpart pointers on peer LAGs get cleaned up.
     dropStackAndItsLags(s, st);
+    toast(s, `Stack ${stName} dissolved`);
   } else {
     // Surviving stack just loses port-refs that pointed at the leaving member.
     (st.lags || []).forEach((lag) => {
@@ -3944,6 +3953,7 @@ function removeFromStack(s, stackId, deviceId) {
     st.stackLinks = (st.stackLinks || []).filter((sl) =>
       sl.fromDevice !== deviceId && sl.toDevice !== deviceId
     );
+    toast(s, `Removed from ${stName} (×${st.members.length})`);
   }
   render(s);
   schedSave(s);
@@ -3952,10 +3962,12 @@ function removeFromStack(s, stackId, deviceId) {
 function deleteStack(s, stackId) {
   const st = findStackById(s, stackId);
   if (!st) return;
+  const stName = st.name;
   snapshot(s);
   dropStackAndItsLags(s, st);
   render(s);
   schedSave(s);
+  toast(s, `Stack ${stName} deleted`);
 }
 
 // Drop a stack and every LAG it owned. Also break any peer-LAG counterpart
@@ -6278,6 +6290,22 @@ function deleteSelected(s) {
 function deleteRef(s, ref) {
   if (!ref) return;
   const sameAsSelected = s.selected && s.selected.kind === ref.kind && s.selected.id === ref.id;
+  // Capture a label before mutation so the toast can name the thing that died.
+  let toastMsg = null;
+  if (ref.kind === 'device') {
+    const d = s.devices.find((dd) => dd.id === ref.id);
+    if (d) toastMsg = `Deleted ${d.name}`;
+  } else if (ref.kind === 'link') {
+    const l = s.links.find((ll) => ll.id === ref.id);
+    if (l) {
+      const a = s.devices.find((d) => d.id === l.from);
+      const b = s.devices.find((d) => d.id === l.to);
+      toastMsg = `Link removed: ${a?.name ?? '?'} ⇄ ${b?.name ?? '?'}`;
+    }
+  } else if (ref.kind === 'lag') {
+    toastMsg = 'LAG deleted';
+  }
+  // stack deletion routes through deleteStack() which has its own toast
   snapshot(s);
   if (ref.kind === 'device') {
     const id = ref.id;
@@ -6316,6 +6344,7 @@ function deleteRef(s, ref) {
     if (sameAsSelected) {
       if (stack) select(s, 'stack', stack.id); else deselect(s);
     }
+    if (toastMsg) toast(s, toastMsg);
     return;
   } else {
     s.links = s.links.filter((l) => l.id !== ref.id);
@@ -6323,6 +6352,7 @@ function deleteRef(s, ref) {
   if (sameAsSelected) deselect(s);
   render(s);
   schedSave(s);
+  if (toastMsg) toast(s, toastMsg);
 }
 
 // =============================================================================
@@ -8422,6 +8452,8 @@ async function switchMap(s, mapId) {
   refreshMapBar(s);
   refreshZoneBar(s);
   rememberActiveMap(s);
+  const m = s.maps.find((mm) => mm.id === mapId);
+  if (m) toast(s, `Map: ${m.name}`);
 }
 
 async function createMap(s) {
@@ -8457,9 +8489,13 @@ async function renameCurrentMap(s) {
   if (!name) return;
   m.name = name;
   refreshMapBar(s);
-  if (!s.sb || String(m.id).startsWith('local_')) return;
+  if (!s.sb || String(m.id).startsWith('local_')) {
+    toast(s, `Map renamed: ${name}`);
+    return;
+  }
   const { error } = await s.sb.from('m002_maps').update({ name }).eq('id', m.id);
-  if (error) { console.warn('[m002] rename failed', error); toast(s, 'Rename failed'); }
+  if (error) { console.warn('[m002] rename failed', error); toast(s, 'Rename failed'); return; }
+  toast(s, `Map renamed: ${name}`);
 }
 
 async function deleteCurrentMap(s) {
@@ -8471,6 +8507,7 @@ async function deleteCurrentMap(s) {
     const { error } = await s.sb.from('m002_maps').delete().eq('id', m.id);
     if (error) { console.warn('[m002] delete failed', error); toast(s, 'Delete failed'); return; }
   }
+  const deletedName = m.name;
   s.maps = s.maps.filter((mm) => mm.id !== m.id);
   s.activeMapId = s.maps[0].id;
   await loadMapData(s, s.activeMapId);
@@ -8479,6 +8516,7 @@ async function deleteCurrentMap(s) {
   refreshMapBar(s);
   refreshZoneBar(s);
   rememberActiveMap(s);
+  toast(s, `Map "${deletedName}" deleted`);
 }
 
 function exportMap(s) {
@@ -8492,6 +8530,7 @@ function exportMap(s) {
   a.download = `${m.name.replace(/[^a-z0-9_-]+/gi, '_')}.netforge.json`;
   document.body.appendChild(a); a.click(); a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 500);
+  toast(s, `Exported "${m.name}"`);
 }
 
 function importMapFromFile(s, file) {
@@ -8559,6 +8598,8 @@ function switchZone(s, zoneId, anchor) {
     animateZoneView(s, from, to, 900);
   }
   schedSave(s);
+  const z = s.zones.find((zz) => zz.id === zoneId);
+  if (z) toast(s, `Zone: ${z.name}`);
 }
 
 // Cinematic camera pan + zoom between two view states. Used by zone hops
@@ -8600,6 +8641,7 @@ function addZone(s) {
   refreshZoneBar(s);
   render(s);
   schedSave(s);
+  toast(s, `Zone added: ${name}`);
 }
 
 function zoneContextMenu(s, zoneId) {
@@ -8610,12 +8652,15 @@ function zoneContextMenu(s, zoneId) {
   if (action.toLowerCase().startsWith('r')) {
     const name = (prompt('Rename zone:', z.name) || '').trim();
     if (!name) return;
+    const oldName = z.name;
     z.name = name;
     refreshZoneBar(s);
     schedSave(s);
+    toast(s, `Zone renamed: ${oldName} → ${name}`);
   } else if (action.toLowerCase().startsWith('d')) {
     if (s.zones.length <= 1) { toast(s, 'Cannot delete the last zone'); return; }
     if (!confirm(`Delete zone "${z.name}" and everything in it?`)) return;
+    const deletedName = z.name;
     snapshot(s);
     s.devices = s.devices.filter((d) => d.zone !== zoneId);
     s.stacks  = s.stacks.filter((st) => st.zone !== zoneId);
@@ -8628,6 +8673,7 @@ function zoneContextMenu(s, zoneId) {
     refreshZoneBar(s);
     render(s);
     schedSave(s);
+    toast(s, `Zone "${deletedName}" deleted`);
   }
 }
 
@@ -8937,12 +8983,14 @@ function undo(s) {
   s.redoStack.push(snapshotPayload(s));
   applySnapshot(s, s.undoStack.pop());
   schedSave(s);
+  toast(s, 'Undo');
 }
 function redo(s) {
   if (!s.redoStack.length) { toast(s, 'Nothing to redo'); return; }
   s.undoStack.push(snapshotPayload(s));
   applySnapshot(s, s.redoStack.pop());
   schedSave(s);
+  toast(s, 'Redo');
 }
 function truncate(s, n) { s = String(s ?? ''); return s.length > n ? s.slice(0, n - 1) + '…' : s; }
 function escSvg(s) { return String(s ?? '').replace(/[&<>]/g, (c) => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c])); }
