@@ -1381,7 +1381,7 @@ function stopFlowTicker(s) {
 // scoped to [data-grid-style="..."] decide what grid layers are visible.
 // Add new styles here — UI in renderPrefsInspector iterates over this list.
 const STYLES = [
-  { id: 'futuristic', label: 'FUTURISTIC GRID', desc: 'Micro-dots + crosshair major grid (default).' },
+  { id: 'futuristic', label: 'FUTURISTIC',      desc: 'Micro-dots + crosshair major grid (default).' },
   { id: 'minimal',    label: 'MINIMAL',         desc: 'No grid — clean black canvas, nodes only.' },
 ];
 const DEFAULT_STYLE = 'futuristic';
