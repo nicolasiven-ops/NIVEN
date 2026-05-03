@@ -7086,9 +7086,10 @@ const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
 const VFX_PULSE_SEGS_MAX = 4;
 const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
 const VFX_PULSE_SEG_CELLS_MAX = 2;
-const VFX_PULSE_FILL_MS = 620;        // tendril draw-in duration
-const VFX_PULSE_DRAIN_MS = 620;       // tendril drain-out duration (origin → tip)
-const VFX_PULSE_STAGGER_MS = 220;     // max random per-tendril start delay
+const VFX_PULSE_FILL_MS = 435;        // tendril draw-in duration
+const VFX_PULSE_DRAIN_MS = 435;       // tendril drain-out duration (origin → tip)
+const VFX_PULSE_STAGGER_MS = 155;     // max random per-tendril start delay
+const VFX_PULSE_HEAD_R = 1.7;         // bright energy-point radius at the build head
 
 function vfxGridPulse(s, wx, wy, color) {
   // Render into the dedicated pulse layer that sits BEHIND stacks/links/
@@ -7175,12 +7176,23 @@ function vfxGridPulse(s, wx, wy, color) {
     path.setAttribute('d', d);
     path.setAttribute('stroke', 'currentColor');
     // Slight stroke-width jitter per tendril for an organic feel.
-    path.setAttribute('stroke-width', (0.55 + Math.random() * 0.25).toFixed(2));
+    path.setAttribute('stroke-width', (0.4 + Math.random() * 0.2).toFixed(2));
     path.setAttribute('stroke-linecap', 'round');
     path.setAttribute('stroke-linejoin', 'round');
     path.setAttribute('fill', 'none');
     path.style.opacity = '0';
     group.appendChild(path);
+
+    // Bright white "energy point" that rides the leading edge during build.
+    // Fill is white so it punches above the accent stroke; the parent
+    // group's drop-shadow already wraps it in the accent halo.
+    const head = document.createElementNS(SVG_NS, 'circle');
+    head.setAttribute('r', String(VFX_PULSE_HEAD_R));
+    head.setAttribute('fill', '#ffffff');
+    head.setAttribute('cx', String(pts[0][0]));
+    head.setAttribute('cy', String(pts[0][1]));
+    head.style.opacity = '0';
+    group.appendChild(head);
 
     // Manhattan length — every segment is grid-aligned, no diagonals.
     let totalLen = 0;
@@ -7190,6 +7202,7 @@ function vfxGridPulse(s, wx, wy, color) {
     }
     tendrils.push({
       el: path,
+      head,
       totalLen,
       delay: Math.random() * VFX_PULSE_STAGGER_MS,
       peak: 0.55 + Math.random() * 0.4,
@@ -7209,6 +7222,7 @@ function vfxGridPulse(s, wx, wy, color) {
       if (local < 0) {
         tn.el.style.opacity = '0';
         tn.el.style.strokeDasharray = `0 ${L}`;
+        tn.head.style.opacity = '0';
         continue;
       }
       if (local < VFX_PULSE_FILL_MS) {
@@ -7219,6 +7233,17 @@ function vfxGridPulse(s, wx, wy, color) {
         tn.el.style.strokeDasharray = `${k} ${L}`;
         tn.el.style.strokeDashoffset = '0';
         tn.el.style.opacity = String(fillP * tn.peak);
+        // Energy-point rides the leading edge. Quick fade-in over the
+        // first ~50ms (so it doesn't pop in mid-stride), then fades out
+        // over the last quarter as it docks at the tip.
+        try {
+          const p = tn.el.getPointAtLength(k);
+          tn.head.setAttribute('cx', String(p.x));
+          tn.head.setAttribute('cy', String(p.y));
+        } catch (_) { /* getPointAtLength can throw on degenerate paths */ }
+        const headIn = local < 50 ? local / 50 : 1;
+        const headOut = Math.min(1, (1 - fillP) * 4);
+        tn.head.style.opacity = String(Math.min(headIn, headOut));
       } else if (local < VFX_PULSE_FILL_MS + VFX_PULSE_DRAIN_MS) {
         // Drain: bright recedes FROM the element-side origin TOWARD the
         // tip. Visible portion is [drainP * L, L]. Dasharray pattern is
@@ -7230,8 +7255,10 @@ function vfxGridPulse(s, wx, wy, color) {
         tn.el.style.strokeDasharray = `0 ${gap} ${dash} ${L * 2}`;
         tn.el.style.strokeDashoffset = '0';
         tn.el.style.opacity = String(tn.peak);
+        tn.head.style.opacity = '0';
       } else {
         tn.el.style.opacity = '0';
+        tn.head.style.opacity = '0';
       }
     }
     requestAnimationFrame(step);
