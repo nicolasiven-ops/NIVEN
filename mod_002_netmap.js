@@ -7764,10 +7764,23 @@ function vfxAnimateView(s, doRender, anchor) {
   // a link's VLAN stripes appeared) — overlay-drain the OLD clone on top
   // AND build the NEW underlying element so both halves of the transition
   // animate in parallel: bright drains away while dim/new look builds up.
+  const __dbg = [];
   for (const [key, oldEntry] of before) {
     const newEntry = after.get(key);
     if (!newEntry) continue;
     if (!oldEntry.frozen || oldEntry.frozen === newEntry.frozen) continue;
+    if (key.includes('data-device-id')) {
+      const oldF = oldEntry.frozen.split('|');
+      const newF = newEntry.frozen.split('|');
+      __dbg.push({
+        key,
+        opacity: oldF[0] === newF[0] ? 'same' : `${oldF[0]} → ${newF[0]}`,
+        filter:  oldF[1] === newF[1] ? 'same' : `${oldF[1]} → ${newF[1]}`,
+        innerHTML: oldF[2] === newF[2] ? 'same' : 'CHANGED',
+        innerHTMLOld: oldF[2] === newF[2] ? null : oldF[2],
+        innerHTMLNew: oldF[2] === newF[2] ? null : newF[2],
+      });
+    }
 
     // Overlay-drain the OLD look on top of the new render. Wrapper opacity
     // rides oldOpacity → 0 in lockstep with the dasharray drain, so the
@@ -7795,6 +7808,8 @@ function vfxAnimateView(s, doRender, anchor) {
       builds.push({ el: newEl, parts: buildParts, target });
     }
   }
+
+  if (__dbg.length) console.warn('[VFX persisting-changed devices]', __dbg);
 
   if (drains.length === 0 && builds.length === 0) return;
 
