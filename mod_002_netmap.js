@@ -3679,6 +3679,12 @@ function drawDevice(s, dev) {
   // layer so switches without an IP visibly recede.
   g.setAttribute('data-l3', isL3Device(dev) ? 'true' : 'false');
   if (isDefaultGateway(s, dev)) g.setAttribute('data-gw', 'true');
+  // VLAN solo state — drives the dim / yellow-glow CSS on the VLAN layer.
+  // References don't carry their own VLANs, so they're exempt from the dim.
+  if (!isReference(dev)) {
+    const vsState = vlanSoloStateForDevice(s, dev);
+    if (vsState) g.setAttribute('data-vlan-solo', vsState);
+  }
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
@@ -4402,6 +4408,8 @@ function drawCollapsedStack(s, stack) {
   });
   g.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   if (stackIsDefaultGateway(s, stack)) g.setAttribute('data-gw', 'true');
+  const vsState = vlanSoloStateForStack(s, stack);
+  if (vsState) g.setAttribute('data-vlan-solo', vsState);
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
@@ -4712,6 +4720,41 @@ function effectiveVlanSolo(s) {
   const hover = s._vlanHover != null ? String(s._vlanHover) : null;
   if (hover && !filter.includes(hover)) return [...filter, hover];
   return filter;
+}
+
+// Per-element VLAN-solo state for canvas dimming.
+//   null              — no filter active, render normally
+//   'unmatched'       — none of the soloed VLANs are configured on this device
+//   'configured-only' — VLAN configured on the device but no port carries it
+//   'matched'         — VLAN configured AND at least one port carries it
+function vlanSoloStateForVlanSet(filter, devVlans, portVlanSet) {
+  if (!filter.length) return null;
+  const devSet = new Set(devVlans.map(String));
+  const matchedAtDevice = filter.some((v) => devSet.has(String(v)));
+  if (!matchedAtDevice) return 'unmatched';
+  const matchedAtPort = filter.some((v) => portVlanSet.has(String(v)));
+  return matchedAtPort ? 'matched' : 'configured-only';
+}
+function vlanSoloStateForDevice(s, dev) {
+  const filter = effectiveVlanSolo(s);
+  if (!filter.length) return null;
+  const devVlans = Array.isArray(dev.vlans) ? dev.vlans.map(String) : [];
+  const portSet = new Set();
+  (dev.ports || []).forEach((p) => (p.vlans || []).forEach((v) => portSet.add(String(v))));
+  return vlanSoloStateForVlanSet(filter, devVlans, portSet);
+}
+function vlanSoloStateForStack(s, stack) {
+  const filter = effectiveVlanSolo(s);
+  if (!filter.length) return null;
+  const devVlans = new Set();
+  const portSet = new Set();
+  (stack.members || []).forEach((id) => {
+    const m = s.devices.find((d) => d.id === id);
+    if (!m) return;
+    (m.vlans || []).forEach((v) => devVlans.add(String(v)));
+    (m.ports || []).forEach((p) => (p.vlans || []).forEach((v) => portSet.add(String(v))));
+  });
+  return vlanSoloStateForVlanSet(filter, [...devVlans], portSet);
 }
 
 function portLabel(dev, portN) {
@@ -10252,6 +10295,19 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
+/* VLAN solo dim — devices/stacks without any of the soloed VLANs fade out;
+   ones that have the VLAN configured but no port carrying it light up
+   yellow so the user sees "declared but not wired" gaps at a glance. */
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched"]{opacity:.22;filter:saturate(.05) brightness(.6);}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched"]:hover{opacity:.5;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #f5d65a) drop-shadow(0 0 12px #f5d65a);}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #f5d65a) drop-shadow(0 0 18px #f5d65a);}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#f5d65a;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
