@@ -1506,17 +1506,11 @@ function buildDOM(s) {
         <svg class="m002-svg" xmlns="${SVG_NS}">
           <defs>
             <pattern id="m002-grid" width="${GRID}" height="${GRID}" patternUnits="userSpaceOnUse">
-              <circle cx="0.5" cy="0.5" r="0.85" fill="#3d3d4e"/>
+              <circle cx="0.5" cy="0.5" r="0.6" fill="#2a2a36"/>
             </pattern>
             <pattern id="m002-grid-major" width="${GRID * 5}" height="${GRID * 5}" patternUnits="userSpaceOnUse">
-              <path d="M -5 0 L 5 0 M 0 -5 L 0 5" fill="none" stroke="#ff2848" stroke-width="0.9" stroke-linecap="round" opacity="0.55"/>
-              <circle cx="0" cy="0" r="1.6" fill="#ff2848" opacity="0.85" filter="url(#m002-grid-glow)"/>
-              <circle cx="0" cy="0" r="0.7" fill="#ffd0d8" opacity="0.95"/>
+              <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.6"/>
             </pattern>
-            <filter id="m002-grid-glow" x="-200%" y="-200%" width="500%" height="500%">
-              <feGaussianBlur stdDeviation="1.4" result="b"/>
-              <feMerge><feMergeNode in="b"/><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
-            </filter>
             <filter id="m002-glow" x="-30%" y="-30%" width="160%" height="160%">
               <feGaussianBlur stdDeviation="2.4" result="b"/>
               <feMerge><feMergeNode in="b"/><feMergeNode in="SourceGraphic"/></feMerge>
@@ -3685,12 +3679,6 @@ function drawDevice(s, dev) {
   // layer so switches without an IP visibly recede.
   g.setAttribute('data-l3', isL3Device(dev) ? 'true' : 'false');
   if (isDefaultGateway(s, dev)) g.setAttribute('data-gw', 'true');
-  // VLAN solo state — drives the dim / yellow-glow CSS on the VLAN layer.
-  // References don't carry their own VLANs, so they're exempt from the dim.
-  if (!isReference(dev)) {
-    const vsState = vlanSoloStateForDevice(s, dev);
-    if (vsState) g.setAttribute('data-vlan-solo', vsState);
-  }
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
@@ -4414,8 +4402,6 @@ function drawCollapsedStack(s, stack) {
   });
   g.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   if (stackIsDefaultGateway(s, stack)) g.setAttribute('data-gw', 'true');
-  const vsState = vlanSoloStateForStack(s, stack);
-  if (vsState) g.setAttribute('data-vlan-solo', vsState);
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
@@ -4728,41 +4714,6 @@ function effectiveVlanSolo(s) {
   return filter;
 }
 
-// Per-element VLAN-solo state for canvas dimming.
-//   null              — no filter active, render normally
-//   'unmatched'       — none of the soloed VLANs are configured on this device
-//   'configured-only' — VLAN configured on the device but no port carries it
-//   'matched'         — VLAN configured AND at least one port carries it
-function vlanSoloStateForVlanSet(filter, devVlans, portVlanSet) {
-  if (!filter.length) return null;
-  const devSet = new Set(devVlans.map(String));
-  const matchedAtDevice = filter.some((v) => devSet.has(String(v)));
-  if (!matchedAtDevice) return 'unmatched';
-  const matchedAtPort = filter.some((v) => portVlanSet.has(String(v)));
-  return matchedAtPort ? 'matched' : 'configured-only';
-}
-function vlanSoloStateForDevice(s, dev) {
-  const filter = effectiveVlanSolo(s);
-  if (!filter.length) return null;
-  const devVlans = Array.isArray(dev.vlans) ? dev.vlans.map(String) : [];
-  const portSet = new Set();
-  (dev.ports || []).forEach((p) => (p.vlans || []).forEach((v) => portSet.add(String(v))));
-  return vlanSoloStateForVlanSet(filter, devVlans, portSet);
-}
-function vlanSoloStateForStack(s, stack) {
-  const filter = effectiveVlanSolo(s);
-  if (!filter.length) return null;
-  const devVlans = new Set();
-  const portSet = new Set();
-  (stack.members || []).forEach((id) => {
-    const m = s.devices.find((d) => d.id === id);
-    if (!m) return;
-    (m.vlans || []).forEach((v) => devVlans.add(String(v)));
-    (m.ports || []).forEach((p) => (p.vlans || []).forEach((v) => portSet.add(String(v))));
-  });
-  return vlanSoloStateForVlanSet(filter, [...devVlans], portSet);
-}
-
 function portLabel(dev, portN) {
   const p = dev?.ports.find((pp) => String(pp.n) === String(portN));
   if (!p) return '?';
@@ -4804,9 +4755,6 @@ function drawLink(s, link) {
     if (tp) {
       g.classList.add('m002-link-bundle');
       if (layer === 'vlan') {
-        // Mirror drawLagLink's VLAN treatment: when soloed VLAN stripes are
-        // present they REPLACE the LAG double-line entirely (no middle gray
-        // line underneath). Otherwise the double-line carries a count badge.
         const vlans = (tp.localLag.vlans || []).map(String).filter((v) =>
           (tp.peerLag.vlans || []).map(String).includes(v)
         );
@@ -4822,11 +4770,16 @@ function drawLink(s, link) {
             inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
           });
+        } else if (vlans.length === 0) {
+          inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#5a5f6e" text-anchor="middle">0x</text>`;
         } else {
-          inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane });
-          const countColor = vlans.length === 0 ? '#5a5f6e' : '#9aa0a8';
-          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="${countColor}" text-anchor="middle">${vlans.length}x</text>`;
+          inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
+          if (!isFiltered) {
+            inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
+          }
         }
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
       } else if (layer === 'routing') {
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
@@ -9865,14 +9818,6 @@ const MOD002_CSS = `
 
 .m002-board{position:absolute;inset:0;}
 .m002-svg{width:100%;height:100%;display:block;}
-
-/* Slow breathing pulse on the major grid (red crosshair nodes) — gives
-   the grid a subtle sci-fi heartbeat without being distracting. */
-.m002-grid-bg2{animation:m002-grid-breathe 6s ease-in-out infinite;}
-@keyframes m002-grid-breathe{
-  0%,100% {opacity:0.78;}
-  50%     {opacity:1;}
-}
 /* Hide the OS cursor everywhere inside the module — the N.IVEN custom
    cursor (corner brackets + dot) carries the affordance on its own and
    the OS grab/move/crosshair glyphs clash with the sci-fi style. */
@@ -10307,19 +10252,6 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
-/* VLAN solo dim — devices/stacks without any of the soloed VLANs fade out;
-   ones that have the VLAN configured but no port carrying it light up
-   yellow so the user sees "declared but not wired" gaps at a glance. */
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched"]{opacity:.22;filter:saturate(.05) brightness(.6);}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched"]:hover{opacity:.5;}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #f5d65a) drop-shadow(0 0 12px #f5d65a);}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #f5d65a) drop-shadow(0 0 18px #f5d65a);}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#f5d65a;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
