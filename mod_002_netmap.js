@@ -1977,6 +1977,18 @@ function snapDropToGrid(s, kind, id) {
     if (dev && isReference(dev)) syncCouplePeerPosition(s, dev);
     if (dev) updateLinksFor(s, dev.id);
   }
+  // Mirror onMove: redraw LAG-pair lines for every involved stack member.
+  // moveItemBy redraws regular per-link <g>'s but not the laglink-id pair
+  // visuals, so a free-move drop would otherwise leave the LAG-pair line
+  // pinned at the last off-grid position from the drag.
+  group.forEach((it) => {
+    if (it.kind === 'stack') {
+      const st = findStackById(s, it.id);
+      if (st) st.members.forEach((mid) => updateLagPairsFor(s, mid));
+    } else if (it.kind === 'device') {
+      updateLagPairsFor(s, it.id);
+    }
+  });
   if (s.activeLayer === 'routing') drawL3Paths(s);
   refreshAggregates(s);
 }
