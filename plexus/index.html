@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PLEXUS // Network Topology, Reimagined</title>
+  <meta name="description" content="Plexus — a network topology mapper built by network engineers, for network engineers. Stop documenting your stack in Excel.">
+  <link rel="icon" type="image/svg+xml" href="../favicon.svg">
+  <meta name="theme-color" content="#07070c">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;900&family=Rajdhani:wght@400;500;600;700&family=Share+Tech+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="grid-bg"></div>
+  <div class="vignette"></div>
+  <div class="scanline"></div>
+
+  <header class="topbar">
+    <a href="#hero" class="brand">
+      <span class="brand-mark" aria-hidden="true"></span>
+      <span class="brand-name">PLEXUS</span>
+      <span class="brand-tag">// NETMAP</span>
+    </a>
+    <nav class="topnav">
+      <a href="#problem">Problem</a>
+      <a href="#features">Features</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#about">About</a>
+    </nav>
+    <a href="#pricing" class="topcta">
+      <span>// GET PLEXUS</span>
+    </a>
+  </header>
+
+  <main>
+    <!-- ============ HERO ============ -->
+    <section class="hero" id="hero">
+      <div class="hero-meta">
+        <span class="bracket">[</span>
+        <span>NETWORK_TOPOLOGY &nbsp;//&nbsp; v1.0</span>
+        <span class="bracket">]</span>
+      </div>
+      <h1 class="hero-title" data-text="PLEXUS">PLEXUS</h1>
+      <p class="hero-tagline">Network topology, reimagined.</p>
+      <p class="hero-sub">
+        Designed by network engineers, for network engineers.<br>
+        Stop documenting your stack in Excel.
+      </p>
+      <div class="hero-actions">
+        <a href="#" class="cta cta-primary" data-action="demo">
+          <span>// TRY DEMO</span>
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+          </svg>
+        </a>
+        <a href="#pricing" class="cta cta-ghost">
+          <span>// BUY — 19 €</span>
+        </a>
+      </div>
+      <div class="hero-stats">
+        <div class="stat">
+          <span class="stat-label">DEVICES</span>
+          <span class="stat-value">UNLIMITED</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">LICENSE</span>
+          <span class="stat-value">ONE-TIME</span>
+        </div>
+        <div class="stat">
+          <span class="stat-label">HOSTING</span>
+          <span class="stat-value">SELF</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PROBLEM ============ -->
+    <section class="problem" id="problem">
+      <div class="section-header">
+        <span class="section-tag">// 01</span>
+        <h2>THE STATE OF NETWORK DOCS</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="problem-grid">
+        <div class="problem-card">
+          <span class="problem-tool">EXCEL</span>
+          <p>Spreadsheets full of IPs and VLAN tags nobody updates after week one.</p>
+        </div>
+        <div class="problem-card">
+          <span class="problem-tool">DRAW.IO</span>
+          <p>Boxes and lines that lose their meaning the moment your topology changes.</p>
+        </div>
+        <div class="problem-card">
+          <span class="problem-tool">VISIO</span>
+          <p>License-locked, generic shapes, no concept of what a LAG or stack actually is.</p>
+        </div>
+        <div class="problem-card highlight">
+          <span class="problem-tool">PLEXUS</span>
+          <p>A real tool, built around real network primitives — zones, stacks, LAGs, hub-tunnels. Documentation that survives change.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ FEATURES ============ -->
+    <section class="features" id="features">
+      <div class="section-header">
+        <span class="section-tag">// 02</span>
+        <h2>BUILT FROM THE WIRE UP</h2>
+        <div class="section-line"></div>
+      </div>
+
+      <div class="feature-grid">
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.01</div>
+          <h3>ZONES</h3>
+          <p>Map your network the way you already think about it. Core, access, DMZ, edge — first-class containers, not just colored rectangles.</p>
+        </article>
+
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.02</div>
+          <h3>LAG &amp; STACKS</h3>
+          <p>Link aggregations, redundant pairs, cross-zone bonds — modeled as semantic relationships, not duplicate lines you have to clean up.</p>
+        </article>
+
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.03</div>
+          <h3>HUB-TUNNELS</h3>
+          <p>Collapse trunk relationships into single, navigable links. Skip the visual clutter without losing the underlying truth.</p>
+        </article>
+
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.04</div>
+          <h3>LIVE EDITING</h3>
+          <p>Drag, snap, restructure. No layout fights, no PDF exports that go stale the moment someone re-cables a switch.</p>
+        </article>
+
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.05</div>
+          <h3>RADIAL TOOLS</h3>
+          <p>Right-click anywhere for a context-aware tool wheel. Move, link, edit — without ever leaving the canvas.</p>
+        </article>
+
+        <article class="feature">
+          <div class="card-corners"></div>
+          <div class="feature-id">F.06</div>
+          <h3>SELF-HOSTED</h3>
+          <p>Runs in your browser, on your machine. Your topology never leaves your network. Compliance and ops both happy.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- ============ SHOWCASE ============ -->
+    <section class="showcase">
+      <div class="section-header">
+        <span class="section-tag">// 03</span>
+        <h2>SEE IT MOVE</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="showcase-frame">
+        <div class="card-corners"></div>
+        <div class="frame-meta">
+          <span class="pulse"></span>
+          <span>SCREENSHOT_PLACEHOLDER</span>
+        </div>
+        <div class="frame-body">
+          <p class="frame-hint">Live screenshots / demo recording will live here.</p>
+          <p class="frame-hint dim">— Try the actual interface in the demo.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============ PRICING ============ -->
+    <section class="pricing" id="pricing">
+      <div class="section-header">
+        <span class="section-tag">// 04</span>
+        <h2>PRICING</h2>
+        <div class="section-line"></div>
+      </div>
+
+      <div class="price-grid">
+        <article class="price-card">
+          <div class="card-corners"></div>
+          <div class="price-tag">DEMO</div>
+          <div class="price-amount">
+            <span class="price-num">FREE</span>
+          </div>
+          <p class="price-sub">No license, no signup. Try it in your browser.</p>
+          <ul class="price-list">
+            <li><span class="check">✓</span> Up to 5 devices</li>
+            <li><span class="check">✓</span> 1 zone</li>
+            <li><span class="check">✓</span> All editor tools</li>
+            <li class="dim"><span class="cross">×</span> Export disabled</li>
+            <li class="dim"><span class="cross">×</span> Save / load disabled</li>
+          </ul>
+          <a href="#" class="cta cta-ghost full" data-action="demo">
+            <span>// LAUNCH DEMO</span>
+          </a>
+        </article>
+
+        <article class="price-card featured">
+          <div class="card-corners"></div>
+          <div class="featured-flag">RECOMMENDED</div>
+          <div class="price-tag">FULL</div>
+          <div class="price-amount">
+            <span class="price-num">19</span>
+            <span class="price-currency">€</span>
+          </div>
+          <p class="price-sub">One-time. No subscription. Yours forever.</p>
+          <ul class="price-list">
+            <li><span class="check">✓</span> Unlimited devices</li>
+            <li><span class="check">✓</span> Unlimited zones</li>
+            <li><span class="check">✓</span> Save / load topologies</li>
+            <li><span class="check">✓</span> Export (PNG, SVG, JSON)</li>
+            <li><span class="check">✓</span> Free updates within v1.x</li>
+          </ul>
+          <a href="#" class="cta cta-primary full" data-action="buy">
+            <span>// GET LICENSE</span>
+            <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+              <path d="M5 12 H19 M13 6 L19 12 L13 18" stroke="currentColor" fill="none" stroke-width="2" stroke-linecap="square"/>
+            </svg>
+          </a>
+        </article>
+      </div>
+
+      <p class="price-note">
+        Self-hosted. Runs entirely in your browser. Your data stays on your machine.
+      </p>
+    </section>
+
+    <!-- ============ ABOUT ============ -->
+    <section class="about" id="about">
+      <div class="section-header">
+        <span class="section-tag">// 05</span>
+        <h2>WHO BUILT THIS</h2>
+        <div class="section-line"></div>
+      </div>
+      <div class="about-frame">
+        <div class="card-corners"></div>
+        <p class="about-lead">
+          Plexus is built by a network engineer with five years on the wire.
+        </p>
+        <p>
+          Every Visio license you've ever cursed at, every Excel sheet you've ever
+          cried over, every draw.io diagram that died the moment a switch got
+          replaced — Plexus exists because the tools we have aren't built by
+          people who actually do this work.
+        </p>
+        <p>
+          It's small, it's focused, and it does one thing properly:
+          <span class="emph">documenting networks the way networks actually behave.</span>
+        </p>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-content">
+      <span>© 2026 &nbsp;//&nbsp; PLEXUS</span>
+      <span class="footer-sig">A &nbsp;<a href="../" class="footer-link">N.IVEN</a>&nbsp; PROJECT</span>
+      <span class="footer-end">END_OF_TRANSMISSION</span>
+    </div>
+  </footer>
+
+  <!-- Placeholder click handler — until demo & buy flows exist -->
+  <script>
+    document.addEventListener('click', (e) => {
+      const link = e.target.closest('[data-action]');
+      if (!link) return;
+      e.preventDefault();
+      const action = link.dataset.action;
+      if (action === 'demo') {
+        alert('// DEMO_NOT_YET_DEPLOYED\n\nDie Demo wird im nächsten Schritt eingebaut.');
+      } else if (action === 'buy') {
+        alert('// CHECKOUT_NOT_YET_DEPLOYED\n\nDer Kauf-Flow (Gumroad o.ä.) wird im nächsten Schritt angebunden.');
+      }
+    });
+  </script>
+</body>
+</html>
