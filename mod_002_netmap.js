@@ -2416,33 +2416,22 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
 
   const span = AUTOLINK_MAX_DIST - AUTOLINK_MIN_DIST;
   const raw  = 1 - Math.min(1, Math.max(0, (dist - AUTOLINK_MIN_DIST) / span));
-  // Smoothstep — slow start, snappy finish so the moment of contact has bite.
+  // Smoothstep — slow start, smooth into the meeting point.
   const reach = raw * raw * (3 - 2 * raw);
 
   const dx = b.x - a.x, dy = b.y - a.y;
   const dlen = Math.hypot(dx, dy) || 1;
   const ux = dx / dlen, uy = dy / dlen;
   const half = dlen / 2;
-  const stubLen = half * reach;
 
-  if (reach >= AUTOLINK_CONNECT_T) {
-    // Stubs would meet → render the completed connection as a single line so
-    // the two halves don't overdraw with a seam in the middle. This is also
-    // the only state in which a release commits the link; outside of it, the
-    // suggestion is just a hint and dropping nukes nothing.
-    al.fullLine.setAttribute('x1', a.x.toFixed(2));
-    al.fullLine.setAttribute('y1', a.y.toFixed(2));
-    al.fullLine.setAttribute('x2', b.x.toFixed(2));
-    al.fullLine.setAttribute('y2', b.y.toFixed(2));
-    al.fullLine.setAttribute('opacity', '1');
-    al.fromStub.setAttribute('opacity', '0');
-    al.toStub.setAttribute('opacity', '0');
-    al.fromTip.setAttribute('opacity', '0');
-    al.toTip.setAttribute('opacity', '0');
-    al.armed = true;
-    return;
-  }
-  al.armed = false;
+  // Stubs scale so they fully meet at midpoint exactly when reach hits
+  // CONNECT_T. Past that they hold the meeting visual instead of overshooting
+  // — calm and steady, no oscillation, and the moment of "joined" lasts the
+  // entire armed band so the user has a generous landing window.
+  const lenFactor = Math.min(1, reach / AUTOLINK_CONNECT_T);
+  const stubLen = half * lenFactor;
+  const armed = reach >= AUTOLINK_CONNECT_T;
+  al.armed = armed;
 
   const aTipX = a.x + ux * stubLen;
   const aTipY = a.y + uy * stubLen;
@@ -2462,13 +2451,17 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
   al.toTip.setAttribute('cx', bTipX.toFixed(2));
   al.toTip.setAttribute('cy', bTipY.toFixed(2));
 
-  // Opacity ramps with reach so very faint stubs at first contact don't
-  // distract while the user is just passing by.
-  const op = 0.30 + 0.65 * reach;
+  // Opacity ramps with reach; once armed, both stubs go full strength so the
+  // joined line reads as solid. Tip dots dim out at meeting because the two
+  // would just overlap on the midpoint.
+  const op = armed ? 1 : (0.30 + 0.65 * reach);
   al.fromStub.setAttribute('opacity', String(op));
   al.toStub.setAttribute('opacity', String(op));
-  al.fromTip.setAttribute('opacity', String(0.40 + 0.55 * reach));
-  al.toTip.setAttribute('opacity', String(0.40 + 0.55 * reach));
+  const tipOp = armed ? 0 : (0.40 + 0.55 * reach);
+  al.fromTip.setAttribute('opacity', String(tipOp));
+  al.toTip.setAttribute('opacity', String(tipOp));
+  // The pre-rendered fullLine layer is no longer needed — stubs do the whole
+  // animation continuously now, no discrete swap.
   al.fullLine.setAttribute('opacity', '0');
 }
 
