@@ -3565,7 +3565,14 @@ function jumpToReference(s, dev) {
     // worked in that zone. Because coupled peers share world coords, the
     // visual transition is now coherent — the JUMP icon doesn't teleport
     // mid-glide, only the surrounding scenery does.
-    if (peer.zone && peer.zone !== s.activeZone) switchZone(s, peer.zone, { x: dev.x, y: dev.y });
+    const anchorView = peer.cameraAnchor || null;
+    if (peer.zone && peer.zone !== s.activeZone) {
+      switchZone(s, peer.zone, { x: dev.x, y: dev.y }, anchorView ? { toView: anchorView } : {});
+    } else if (anchorView) {
+      // Same-zone edge case (couples are normally cross-zone, but be defensive).
+      const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+      animateZoneView(s, from, { x: anchorView.x, y: anchorView.y, zoom: anchorView.zoom }, 520);
+    }
     // Zone glide already animated us to the saved view — don't override
     // it with an auto-recenter on the peer.
     select(s, 'device', peer.id, { skipRecenter: true });
@@ -5706,6 +5713,19 @@ function refreshToolHighlights(s) {
   else body.classList.add('m002-tool-select');
 }
 
+// Renders the world-coord centre of a stored camera anchor + zoom factor.
+// "—" for unset; falls back to a zoom-only label if the SVG isn't measurable
+// yet (very early renders).
+function formatAnchorLabel(s, anchor) {
+  if (!anchor) return '—';
+  const r = s.svg && s.svg.getBoundingClientRect ? s.svg.getBoundingClientRect() : null;
+  const zoomTxt = (Number(anchor.zoom) || 1).toFixed(2);
+  if (!r || !r.width || !r.height) return `@ ${zoomTxt}×`;
+  const cx = Math.round((r.width  / 2 - anchor.x) / anchor.zoom);
+  const cy = Math.round((r.height / 2 - anchor.y) / anchor.zoom);
+  return `${cx}, ${cy} · ${zoomTxt}×`;
+}
+
 function renderReferenceInspector(s, dev, body) {
   const otherMaps = (s.maps || []).filter((m) => m.id !== s.activeMapId);
   const peer = couplePeer(s, dev);
@@ -5730,6 +5750,19 @@ function renderReferenceInspector(s, dev, body) {
   });
   const isMap = dev.refMode === 'map';
 
+  const anchor = dev.cameraAnchor || null;
+  const anchorLabel = formatAnchorLabel(s, anchor);
+  const anchorSection = `
+    <div class="m002-field">
+      <span>ANKER</span>
+      <div class="m002-anchor-row">
+        <div class="m002-field-static" data-anchor-display>${escSvg(anchorLabel)}</div>
+        <button type="button" class="m002-action small" data-anchor-set>${anchor ? 'NEU' : 'SETZEN'}</button>
+        ${anchor ? '<button type="button" class="m002-action small" data-anchor-clear title="Anker löschen">✕</button>' : ''}
+      </div>
+    </div>
+    <p class="m002-link-hint">Aktuelle Kameraposition als Landeansicht für diesen JUMP speichern. Beim nächsten Sprung des Partner-JUMPs schwenkt die Kamera genau hierhin.</p>
+  `;
   const coupleSection = peer ? `
     <div class="m002-field">
       <span>COUPLED PEER</span>
@@ -5739,6 +5772,7 @@ function renderReferenceInspector(s, dev, body) {
       </div>
     </div>
     <p class="m002-link-hint">JUMP-Paar bildet einen Hub: alle Hub-Legs auf beiden Seiten teilen sich eine Broadcast-Domain. Ports auf der Far-Side erscheinen im Port-Modal als Counterpart.</p>
+    ${anchorSection}
     <div class="m002-row2">
       <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
       <button type="button" class="m002-action" data-ref-uncouple>UNCOUPLE</button>
@@ -5829,6 +5863,18 @@ function renderReferenceInspector(s, dev, body) {
     schedSave(s);
     select(s, 'device', dev.id);
     toast(s, 'JUMPs coupled');
+  });
+  body.querySelector('[data-anchor-set]')?.addEventListener('click', () => {
+    dev.cameraAnchor = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
+    schedSave(s);
+    openInspector(s);
+    toast(s, 'Anker gesetzt');
+  });
+  body.querySelector('[data-anchor-clear]')?.addEventListener('click', () => {
+    dev.cameraAnchor = null;
+    schedSave(s);
+    openInspector(s);
+    toast(s, 'Anker gelöscht');
   });
   body.querySelector('[data-ref-jump]')?.addEventListener('click', () => jumpToReference(s, dev));
   body.querySelector('[data-ref-uncouple]')?.addEventListener('click', () => {
@@ -9082,7 +9128,7 @@ function refreshZoneBar(s) {
   `;
 }
 
-function switchZone(s, zoneId, anchor) {
+function switchZone(s, zoneId, anchor, opts = {}) {
   if (!zoneId || zoneId === s.activeZone) return;
   // Persist the position we're leaving so a return trip lands on the same
   // spot. Zoom is held instead of restored — the user keeps whatever scale
@@ -9091,9 +9137,13 @@ function switchZone(s, zoneId, anchor) {
   s.view.zoneViews[s.activeZone] = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const from = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const saved = s.view.zoneViews[zoneId];
-  const to = saved
-    ? { x: saved.x, y: saved.y, zoom: from.zoom } // keep current zoom
-    : from;
+  // Camera anchor (set on a destination JUMP) trumps the saved zoneView so the
+  // JUMP's curated landing view wins over the user's last casual position.
+  const to = opts.toView
+    ? { x: opts.toView.x, y: opts.toView.y, zoom: opts.toView.zoom }
+    : saved
+      ? { x: saved.x, y: saved.y, zoom: from.zoom } // keep current zoom
+      : from;
   s.activeZone = zoneId;
   refreshZoneBar(s);
   vfxAnimateView(s, () => render(s), anchor);
@@ -9615,6 +9665,9 @@ const MOD002_CSS = `
 .m002-couple-arrow{color:#c084fc;font-size:14px;}
 .m002-couple-zone{font-family:'Share Tech Mono',monospace;font-size:10px;color:#c084fc;letter-spacing:1.2px;text-transform:uppercase;}
 .m002-field-static{padding:6px 8px;border:1px dashed #1f1f28;background:#0a0a10;font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;letter-spacing:.6px;}
+.m002-anchor-row{display:flex;gap:6px;align-items:stretch;}
+.m002-anchor-row .m002-field-static{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
+.m002-anchor-row .m002-action{flex:0 0 auto;}
 .m002-ref-fallback{margin:4px 0 8px;font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1px;}
 .m002-ref-fallback summary{cursor:pointer;padding:4px 0;color:#7a7f8e;text-transform:uppercase;}
 .m002-ref-fallback[open] summary{color:#c084fc;}
