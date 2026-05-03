@@ -2695,13 +2695,12 @@ function bindBoard(s) {
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
-    // Right-click on a device → start a rope-drag. Right-click anywhere else
-    // (background, link, stack, expanded stack) → open the radial action menu
-    // at the cursor. Both gestures are mutually exclusive with the regular
-    // drag/pan so we return here without setting s.drag.
+    // Right-click on the background → open the radial action menu at the
+    // cursor. Right-click on a device is intentionally a no-op for now —
+    // reserved for a future per-node context action. The native browser menu
+    // is suppressed in either case via the contextmenu listener below.
     if (e.button === 2) {
-      if (devEl) {
-        startRopeDrag(s, devEl.dataset.deviceId, e.clientX, e.clientY);
+      if (devEl || stackEl || linkEl) {
         e.preventDefault();
         return;
       }
@@ -7484,9 +7483,19 @@ const RADIAL_SUB_GAP_DEG = 3;      // gap inside the device submenu
 
 const RADIAL_PRIMARY = [
   { id: 'new',    dir: 'N', center: -90, label: 'NEW',    glyph: '+'  },
-  { id: 'link',   dir: 'E', center:   0, label: 'LINK',   glyph: '⌇' },
+  { id: 'move',   dir: 'E', center:   0, label: 'MOVE',   glyph: '↦' },
   { id: 'delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×'  },
   { id: 'undo',   dir: 'W', center: 180, label: 'UNDO',   glyph: '↶' },
+];
+
+// MOVE submenu — switches the active layer or jumps the user into the zone
+// picker. Layout matches the user's mental model: physical west (default),
+// VLAN north, routing east, zone south.
+const RADIAL_MOVE = [
+  { id: 'layer:vlan',     dir: 'N', center: -90, label: 'VLAN',     glyph: '≣' },
+  { id: 'layer:routing',  dir: 'E', center:   0, label: 'ROUTING',  glyph: '↯' },
+  { id: 'zones',          dir: 'S', center:  90, label: 'ZONE',     glyph: '◉' },
+  { id: 'layer:physical', dir: 'W', center: 180, label: 'PHYSICAL', glyph: '⌗' },
 ];
 
 function polarXY(cx, cy, r, deg) {
@@ -7575,8 +7584,20 @@ function handleRadialAction(s, action) {
     showRadialDeviceSubmenu(s);
     return;
   }
+  if (action === 'move') {
+    showRadialMoveSubmenu(s);
+    return;
+  }
+  if (action === 'zones') {
+    showRadialZonesSubmenu(s);
+    return;
+  }
   if (action === 'back') {
     swapRadialContent(s, renderRadialPrimary(), 'primary');
+    return;
+  }
+  if (action === 'back-move') {
+    swapRadialContent(s, renderRadialMove(), 'move');
     return;
   }
   if (action === 'cancel') {
@@ -7585,11 +7606,6 @@ function handleRadialAction(s, action) {
     if (s.linkMode) toggleLinkMode(s);
     if (s.deleteMode) toggleDeleteMode(s);
     closeRadialMenu(s);
-    return;
-  }
-  if (action === 'link') {
-    closeRadialMenu(s);
-    if (!s.linkMode) toggleLinkMode(s);
     return;
   }
   if (action === 'delete') {
@@ -7609,11 +7625,35 @@ function handleRadialAction(s, action) {
     if (w) spawnDeviceAt(s, typeId, w.x, w.y);
     return;
   }
+  if (action.startsWith('layer:')) {
+    // Bounce off the existing layer-pill click handler so all the
+    // routing-mode auto-expand / view-fx side effects stay centralised.
+    const layerId = action.slice('layer:'.length);
+    closeRadialMenu(s);
+    s.layerBar?.querySelector(`[data-layer="${layerId}"]`)?.click();
+    return;
+  }
+  if (action.startsWith('zone:')) {
+    const zoneId = action.slice('zone:'.length);
+    closeRadialMenu(s);
+    switchZone(s, zoneId);
+    return;
+  }
 }
 
 function showRadialDeviceSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialDevices(), 'devices');
+}
+
+function showRadialMoveSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialMove(), 'move');
+}
+
+function showRadialZonesSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialZones(s), 'zones');
 }
 
 function swapRadialContent(s, html, level) {
@@ -7704,6 +7744,83 @@ function renderRadialDevices() {
     <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
       <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialMove() {
+  // Layer + zone navigation submenu — same 4-cardinal layout as the primary
+  // ring. The centre tile takes the user back to primary (← back-action).
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / RADIAL_MOVE.length) / 2; // 45
+  let segs = '';
+  RADIAL_MOVE.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
+    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialZones(s) {
+  // Dynamic zone picker — one segment per zone in the current map. The active
+  // zone gets a subtle highlight so the user can see where they currently are.
+  // Centre tile returns to the MOVE submenu rather than primary.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const zones = s.zones || [];
+  let segs = '';
+  if (zones.length === 0) {
+    segs = `
+      <text class="m002-rad-empty" x="${cx}" y="${cy - RADIAL_INNER_R - 24}"
+            text-anchor="middle" fill="#5a5f6e"
+            font-family="'Share Tech Mono',monospace" font-size="10" letter-spacing="1.6">
+        NO ZONES
+      </text>`;
+  } else {
+    const N = zones.length;
+    const slice = 360 / N;
+    const half = slice / 2;
+    zones.forEach((z, i) => {
+      const center = -90 + i * slice;
+      const start = center - half + RADIAL_SUB_GAP_DEG / 2;
+      const end   = center + half - RADIAL_SUB_GAP_DEG / 2;
+      const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+      const labelPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2, center);
+      const isActive = z.id === s.activeZone;
+      segs += `
+        <g class="m002-rad-seg m002-rad-seg-zone${isActive ? ' m002-rad-seg-zone-active' : ''}" data-radial-action="zone:${escAttr(z.id)}">
+          <path class="m002-rad-seg-path" d="${path}"/>
+          <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${escSvg(z.name)}</text>
+        </g>`;
+    });
+  }
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back-move">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
         <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
       </g>
@@ -10008,6 +10125,9 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 /* CANCEL centre tile (primary): same hover treatment as the back tile. */
 .m002-rad-seg-cancel:hover .m002-rad-core{stroke:#ff003c;fill:rgba(255,0,60,0.08);}
 .m002-rad-seg-cancel:hover .m002-rad-core-label{fill:#ff003c;}
+/* Zone picker — active zone reads as already-occupied; hover still pops red. */
+.m002-rad-seg-zone-active .m002-rad-seg-path{fill:rgba(255,0,60,0.10);stroke:rgba(255,0,60,0.55);}
+.m002-rad-seg-zone-active .m002-rad-seg-label{fill:#ff003c;}
 
 /* === Draw-in animation overlay (primary level only) ===
    The construct primitives — dot, vertical lines, two semicircle arcs — are
