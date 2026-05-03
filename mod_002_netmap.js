@@ -2524,10 +2524,17 @@ function bindBoard(s) {
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
-    // Right-click on a device → start a rope-drag. The rope is mutually
-    // exclusive with the regular drag/pan so we return here without setting s.drag.
-    if (e.button === 2 && devEl) {
-      startRopeDrag(s, devEl.dataset.deviceId, e.clientX, e.clientY);
+    // Right-click on a device → start a rope-drag. Right-click anywhere else
+    // (background, link, stack, expanded stack) → open the radial action menu
+    // at the cursor. Both gestures are mutually exclusive with the regular
+    // drag/pan so we return here without setting s.drag.
+    if (e.button === 2) {
+      if (devEl) {
+        startRopeDrag(s, devEl.dataset.deviceId, e.clientX, e.clientY);
+        e.preventDefault();
+        return;
+      }
+      openRadialMenu(s, e.clientX, e.clientY);
       e.preventDefault();
       return;
     }
@@ -2980,9 +2987,7 @@ function bindBoard(s) {
       e.preventDefault();
       return;
     }
-    // Background: open radial action menu at the cursor.
-    openRadialMenu(s, e.clientX, e.clientY);
-    e.preventDefault();
+    // Background double-click: no-op. Radial menu now opens on right-click.
   };
   svg.addEventListener('dblclick', onDblClick);
   s.cleanups.push(() => svg.removeEventListener('dblclick', onDblClick));
@@ -7316,6 +7321,14 @@ function handleRadialAction(s, action) {
     swapRadialContent(s, renderRadialPrimary(), 'primary');
     return;
   }
+  if (action === 'cancel') {
+    // Centre tile in the primary ring. Closes the menu and abandons whatever
+    // mode is currently armed — quick "nevermind" gesture in one click.
+    if (s.linkMode) toggleLinkMode(s);
+    if (s.deleteMode) toggleDeleteMode(s);
+    closeRadialMenu(s);
+    return;
+  }
   if (action === 'link') {
     closeRadialMenu(s);
     if (!s.linkMode) toggleLinkMode(s);
@@ -7378,12 +7391,29 @@ function renderRadialPrimary() {
         <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
       </g>`;
   });
+  // Animation overlay: a centre dot, two vertical lines, and two semicircle
+  // arcs that draw in sequence on first open. The arcs and lines are positioned
+  // exactly on the outer/cardinal radii so they slot into the final ring outline
+  // before fading to invisible. Submenu swaps don't replay this — only the
+  // initial m002-radial-in pass does.
+  const ARC_R = RADIAL_OUTER_R - 0.5;
+  const arcRight = `M ${cx} ${cy - ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 ${cx} ${cy + ARC_R}`;
+  const arcLeft  = `M ${cx} ${cy + ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 ${cx} ${cy - ARC_R}`;
   return `
     <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
-      <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
-      <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">SELECT</text>
+      <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="cancel">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">CANCEL</text>
+      </g>
       ${segs}
+      <g class="m002-rad-anim" pointer-events="none">
+        <path class="m002-rad-arc m002-rad-arc-r" d="${arcRight}" fill="none"/>
+        <path class="m002-rad-arc m002-rad-arc-l" d="${arcLeft}"  fill="none"/>
+        <line class="m002-rad-vline m002-rad-vline-up" x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy - RADIAL_OUTER_R}"/>
+        <line class="m002-rad-vline m002-rad-vline-dn" x1="${cx}" y1="${cy}" x2="${cx}" y2="${cy + RADIAL_OUTER_R}"/>
+        <circle class="m002-rad-dot" cx="${cx}" cy="${cy}" r="3.5"/>
+      </g>
     </svg>`;
 }
 
@@ -9673,11 +9703,13 @@ body.m002-tool-select .cursor.active.down .m002-cursor-frame,
 body.m002-tool-link .cursor.active.down .m002-cursor-frame,
 body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45deg) scale(0.8);}
 
-/* Radial action menu — opens on background dblclick. Centered on the
-   click point with a small tint backdrop, scales in with a fast spring. */
-.m002-radial{position:absolute;width:${RADIAL_OUTER_R * 2}px;height:${RADIAL_OUTER_R * 2}px;transform:translate(-50%,-50%) scale(0.7);transform-origin:center;opacity:0;pointer-events:auto;z-index:60;transition:transform 180ms cubic-bezier(0.34,1.56,0.64,1),opacity 140ms ease-out;filter:drop-shadow(0 8px 22px rgba(0,0,0,0.55));}
-.m002-radial.m002-radial-in{transform:translate(-50%,-50%) scale(1);opacity:1;}
-.m002-radial.m002-radial-out{transform:translate(-50%,-50%) scale(0.85);opacity:0;transition:transform 140ms ease-in,opacity 140ms ease-in;}
+/* Radial action menu — opens on background right-click. Centered on the
+   click point. The first open plays a draw-in sequence: centre dot →
+   vertical lines → semicircle arcs (top-pole sweeps down, bottom-pole
+   sweeps up) → final UI fades over the construct lines. */
+.m002-radial{position:absolute;width:${RADIAL_OUTER_R * 2}px;height:${RADIAL_OUTER_R * 2}px;transform:translate(-50%,-50%);transform-origin:center;opacity:0;pointer-events:auto;z-index:60;transition:opacity 80ms ease-out;filter:drop-shadow(0 8px 22px rgba(0,0,0,0.55));}
+.m002-radial.m002-radial-in{opacity:1;}
+.m002-radial.m002-radial-out{opacity:0;transform:translate(-50%,-50%) scale(0.92);transition:transform 140ms ease-in,opacity 140ms ease-in;}
 .m002-radial.m002-radial-swap .m002-rad-svg{opacity:0;transform:scale(0.92);}
 .m002-rad-svg{display:block;width:100%;height:100%;overflow:visible;transition:opacity 110ms ease-out,transform 110ms ease-out;transform-origin:center;}
 .m002-rad-bg{fill:rgba(8,8,14,0.72);stroke:rgba(255,0,60,0.18);stroke-width:1;}
@@ -9699,6 +9731,40 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-rad-seg-back{cursor:pointer;}
 .m002-rad-seg-back:hover .m002-rad-core{stroke:#ff003c;fill:rgba(255,0,60,0.08);}
 .m002-rad-seg-back:hover .m002-rad-core-label{fill:#ff003c;}
+/* CANCEL centre tile (primary): same hover treatment as the back tile. */
+.m002-rad-seg-cancel:hover .m002-rad-core{stroke:#ff003c;fill:rgba(255,0,60,0.08);}
+.m002-rad-seg-cancel:hover .m002-rad-core-label{fill:#ff003c;}
+
+/* === Draw-in animation overlay (primary level only) ===
+   The construct primitives — dot, vertical lines, two semicircle arcs — are
+   drawn in sequence, then the real UI fades over the top while the overlay
+   itself fades out. */
+.m002-rad-dot{fill:#ff003c;transform-box:fill-box;transform-origin:center;transform:scale(0);}
+.m002-rad-vline{stroke:#ff003c;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${RADIAL_OUTER_R};stroke-dashoffset:${RADIAL_OUTER_R};}
+.m002-rad-arc{stroke:#ff003c;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};stroke-dashoffset:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-dot{animation:m002-rad-dot-in 140ms ease-out forwards;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-vline{animation:m002-rad-line-draw 180ms cubic-bezier(.55,.05,.35,1) 110ms forwards;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-arc{animation:m002-rad-arc-draw 320ms cubic-bezier(.5,.05,.35,1) 250ms forwards;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-anim{animation:m002-rad-fade-out 240ms ease-out 600ms forwards;}
+@keyframes m002-rad-dot-in{0%{transform:scale(0);opacity:0;}40%{opacity:1;}100%{transform:scale(1);opacity:1;}}
+@keyframes m002-rad-line-draw{to{stroke-dashoffset:0;}}
+@keyframes m002-rad-arc-draw{to{stroke-dashoffset:0;}}
+@keyframes m002-rad-fade-out{to{opacity:0;}}
+
+/* Final UI is invisible until the construct lines have done their work. */
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-bg,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core-label,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-path,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-glyph,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-label{opacity:0;animation:m002-rad-fade-final 220ms ease-out forwards;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-bg        {animation-delay:540ms;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-path  {animation-delay:580ms;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core      {animation-delay:620ms;}
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-glyph,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-label,
+.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core-label{animation-delay:680ms;}
+@keyframes m002-rad-fade-final{from{opacity:0;}to{opacity:1;}}
 `;
 
 // =============================================================================
