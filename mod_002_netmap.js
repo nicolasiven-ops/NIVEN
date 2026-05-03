@@ -7286,6 +7286,10 @@ function openRadialMenu(s, clientX, clientY) {
   requestAnimationFrame(() => root.classList.add('m002-radial-in'));
 
   root.addEventListener('mousedown', (e) => e.stopPropagation());
+  // Right-click on the radial itself must not raise the OS context menu —
+  // the SVG-level suppressor doesn't fire here because the radial pops up
+  // under the cursor and intercepts contextmenu before svg sees it.
+  root.addEventListener('contextmenu', (e) => { e.preventDefault(); e.stopPropagation(); });
   root.addEventListener('click', (e) => {
     e.stopPropagation();
     const seg = e.target.closest('[data-radial-action]');
@@ -7409,8 +7413,10 @@ function renderRadialPrimary() {
   // before fading to invisible. Submenu swaps don't replay this — only the
   // initial m002-radial-in pass does.
   const ARC_R = RADIAL_OUTER_R - 0.5;
-  const arcRight = `M ${cx} ${cy - ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 ${cx} ${cy + ARC_R}`;
-  const arcLeft  = `M ${cx} ${cy + ARC_R} A ${ARC_R} ${ARC_R} 0 0 1 ${cx} ${cy - ARC_R}`;
+  // Sweep flag 0 = counter-clockwise. Top pole arcs down via the LEFT side,
+  // bottom pole arcs up via the RIGHT side — both running CCW around the ring.
+  const arcRight = `M ${cx} ${cy - ARC_R} A ${ARC_R} ${ARC_R} 0 0 0 ${cx} ${cy + ARC_R}`;
+  const arcLeft  = `M ${cx} ${cy + ARC_R} A ${ARC_R} ${ARC_R} 0 0 0 ${cx} ${cy - ARC_R}`;
   return `
     <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
@@ -9751,9 +9757,9 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
    The construct primitives — dot, vertical lines, two semicircle arcs — are
    drawn in sequence, then the real UI fades over the top while the overlay
    itself fades out. */
-.m002-rad-dot{fill:#ff003c;transform-box:fill-box;transform-origin:center;transform:scale(0);}
-.m002-rad-vline{stroke:#ff003c;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${RADIAL_OUTER_R};stroke-dashoffset:${RADIAL_OUTER_R};}
-.m002-rad-arc{stroke:#ff003c;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};stroke-dashoffset:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};}
+.m002-rad-dot{fill:#e8e8ee;transform-box:fill-box;transform-origin:center;transform:scale(0);}
+.m002-rad-vline{stroke:#e8e8ee;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${RADIAL_OUTER_R};stroke-dashoffset:${RADIAL_OUTER_R};}
+.m002-rad-arc{stroke:#e8e8ee;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};stroke-dashoffset:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};}
 .m002-radial.m002-radial-in[data-level="primary"] .m002-rad-dot{animation:m002-rad-dot-in 140ms ease-out forwards;}
 .m002-radial.m002-radial-in[data-level="primary"] .m002-rad-vline{animation:m002-rad-line-draw 180ms cubic-bezier(.55,.05,.35,1) 110ms forwards;}
 .m002-radial.m002-radial-in[data-level="primary"] .m002-rad-arc{animation:m002-rad-arc-draw 320ms cubic-bezier(.5,.05,.35,1) 250ms forwards;}
