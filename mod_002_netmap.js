@@ -3992,12 +3992,38 @@ function refreshMultiSelectClasses(s) {
 function collectGroupTargets(s, primary) {
   const k = selKey(primary.kind, primary.id);
   const inGroup = s.multiSelected.has(k) || (s.selected && s.selected.kind === primary.kind && s.selected.id === primary.id && s.multiSelected.size > 0);
-  if (!inGroup || s.multiSelected.size === 0) return [primary];
-  const out = [primary];
-  s.multiSelected.forEach((mk) => {
-    if (mk === k) return;
-    const [kind, id] = mk.split(':');
-    out.push({ kind, id });
+  if (inGroup && s.multiSelected.size > 0) {
+    const out = [primary];
+    s.multiSelected.forEach((mk) => {
+      if (mk === k) return;
+      const [kind, id] = mk.split(':');
+      out.push({ kind, id });
+    });
+    return out;
+  }
+  // JUMP solo-drag pulls its whole zone along — moving a portal in isolation
+  // otherwise tears the zone's layout apart.
+  if (primary.kind === 'device') {
+    const dev = s.devices.find((d) => d.id === primary.id);
+    if (dev && isReference(dev)) return collectZoneMates(s, dev);
+  }
+  return [primary];
+}
+
+function collectZoneMates(s, jump) {
+  const zone = jump.zone || null;
+  const out = [{ kind: 'device', id: jump.id }];
+  const stackedMembers = new Set();
+  s.stacks.forEach((st) => {
+    if ((st.zone || null) !== zone) return;
+    out.push({ kind: 'stack', id: st.id });
+    st.members.forEach((mid) => stackedMembers.add(mid));
+  });
+  s.devices.forEach((d) => {
+    if (d.id === jump.id) return;
+    if ((d.zone || null) !== zone) return;
+    if (stackedMembers.has(d.id)) return;
+    out.push({ kind: 'device', id: d.id });
   });
   return out;
 }
