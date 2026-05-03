@@ -1506,10 +1506,11 @@ function buildDOM(s) {
         <svg class="m002-svg" xmlns="${SVG_NS}">
           <defs>
             <pattern id="m002-grid" width="${GRID}" height="${GRID}" patternUnits="userSpaceOnUse">
-              <circle cx="0.5" cy="0.5" r="0.6" fill="#2a2a36"/>
+              <circle cx="0.5" cy="0.5" r="0.55" fill="#23232e"/>
             </pattern>
             <pattern id="m002-grid-major" width="${GRID * 5}" height="${GRID * 5}" patternUnits="userSpaceOnUse">
-              <path d="M ${GRID * 5} 0 L 0 0 0 ${GRID * 5}" fill="none" stroke="#1a1a22" stroke-width="0.6"/>
+              <path d="M -3 0 L 3 0 M 0 -3 L 0 3" fill="none" stroke="#3a2230" stroke-width="0.7" stroke-linecap="round" opacity="0.85"/>
+              <circle cx="0" cy="0" r="0.9" fill="#5a2030" opacity="0.55"/>
             </pattern>
             <filter id="m002-glow" x="-30%" y="-30%" width="160%" height="160%">
               <feGaussianBlur stdDeviation="2.4" result="b"/>
@@ -1528,6 +1529,16 @@ function buildDOM(s) {
             <g class="m002-vfx-exits" pointer-events="none"></g>
           </g>
         </svg>
+
+        <div class="m002-hud-frame" aria-hidden="true">
+          <span class="m002-hud-bracket m002-hud-bracket-tl"></span>
+          <span class="m002-hud-bracket m002-hud-bracket-tr"></span>
+          <span class="m002-hud-bracket m002-hud-bracket-bl"></span>
+          <span class="m002-hud-bracket m002-hud-bracket-br"></span>
+          <span class="m002-hud-scan m002-hud-scan-h"></span>
+          <span class="m002-hud-scan m002-hud-scan-v"></span>
+          <span class="m002-hud-vignette"></span>
+        </div>
       </div>
 
       <div class="m002-layerbar-wrap">
@@ -9861,6 +9872,34 @@ const MOD002_CSS = `
 
 .m002-board{position:absolute;inset:0;}
 .m002-svg{width:100%;height:100%;display:block;}
+
+/* ───── HUD frame: vignette + corner brackets + scan sweeps ─────
+   Sits in screen space above the SVG world so the effects stay
+   anchored to the viewport while the grid pans/zooms beneath. */
+.m002-hud-frame{position:absolute;inset:0;pointer-events:none;overflow:hidden;z-index:1;}
+.m002-hud-vignette{position:absolute;inset:0;background:radial-gradient(ellipse 95% 90% at 50% 50%,transparent 35%,rgba(0,0,0,0.35) 75%,rgba(0,0,0,0.7) 100%),radial-gradient(ellipse at center,transparent 60%,rgba(255,0,60,0.05) 100%);mix-blend-mode:multiply;}
+.m002-hud-bracket{position:absolute;width:28px;height:28px;border:1px solid rgba(255,40,80,0.55);box-shadow:0 0 6px rgba(255,40,80,0.35),inset 0 0 4px rgba(255,40,80,0.25);}
+.m002-hud-bracket-tl{top:8px;left:8px;border-right:none;border-bottom:none;}
+.m002-hud-bracket-tr{top:8px;right:8px;border-left:none;border-bottom:none;}
+.m002-hud-bracket-bl{bottom:8px;left:8px;border-right:none;border-top:none;}
+.m002-hud-bracket-br{bottom:8px;right:8px;border-left:none;border-top:none;}
+.m002-hud-scan{position:absolute;opacity:0;pointer-events:none;}
+.m002-hud-scan-h{left:0;right:0;height:1px;top:-2px;background:linear-gradient(90deg,transparent 0%,rgba(255,40,80,0.45) 50%,transparent 100%);box-shadow:0 0 8px rgba(255,40,80,0.6),0 0 18px rgba(255,40,80,0.3);animation:m002-scan-h 11s linear infinite;}
+.m002-hud-scan-v{top:0;bottom:0;width:1px;left:-2px;background:linear-gradient(180deg,transparent 0%,rgba(255,40,80,0.35) 50%,transparent 100%);box-shadow:0 0 8px rgba(255,40,80,0.5),0 0 18px rgba(255,40,80,0.25);animation:m002-scan-v 17s linear infinite;animation-delay:5s;}
+@keyframes m002-scan-h{
+  0%  {top:-2px;opacity:0;}
+  4%  {opacity:0.55;}
+  60% {top:100%;opacity:0.55;}
+  62% {opacity:0;}
+  100%{top:100%;opacity:0;}
+}
+@keyframes m002-scan-v{
+  0%  {left:-2px;opacity:0;}
+  4%  {opacity:0.45;}
+  55% {left:100%;opacity:0.45;}
+  57% {opacity:0;}
+  100%{left:100%;opacity:0;}
+}
 /* Hide the OS cursor everywhere inside the module — the N.IVEN custom
    cursor (corner brackets + dot) carries the affordance on its own and
    the OS grab/move/crosshair glyphs clash with the sci-fi style. */
