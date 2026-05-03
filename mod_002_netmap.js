@@ -2999,7 +2999,22 @@ function bindBoard(s) {
           const st = (s.stacks || []).find((x) => x.id === s.drag.id);
           if (st) {
             const t = typeOf(stackTypeOf(s, st));
-            if (t?.accent) vfxGridPulse(s, st.x, st.y, t.accent);
+            if (t?.accent) {
+              // Expanded stacks have a dashed envelope that's bigger than
+              // the device box — launch tendrils from THAT perimeter so
+              // they don't appear to spawn inside the stack. Collapsed
+              // stacks fall through to the device-sized default.
+              const env = stackEnvelopeRect(s, st);
+              if (env) {
+                const ecx = (env.minX + env.maxX) / 2;
+                const ecy = (env.minY + env.maxY) / 2;
+                const ehw = (env.maxX - env.minX) / 2;
+                const ehh = (env.maxY - env.minY) / 2;
+                vfxGridPulse(s, ecx, ecy, t.accent, ehw, ehh);
+              } else {
+                vfxGridPulse(s, st.x, st.y, t.accent);
+              }
+            }
           }
         }
       }
@@ -7553,7 +7568,7 @@ const VFX_PULSE_DRAIN_MS = 435;       // tendril drain-out duration (origin → 
 const VFX_PULSE_STAGGER_MS = 155;     // max random per-tendril start delay
 const VFX_PULSE_HEAD_R = 1.7;         // bright energy-point radius at the build head
 
-function vfxGridPulse(s, wx, wy, color) {
+function vfxGridPulse(s, wx, wy, color, hw, hh) {
   // Render into the dedicated pulse layer that sits BEHIND stacks/links/
   // devices, so tendrils never cover other elements.
   const layer = s.gPulse || s.gOverlay;
@@ -7561,9 +7576,10 @@ function vfxGridPulse(s, wx, wy, color) {
   const cx = Math.round(wx / GRID) * GRID;
   const cy = Math.round(wy / GRID) * GRID;
   // Element half-extents, snapped to grid so launch points and the
-  // no-return rule both work in cell units.
-  const halfW = Math.round(DEVICE_W / 2 / GRID) * GRID;
-  const halfH = Math.round(DEVICE_H / 2 / GRID) * GRID;
+  // no-return rule both work in cell units. Caller can pass an
+  // expanded stack's envelope dimensions; default is the device box.
+  const halfW = Math.max(GRID, Math.round((hw != null ? hw : DEVICE_W / 2) / GRID) * GRID);
+  const halfH = Math.max(GRID, Math.round((hh != null ? hh : DEVICE_H / 2) / GRID) * GRID);
 
   const group = document.createElementNS(SVG_NS, 'g');
   group.setAttribute('class', 'm002-vfx-grid-pulse');
