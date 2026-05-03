@@ -1255,9 +1255,7 @@ body.view-runtime main { padding: 0; max-width: none; }
 
 /* === Immersive Mode (Plexus runtime: hide all hub chrome, peek HUD on top edge) === */
 body.view-runtime #bg-canvas,
-body.view-runtime .vignette,
-body.view-runtime .cursor,
-body.view-runtime .cursor-dot { display: none !important; }
+body.view-runtime .vignette { display: none !important; }
 
 body.view-runtime .runtime-hud {
   position: fixed;
