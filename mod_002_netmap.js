@@ -1701,6 +1701,7 @@ function buildDOM(s) {
           });
           if (isL3 && !st.expanded) {
             st.expanded = true;
+            layoutStackMembersIfOverlapping(s, st);
             expandedByLayer.push(st.id);
           } else if (!isL3 && st.expanded) {
             st.expanded = false;
@@ -2184,7 +2185,12 @@ function commitRopeLink(s, fromId, toId) {
   if (!devA || !devB) return false;
   const stA = findStack(s, fromId);
   const stB = findStack(s, toId);
-  if (stA && stA === stB) { toast(s, 'Use STACK-LINKS inside a stack'); return false; }
+  if (stA && stA === stB) {
+    // Two members of the same stack — turn this gesture into a stack-link.
+    const slId = commitIntraStackLink(s, stA, fromId, toId);
+    if (slId) toast(s, 'Stack-link added');
+    return !!slId;
+  }
   if (isReference(devA) && isReference(devB)) { toast(s, 'Couple JUMPs via the inspector COUPLE WITH dropdown'); return false; }
   if ((isReference(devA) || isReference(devB)) && devA.zone !== devB.zone) { toast(s, 'JUMP hub-leg must stay in the same zone'); return false; }
   snapshot(s);
@@ -3232,11 +3238,12 @@ function handleLinkClick(s, deviceId) {
     return;
   }
   // Two members of the same stack — these are stacking cables, not regular
-  // links. Send the user to the stack inspector to configure a stack-link.
+  // links. Drop straight into a stack-link instead of bouncing the user.
   const stA = findStack(s, s.linkPending);
   const stB = findStack(s, deviceId);
   if (stA && stA === stB) {
-    toast(s, 'Use STACK-LINKS inside a stack');
+    const slId = commitIntraStackLink(s, stA, s.linkPending, deviceId);
+    if (slId) toast(s, 'Stack-link added');
     s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
     s.linkPending = null;
     setMode(s, 'LINK · pick first node');
@@ -3729,6 +3736,27 @@ function addStackLink(s, stackId) {
   openInspector(s);
 }
 
+// Drawing a regular link between two members of the same stack is really a
+// stack-link gesture — same shape, same per-cable port refs, just owned by
+// the stack instead of the global link list. Returns the new sl id.
+function commitIntraStackLink(s, st, fromId, toId) {
+  if (!st || fromId === toId) return null;
+  if (!st.members.includes(fromId) || !st.members.includes(toId)) return null;
+  if (!Array.isArray(st.stackLinks)) st.stackLinks = [];
+  snapshot(s);
+  const sl = {
+    id: 'sl_' + rid(),
+    fromDevice: fromId,
+    toDevice: toId,
+    fromPort: '',
+    toPort: '',
+  };
+  st.stackLinks.push(sl);
+  if (!isStackCollapsed(s, st)) refreshStackVisuals(s, st);
+  schedSave(s);
+  return sl.id;
+}
+
 function removeStackLink(s, stackId, slId) {
   const st = findStackById(s, stackId);
   if (!st) return;
@@ -3781,9 +3809,45 @@ function toggleStackExpanded(s, stackId) {
       const cy = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
       st.x = cx; st.y = cy;
     }
+  } else {
+    // On expand, lay overlapping members out cleanly. Once the user has
+    // dragged them into place, positions stay put on subsequent toggles.
+    layoutStackMembersIfOverlapping(s, st);
   }
   render(s);
   schedSave(s);
+}
+
+// If members of an expanded stack visually overlap, re-arrange them in a
+// clean grid centered on the stack anchor with one grid line of breathing
+// room between cells. Members that already sit cleanly are left untouched.
+function layoutStackMembersIfOverlapping(s, st) {
+  const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  if (devs.length < 2) return;
+  let overlap = false;
+  for (let i = 0; i < devs.length && !overlap; i++) {
+    for (let j = i + 1; j < devs.length; j++) {
+      if (Math.abs(devs[i].x - devs[j].x) < DEVICE_W && Math.abs(devs[i].y - devs[j].y) < DEVICE_H) {
+        overlap = true;
+        break;
+      }
+    }
+  }
+  if (!overlap) return;
+  const cols = Math.min(devs.length, Math.max(2, Math.ceil(Math.sqrt(devs.length))));
+  const rows = Math.ceil(devs.length / cols);
+  const stepX = DEVICE_W + GRID;
+  const stepY = DEVICE_H + GRID;
+  const totalW = (cols - 1) * stepX;
+  const totalH = (rows - 1) * stepY;
+  const startX = Math.round((st.x - totalW / 2) / GRID) * GRID;
+  const startY = Math.round((st.y - totalH / 2) / GRID) * GRID;
+  devs.forEach((d, i) => {
+    const r = Math.floor(i / cols);
+    const c = i % cols;
+    d.x = Math.round((startX + c * stepX) / GRID) * GRID;
+    d.y = Math.round((startY + r * stepY) / GRID) * GRID;
+  });
 }
 
 function drawCollapsedStack(s, stack) {
