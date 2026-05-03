@@ -4772,6 +4772,7 @@ function drawLink(s, link) {
           });
         } else if (vlans.length === 0) {
           inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
+          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#5a5f6e" text-anchor="middle">0x</text>`;
         } else {
           inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
           if (!isFiltered) {
@@ -4784,10 +4785,12 @@ function drawLink(s, link) {
       } else {
         inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane });
       }
-      if (layer !== 'routing') {
+      // Physical layer carries the LAG-name pair label; VLAN already speaks
+      // through its own stripes / count badge, and routing stays unlabelled
+      // like every other dim underlay.
+      if (layer === 'physical') {
         const lbl = `${tp.localLag.name} ⇄ ${tp.peerLag.name}`;
         inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
-        inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(`${tp.localStack.name} ⇄ ${tp.peerStack.name} · via ${tp.jumpDev.name}⇄${tp.peerJump.name}`)}</text>`;
       }
       g.innerHTML = inner;
       g.setAttribute('data-flow-d', base.d);
