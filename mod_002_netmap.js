@@ -749,6 +749,19 @@ function prefixToMask(prefix) {
   return ((0xFFFFFFFF << (32 - prefix)) >>> 0);
 }
 function numToIp(n) { return [(n >>> 24) & 0xff, (n >>> 16) & 0xff, (n >>> 8) & 0xff, n & 0xff].join('.'); }
+// Strip leading zeros from each octet of a dotted IP / CIDR string.
+// "10.0.0.05" → "10.0.0.5", "010.0.0.005/24" → "10.0.0.5/24". Only rewrites
+// strings that already match the full IP shape so partial input ("10.0.0.")
+// and non-IP text pass through unchanged — keeps live typing usable.
+function normalizeIpInput(str) {
+  if (str == null) return str;
+  const s = String(str);
+  const m = s.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})(\/\d+)?$/);
+  if (!m) return s;
+  const oct = [m[1], m[2], m[3], m[4]].map((o) => String(parseInt(o, 10) || 0));
+  if (oct.some((o) => Number(o) > 255)) return s;
+  return oct.join('.') + (m[5] || '');
+}
 function cidrNormalize(str) {
   const p = parseCidr(str);
   if (!p) return null;
@@ -5009,7 +5022,7 @@ function bindL3Sections(s, dev, body) {
       //     gateway placeholder) refreshes; inputs keep typing focus instead
       const apply = (rerender) => {
         const f = el.dataset.ifF;
-        const val = el.value;
+        const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
         if (f === 'prefix') {
           iface.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -5038,6 +5051,10 @@ function bindL3Sections(s, dev, body) {
       } else {
         el.addEventListener('input', () => apply(false));
         el.addEventListener('change', () => {
+          if (el.dataset.ifF === 'ip') {
+            const fixed = normalizeIpInput(el.value);
+            if (fixed !== el.value) { el.value = fixed; apply(false); }
+          }
           if (el.dataset.ifF === 'name') openInspector(s);
         });
       }
@@ -5086,6 +5103,8 @@ function bindRoutesSection(s, host, body, refreshFn) {
           route.metric = (Number.isFinite(n) ? n : null);
         } else if (f === 'interfaceId') {
           route.interfaceId = el.value || null;
+        } else if (f === 'dst' || f === 'nextHop') {
+          route[f] = normalizeIpInput(el.value);
         } else {
           route[f] = el.value;
         }
@@ -5096,9 +5115,13 @@ function bindRoutesSection(s, host, body, refreshFn) {
       else {
         el.addEventListener('input', () => apply(false));
         el.addEventListener('change', () => {
-          // Editing the destination might flip the route between default
-          // and not-default — re-render so the +DEFAULT button toggles.
-          if (el.dataset.rtF === 'dst' || el.dataset.rtF === 'nextHop') openInspector(s);
+          if (el.dataset.rtF === 'dst' || el.dataset.rtF === 'nextHop') {
+            const fixed = normalizeIpInput(el.value);
+            if (fixed !== el.value) { el.value = fixed; apply(false); }
+            // Editing the destination might flip the route between default
+            // and not-default — re-render so the +DEFAULT button toggles.
+            openInspector(s);
+          }
         });
       }
     });
@@ -5149,7 +5172,7 @@ function bindStackVipSection(s, stack, body) {
       const isSelect = el.tagName === 'SELECT';
       const apply = (rerender) => {
         const f = el.dataset.vifF;
-        const val = el.value;
+        const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
         if (f === 'prefix') {
           vif.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -5170,7 +5193,13 @@ function bindStackVipSection(s, stack, body) {
       if (isSelect) el.addEventListener('change', () => apply(true));
       else {
         el.addEventListener('input', () => apply(false));
-        el.addEventListener('change', () => { if (el.dataset.vifF === 'name') openInspector(s); });
+        el.addEventListener('change', () => {
+          if (el.dataset.vifF === 'ip') {
+            const fixed = normalizeIpInput(el.value);
+            if (fixed !== el.value) { el.value = fixed; apply(false); }
+          }
+          if (el.dataset.vifF === 'name') openInspector(s);
+        });
       }
     });
     row.querySelector('[data-vif-rm]')?.addEventListener('click', () => {
@@ -5671,6 +5700,12 @@ function openInspector(s) {
     body.querySelectorAll('[data-f]').forEach((el) => {
       el.addEventListener('input', () => updateDeviceField(s, dev, el));
       el.addEventListener('change', () => {
+        // IP fields: write the normalized form back into the input so the
+        // user sees the correction (e.g. "10.0.0.05" → "10.0.0.5") on blur.
+        if (el.dataset.f === 'ip' && el.tagName === 'INPUT') {
+          const fixed = normalizeIpInput(el.value);
+          if (fixed !== el.value) el.value = fixed;
+        }
         updateDeviceField(s, dev, el);
         // Commit-only refresh for the port count: rebuilds the port table to
         // match the new size. We skip on 'input' to avoid clobbering focus
@@ -6249,7 +6284,7 @@ function updateDeviceField(s, dev, el) {
     dev.prefix = Math.max(0, Math.min(32, Number(el.value)));
     onL3DeviceFieldChanged(s, dev);
   } else {
-    dev[f] = el.value;
+    dev[f] = f === 'ip' ? normalizeIpInput(el.value) : el.value;
     if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
     if (f === 'name') {
       // Counterpart text on other devices' inspector rows references this name
