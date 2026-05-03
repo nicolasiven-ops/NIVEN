@@ -2327,15 +2327,17 @@ function ensureAutoLinkLayer(s) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-autolink');
   g.setAttribute('pointer-events', 'none');
-  // Two reaching stubs (one rooted on each device) plus a "completed" line we
-  // swap to once the stubs would meet — easier than animating them merging.
-  const fromStub = document.createElementNS(SVG_NS, 'line');
+  // Two reaching stubs (one rooted on each device). Paths instead of straight
+  // lines so they can wave/snake-search as they extend toward each other.
+  const fromStub = document.createElementNS(SVG_NS, 'path');
   fromStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-from');
+  fromStub.setAttribute('fill', 'none');
   fromStub.setAttribute('stroke-linecap', 'round');
   fromStub.setAttribute('stroke-width', '2');
   fromStub.setAttribute('opacity', '0');
-  const toStub = document.createElementNS(SVG_NS, 'line');
+  const toStub = document.createElementNS(SVG_NS, 'path');
   toStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-to');
+  toStub.setAttribute('fill', 'none');
   toStub.setAttribute('stroke-linecap', 'round');
   toStub.setAttribute('stroke-width', '2');
   toStub.setAttribute('opacity', '0');
@@ -2363,6 +2365,8 @@ function ensureAutoLinkLayer(s) {
     targetId: null,
     fromId: null,
     armed: false, // true once the stubs would meet — the only state that allows commit
+    t0: performance.now(), // animation epoch — drives the wave phase
+    raf: null,
   };
   return s.autoLink;
 }
@@ -2417,6 +2421,35 @@ function rectEdgeAlongDir(cx, cy, hw, hh, ux, uy) {
   return { x: cx + ux * t, y: cy + uy * t };
 }
 
+// Snake-path: cubic Bezier from (ax, ay) to (bx, by) with two control points
+// offset perpendicular to the spine by an animated sine wave. The wave eases
+// out at the root (which is anchored on a device) and at the tip (where the
+// other half is reaching toward us), so the centre wobbles freely while the
+// endpoints stay pinned. Bias t0 so the wave at root/tip starts at zero —
+// avoids a kink the moment the path is rebuilt.
+function snakePathD(ax, ay, bx, by, ux, uy, time, phase, amp) {
+  const dx = bx - ax, dy = by - ay;
+  const len = Math.hypot(dx, dy);
+  // Perpendicular unit vector (rotate spine 90°).
+  const px = -uy, py = ux;
+  // Two control points along the spine at 1/3 and 2/3.
+  const sample = (t) => {
+    // Envelope is 0 at endpoints, 1 in the middle — sin(πt) does that smoothly.
+    const env = Math.sin(t * Math.PI);
+    // Two superimposed waves give a more organic, less metronome motion.
+    const w  = Math.sin(t * Math.PI * 1.6 + time * 0.0035 + phase) * 0.7
+             + Math.sin(t * Math.PI * 2.6 - time * 0.0024 + phase * 1.7) * 0.3;
+    return amp * env * w;
+  };
+  const o1 = sample(0.33);
+  const o2 = sample(0.66);
+  const c1x = ax + dx * 0.33 + px * o1;
+  const c1y = ay + dy * 0.33 + py * o1;
+  const c2x = ax + dx * 0.66 + px * o2;
+  const c2y = ay + dy * 0.66 + py * o2;
+  return `M ${ax.toFixed(2)} ${ay.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${bx.toFixed(2)} ${by.toFixed(2)}`;
+}
+
 function drawAutoLinkReach(s, fromDev, toDev, dist) {
   const al = s.autoLink;
   if (!al) return;
@@ -2458,14 +2491,18 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
   const bTipX = b.x - ux * stubLen;
   const bTipY = b.y - uy * stubLen;
 
-  al.fromStub.setAttribute('x1', a.x.toFixed(2));
-  al.fromStub.setAttribute('y1', a.y.toFixed(2));
-  al.fromStub.setAttribute('x2', aTipX.toFixed(2));
-  al.fromStub.setAttribute('y2', aTipY.toFixed(2));
-  al.toStub.setAttribute('x1', b.x.toFixed(2));
-  al.toStub.setAttribute('y1', b.y.toFixed(2));
-  al.toStub.setAttribute('x2', bTipX.toFixed(2));
-  al.toStub.setAttribute('y2', bTipY.toFixed(2));
+  // Cache the geometry so the rAF tick can re-render the wavy path each frame
+  // without recomputing reach/edge intersections from scratch.
+  al.geom = {
+    ax: a.x, ay: a.y, aTipX, aTipY,
+    bx: b.x, by: b.y, bTipX, bTipY,
+    ux, uy,
+    stubLen,
+    armed,
+    reach,
+  };
+  applyAutoLinkFrame(al);
+
   al.fromTip.setAttribute('cx', aTipX.toFixed(2));
   al.fromTip.setAttribute('cy', aTipY.toFixed(2));
   al.toTip.setAttribute('cx', bTipX.toFixed(2));
@@ -2483,11 +2520,44 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
   // The pre-rendered fullLine layer is no longer needed — stubs do the whole
   // animation continuously now, no discrete swap.
   al.fullLine.setAttribute('opacity', '0');
+
+  // Make sure the wave loop is running — rAF stops itself once the layer is
+  // cleared, so kick it back on every time we get a fresh candidate.
+  if (!al.raf) {
+    const tick = () => {
+      const cur = s.autoLink;
+      if (!cur || !cur.targetId || !cur.geom) { if (cur) cur.raf = null; return; }
+      applyAutoLinkFrame(cur);
+      cur.raf = requestAnimationFrame(tick);
+    };
+    al.raf = requestAnimationFrame(tick);
+  }
+}
+
+// Re-render the snake paths from cached geometry. Called on every move (so
+// the spine keeps up with cursor) and on every rAF (so the wave keeps moving
+// even when the pointer is still).
+function applyAutoLinkFrame(al) {
+  const g = al.geom;
+  if (!g) return;
+  const time = performance.now() - al.t0;
+  // Wave amplitude — generous mid-reach so the stubs really hunt for each
+  // other, then tames down once armed so the joined line reads as a calm
+  // commitment rather than a wriggling worm.
+  const baseAmp = g.armed
+    ? 2.5 + 1.0 * Math.sin(time * 0.0025)         // breathy idle pulse
+    : 4.5 + 8.0 * g.reach * (1 - g.reach * 0.5);  // peak around mid-reach
+  // Two stubs run at different phases so they don't mirror each other.
+  const dFrom = snakePathD(g.ax, g.ay, g.aTipX, g.aTipY, g.ux, g.uy, time, 0,    baseAmp);
+  const dTo   = snakePathD(g.bx, g.by, g.bTipX, g.bTipY, -g.ux, -g.uy, time, 2.1, baseAmp);
+  al.fromStub.setAttribute('d', dFrom);
+  al.toStub.setAttribute('d', dTo);
 }
 
 function clearAutoLink(s) {
   const al = s.autoLink;
   if (!al) return;
+  if (al.raf) cancelAnimationFrame(al.raf);
   if (al.targetId) {
     s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
   }
