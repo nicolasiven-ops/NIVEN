@@ -7625,8 +7625,18 @@ function vfxGridPulse(s, wx, wy, color, hw, hh) {
   group.style.filter = 'drop-shadow(0 0 2px currentColor)';
 
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
-  const count = VFX_PULSE_COUNT_MIN
+  // Scale tendril count with element perimeter so a bigger box (an
+  // expanded stack envelope) gets proportionally more tendrils — the
+  // device baseline reads sparse on a wide stack otherwise. Capped by
+  // the smallest side's launch pool so we never ask for more unique
+  // start points than the perimeter can provide.
+  const basePerim = DEVICE_W + DEVICE_H;
+  const elemPerim = (halfW + halfH) * 2;
+  const scale = Math.max(1, elemPerim / basePerim);
+  const baseCount = VFX_PULSE_COUNT_MIN
     + Math.floor(Math.random() * (VFX_PULSE_COUNT_MAX - VFX_PULSE_COUNT_MIN + 1));
+  const minPoolPerSide = (Math.min(halfW, halfH) / GRID) * 2 + 1;
+  const count = Math.min(Math.round(baseCount * scale), minPoolPerSide * 4);
   // Distribute first-segment directions evenly across the four sides so the
   // tendrils never bunch up at a single corner. For count=12 that's 3 per
   // side; for 13 it's 4-3-3-3; etc. Order is then shuffled so successive
