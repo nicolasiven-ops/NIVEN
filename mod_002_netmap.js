@@ -3537,6 +3537,49 @@ function hubFarLegs(s, jumpId) {
   return hubLocalLegs(s, peer.id);
 }
 
+// All stacks reachable from this stack via either a direct member-to-member
+// link OR a JUMP hub-tunnel (same-zone hub-leg + the coupled peer's hub-legs).
+// Used by the LAG counterpart picker so a LAG can pair with another stack's
+// LAG even when the only path between them runs through a JUMP couple.
+function linkedStacksFor(s, stack) {
+  const out = new Map();
+  if (!stack) return out;
+  const myMembers = new Set(stack.members || []);
+  s.links.forEach((l) => {
+    const fromStack = findStack(s, l.from);
+    const toStack = findStack(s, l.to);
+    if (fromStack && toStack) {
+      let other = null;
+      if (fromStack.id === stack.id && toStack.id !== stack.id) other = toStack;
+      else if (toStack.id === stack.id && fromStack.id !== stack.id) other = fromStack;
+      if (other && !out.has(other.id)) out.set(other.id, other);
+      return;
+    }
+    // Hub-tunnel: a hub-leg from one of MY members to a JUMP. The JUMP's
+    // remaining hub-legs (this zone) and its couple peer's hub-legs (the
+    // other zone) reach stacks that are equally valid LAG-pair candidates.
+    let myMember = null;
+    let jumpDev = null;
+    if (myMembers.has(l.from)) {
+      myMember = l.from;
+      jumpDev = s.devices.find((d) => d.id === l.to);
+    } else if (myMembers.has(l.to)) {
+      myMember = l.to;
+      jumpDev = s.devices.find((d) => d.id === l.from);
+    }
+    if (!myMember || !jumpDev || !isReference(jumpDev)) return;
+    const collect = (jId) => hubLocalLegs(s, jId).forEach(({ device }) => {
+      const otherStk = findStack(s, device.id);
+      if (!otherStk || otherStk.id === stack.id) return;
+      if (!out.has(otherStk.id)) out.set(otherStk.id, otherStk);
+    });
+    collect(jumpDev.id);
+    const peer = couplePeer(s, jumpDev);
+    if (peer) collect(peer.id);
+  });
+  return out;
+}
+
 function jumpToReference(s, dev) {
   if (!isReference(dev)) return;
   // Couple takes priority: if a peer Jump exists, jump to its zone and
@@ -6307,18 +6350,10 @@ function openInspector(s) {
     // FROM-LAG options: every LAG on this stack.
     const fromOpts = (stack.lags || []).map((l) => ({ id: l.id, label: l.name }));
 
-    // TO-LAG options: every LAG on every stack that this stack has a link to
-    // (any member-to-member edge counts as a candidate pairing).
-    const linkedStacks = new Map();
-    s.links.forEach((l) => {
-      const fromStack = findStack(s, l.from);
-      const toStack = findStack(s, l.to);
-      if (!fromStack || !toStack) return;
-      let other = null;
-      if (fromStack.id === stack.id && toStack.id !== stack.id) other = toStack;
-      else if (toStack.id === stack.id && fromStack.id !== stack.id) other = fromStack;
-      if (other && !linkedStacks.has(other.id)) linkedStacks.set(other.id, other);
-    });
+    // TO-LAG options: every LAG on every stack reachable from this one —
+    // either a direct member-to-member edge or a JUMP hub-tunnel (same-zone
+    // hub-leg or coupled-peer hub-leg).
+    const linkedStacks = linkedStacksFor(s, stack);
     const toOpts = [...linkedStacks.values()].flatMap((st) =>
       (st.lags || []).map((l) => ({ stackId: st.id, stackName: st.name, lagId: l.id, lagName: l.name }))
     );
@@ -7060,18 +7095,9 @@ function openLagModal(s, stackId, lagId) {
   const cp = editing ? lagCounterpart(s, stack.id, editing) : null;
   const cpTxt = cp ? (cp.lag ? `${cp.stack.name} · ${cp.lag.name}` : `${cp.stack.name} · ${cp.count}p`) : '— not connected —';
 
-  // Counterpart options: every LAG on every other stack that has at least
-  // one member-to-member link with this stack.
-  const linkedStacks = new Map();
-  s.links.forEach((l) => {
-    const fromStack = findStack(s, l.from);
-    const toStack = findStack(s, l.to);
-    if (!fromStack || !toStack) return;
-    let other = null;
-    if (fromStack.id === stack.id && toStack.id !== stack.id) other = toStack;
-    else if (toStack.id === stack.id && fromStack.id !== stack.id) other = fromStack;
-    if (other && !linkedStacks.has(other.id)) linkedStacks.set(other.id, other);
-  });
+  // Counterpart options: every LAG on every other stack reachable via direct
+  // edges or JUMP hub-tunnels (same-zone hub-leg / coupled-peer hub-leg).
+  const linkedStacks = linkedStacksFor(s, stack);
   const cpOptions = [...linkedStacks.values()].flatMap((st) =>
     (st.lags || []).map((l) => ({ stackId: st.id, stackName: st.name, lagId: l.id, lagName: l.name }))
   );
