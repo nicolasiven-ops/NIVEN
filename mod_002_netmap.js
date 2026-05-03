@@ -431,19 +431,19 @@ function renderLegend(s) {
       if (idx >= 0) s.view.vlanFilter.splice(idx, 1);
       else s.view.vlanFilter.push(v);
       s._vlanHover = null;
-      render(s);
+      applyVlanSoloVisuals(s);
       schedSave(s);
     });
     row.addEventListener('mouseenter', () => {
       const v = String(row.dataset.vsolo);
       if (s._vlanHover === v) return;
       s._vlanHover = v;
-      render(s);
+      applyVlanSoloVisuals(s);
     });
     row.addEventListener('mouseleave', () => {
       if (s._vlanHover == null) return;
       s._vlanHover = null;
-      render(s);
+      applyVlanSoloVisuals(s);
     });
   });
   const clearBtn = body.querySelector('[data-vclear]');
@@ -451,7 +451,7 @@ function renderLegend(s) {
     clearBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       s.view.vlanFilter = [];
-      render(s);
+      applyVlanSoloVisuals(s);
       schedSave(s);
     });
   }
@@ -4789,6 +4789,40 @@ function vlanSoloStateForDevice(s, dev) {
   }
   return 'unmatched-isolated';
 }
+// Soft update path for VLAN solo toggles / hovers / clears. Re-evaluates the
+// state for every existing canvas element and updates data-vlan-solo in place,
+// so CSS transitions can interpolate the dim/amber fade instead of snapping
+// from a wiped DOM tree. Links/legend still rebuild — they don't carry
+// transitions on the visual properties that change.
+function applyVlanSoloVisuals(s) {
+  s._vlanSoloCtx = null;
+  if (s.gDevices) {
+    s.devices.forEach((dev) => {
+      const g = s.gDevices.querySelector(`[data-device-id="${dev.id}"]`);
+      if (!g) return;
+      if (isReference(dev)) { g.removeAttribute('data-vlan-solo'); return; }
+      const st = vlanSoloStateForDevice(s, dev);
+      if (st) g.setAttribute('data-vlan-solo', st);
+      else g.removeAttribute('data-vlan-solo');
+    });
+    s.stacks.forEach((stack) => {
+      const collapsed = s.gDevices.querySelector(`.m002-stack-collapsed[data-stack-id="${stack.id}"]`);
+      const envelope = s.gStacksBg?.querySelector(`.m002-stack-envelope[data-stack-id="${stack.id}"]`);
+      const st = vlanSoloStateForStack(s, stack);
+      [collapsed, envelope].forEach((el) => {
+        if (!el) return;
+        if (st) el.setAttribute('data-vlan-solo', st);
+        else el.removeAttribute('data-vlan-solo');
+      });
+    });
+  }
+  // Links carry VLAN stripes / count badges that depend on the filter — bare
+  // attribute swaps can't transition those, so a redraw is fine.
+  s.links.forEach((l) => redrawLink(s, l));
+  redrawAllLagPairs(s);
+  renderLegend(s);
+}
+
 function vlanSoloStateForStack(s, stack) {
   const ctx = vlanSoloCtx(s);
   if (!ctx) return null;
@@ -10425,7 +10459,16 @@ const MOD002_CSS = `
 /* VLAN solo dim — two diagnostic tiers:
    - unmatched (isolated OR adjacent): no VLAN configured here → fade to grey
    - configured-only: VLAN at device level but no port carries it → amber
-     ("declared but not wired") */
+     ("declared but not wired"), softly pulsing so it stands out */
+@keyframes m002-vsolo-amber-pulse {
+  0%, 100% { filter: drop-shadow(0 0 3px #ffbf3c) drop-shadow(0 0 9px #ffbf3c); }
+  50%      { filter: drop-shadow(0 0 8px #ffbf3c) drop-shadow(0 0 26px #ffbf3c); }
+}
+/* Smooth in/out for solo dimming. Targets every canvas element that can carry
+   a data-vlan-solo attribute so a toggle/clear interpolates instead of snapping. */
+.m002-host[data-active-layer="vlan"] .m002-device,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed,
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope{transition:opacity .35s ease-out, filter .35s ease-out;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
@@ -10440,10 +10483,7 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ffbf3c) drop-shadow(0 0 12px #ffbf3c) !important;}
-.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ffbf3c) drop-shadow(0 0 18px #ffbf3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{animation:m002-vsolo-amber-pulse 1.8s ease-in-out infinite;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ffbf3c;}
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"] .m002-stack-env-bg{stroke:#ffbf3c;}
