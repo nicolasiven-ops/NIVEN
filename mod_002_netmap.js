@@ -1376,7 +1376,17 @@ function stopFlowTicker(s) {
   s.flowFrame = null;
 }
 
-const DEFAULT_PREFS = { autoRecenter: false, freeMove: false, snapOnDrop: true };
+// Visual styles registry. Each entry is a swappable preset for the canvas
+// look. The active style is applied via host.dataset.gridStyle so CSS rules
+// scoped to [data-grid-style="..."] decide what grid layers are visible.
+// Add new styles here — UI in renderPrefsInspector iterates over this list.
+const STYLES = [
+  { id: 'futuristic', label: 'FUTURISTIC GRID', desc: 'Micro-dots + crosshair major grid (default).' },
+  { id: 'minimal',    label: 'MINIMAL',         desc: 'No grid — clean black canvas, nodes only.' },
+];
+const DEFAULT_STYLE = 'futuristic';
+
+const DEFAULT_PREFS = { style: DEFAULT_STYLE, autoRecenter: false, freeMove: false, snapOnDrop: true };
 const PREFS_KEY = 'm002.preferences';
 function loadPrefs() {
   try {
@@ -1388,6 +1398,15 @@ function loadPrefs() {
 }
 function savePrefs(prefs) {
   try { localStorage.setItem(PREFS_KEY, JSON.stringify(prefs)); } catch {}
+}
+
+// Applies a visual style to the live host. Stamps the data-grid-style attr
+// the CSS keys off, and persists the choice. Safe to call before the host
+// exists (e.g. during early prefs hydration) — it just becomes a no-op then.
+function applyStyle(s, styleId) {
+  const valid = STYLES.find((x) => x.id === styleId) ? styleId : DEFAULT_STYLE;
+  if (s.prefs) { s.prefs.style = valid; savePrefs(s.prefs); }
+  if (s.host) s.host.dataset.gridStyle = valid;
 }
 
 function createState(stage, ctx) {
@@ -1443,6 +1462,7 @@ function buildDOM(s) {
   ensureStyles();
   const host = document.createElement('div');
   host.className = 'm002-host';
+  host.dataset.gridStyle = (s.prefs && s.prefs.style) || DEFAULT_STYLE;
   host.innerHTML = `
     <aside class="m002-leftpanel">
       <section class="m002-panel-section">
@@ -5768,29 +5788,46 @@ function renderAggInspector(s, body, idEl) {
 function renderPrefsInspector(s, body, idEl) {
   idEl.textContent = '// SETTINGS';
   const prefs = s.prefs || (s.prefs = loadPrefs());
+  const activeStyle = STYLES.find((x) => x.id === prefs.style) ? prefs.style : DEFAULT_STYLE;
   body.innerHTML = `
     <p class="m002-link-hint">Preferences are stored locally and apply across all maps.</p>
-    <label class="m002-prefs-row">
-      <span>
-        <span class="m002-prefs-label">Auto-recenter on selection</span>
-        <span class="m002-prefs-sublabel">Pan the camera so the clicked element ends up in the middle of the canvas.</span>
-      </span>
-      <input type="checkbox" data-pref="autoRecenter" ${prefs.autoRecenter ? 'checked' : ''}/>
-    </label>
-    <label class="m002-prefs-row">
-      <span>
-        <span class="m002-prefs-label">Free movement (no grid)</span>
-        <span class="m002-prefs-sublabel">Drag elements smoothly without the grid pulling them. Hold Alt to invert per-gesture.</span>
-      </span>
-      <input type="checkbox" data-pref="freeMove" ${prefs.freeMove ? 'checked' : ''}/>
-    </label>
-    <label class="m002-prefs-row">
-      <span>
-        <span class="m002-prefs-label">Snap to grid on drop</span>
-        <span class="m002-prefs-sublabel">When you release, the element settles onto the nearest grid cell. Alt at release skips it.</span>
-      </span>
-      <input type="checkbox" data-pref="snapOnDrop" ${prefs.snapOnDrop ? 'checked' : ''}/>
-    </label>
+
+    <div class="m002-prefs-section">
+      <div class="m002-prefs-section-head">// VISUAL STYLE</div>
+      <div class="m002-style-picker">
+        ${STYLES.map((style) => `
+          <button type="button" class="m002-style-pill ${style.id === activeStyle ? 'active' : ''}" data-style="${style.id}" title="${escSvg(style.desc)}">
+            <span class="m002-style-pill-label">${escSvg(style.label)}</span>
+            <span class="m002-style-pill-desc">${escSvg(style.desc)}</span>
+          </button>
+        `).join('')}
+      </div>
+    </div>
+
+    <div class="m002-prefs-section">
+      <div class="m002-prefs-section-head">// BEHAVIOR</div>
+      <label class="m002-prefs-row">
+        <span>
+          <span class="m002-prefs-label">Auto-recenter on selection</span>
+          <span class="m002-prefs-sublabel">Pan the camera so the clicked element ends up in the middle of the canvas.</span>
+        </span>
+        <input type="checkbox" data-pref="autoRecenter" ${prefs.autoRecenter ? 'checked' : ''}/>
+      </label>
+      <label class="m002-prefs-row">
+        <span>
+          <span class="m002-prefs-label">Free movement (no grid)</span>
+          <span class="m002-prefs-sublabel">Drag elements smoothly without the grid pulling them. Hold Alt to invert per-gesture.</span>
+        </span>
+        <input type="checkbox" data-pref="freeMove" ${prefs.freeMove ? 'checked' : ''}/>
+      </label>
+      <label class="m002-prefs-row">
+        <span>
+          <span class="m002-prefs-label">Snap to grid on drop</span>
+          <span class="m002-prefs-sublabel">When you release, the element settles onto the nearest grid cell. Alt at release skips it.</span>
+        </span>
+        <input type="checkbox" data-pref="snapOnDrop" ${prefs.snapOnDrop ? 'checked' : ''}/>
+      </label>
+    </div>
   `;
   body.querySelectorAll('[data-pref]').forEach((el) => {
     el.addEventListener('change', () => {
@@ -5798,6 +5835,12 @@ function renderPrefsInspector(s, body, idEl) {
       const val = el.type === 'checkbox' ? el.checked : el.value;
       s.prefs[key] = val;
       savePrefs(s.prefs);
+    });
+  });
+  body.querySelectorAll('[data-style]').forEach((el) => {
+    el.addEventListener('click', () => {
+      applyStyle(s, el.dataset.style);
+      body.querySelectorAll('[data-style]').forEach((b) => b.classList.toggle('active', b.dataset.style === el.dataset.style));
     });
   });
 }
@@ -9906,6 +9949,20 @@ const MOD002_CSS = `
 .m002-prefs-label{font-family:'Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;letter-spacing:1.4px;}
 .m002-prefs-sublabel{font-family:'Rajdhani',sans-serif;font-size:11px;color:#7a7f8e;}
 .m002-prefs-row input[type="checkbox"]{flex:0 0 auto;width:16px;height:16px;accent-color:#ff003c;cursor:pointer;}
+.m002-prefs-section{display:flex;flex-direction:column;gap:6px;margin-bottom:14px;}
+.m002-prefs-section-head{font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:2px;color:#7a7f8e;padding:0 2px 4px;border-bottom:1px dashed #1a1a22;}
+.m002-style-picker{display:flex;flex-direction:column;gap:6px;}
+.m002-style-pill{display:flex;flex-direction:column;align-items:flex-start;gap:2px;padding:8px 10px;background:#06060a;border:1px solid #1a1a22;color:#7a7f8e;cursor:pointer;text-align:left;font-family:inherit;transition:border-color 0.15s,color 0.15s,background 0.15s;}
+.m002-style-pill:hover{border-color:#2a2a36;color:#e8e8ee;}
+.m002-style-pill.active{border-color:#ff003c;background:rgba(255,0,60,0.06);color:#e8e8ee;box-shadow:0 0 0 1px rgba(255,0,60,0.25),inset 0 0 12px rgba(255,0,60,0.08);}
+.m002-style-pill-label{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.6px;color:inherit;}
+.m002-style-pill.active .m002-style-pill-label{color:#ff003c;text-shadow:0 0 6px rgba(255,0,60,0.5);}
+.m002-style-pill-desc{font-family:'Rajdhani',sans-serif;font-size:11px;color:#7a7f8e;}
+/* === Visual styles — keyed off host[data-grid-style] === */
+/* Futuristic (default): grid layers visible (no override needed) */
+/* Minimal: hide both grid layers entirely */
+.m002-host[data-grid-style="minimal"] .m002-grid-bg,
+.m002-host[data-grid-style="minimal"] .m002-grid-bg2{display:none;}
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
 .m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
