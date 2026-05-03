@@ -4216,7 +4216,10 @@ function orthPath(a, b, off = 0) {
     const sx = Math.sign(dx) || 1;
     const ex1 = a.x + sx * halfW;
     const ex2 = b.x - sx * halfW;
-    const mid = Math.round(((ex1 + ex2) / 2) / GRID) * GRID + off;
+    // Geometric midpoint, no grid snap. With grid-aligned endpoints the kink
+    // lands on a half-grid line; snapping it to a full grid step would shift
+    // the bend by ±GRID/2 and make the line look asymmetric ("imprecise").
+    const mid = (ex1 + ex2) / 2 + off;
     const ay = a.y + off, by = b.y + off;
     return {
       d: `M ${ex1} ${ay} L ${mid} ${ay} L ${mid} ${by} L ${ex2} ${by}`,
@@ -4228,7 +4231,7 @@ function orthPath(a, b, off = 0) {
   const sy = Math.sign(dy) || 1;
   const ey1 = a.y + sy * halfH;
   const ey2 = b.y - sy * halfH;
-  const mid = Math.round(((ey1 + ey2) / 2) / GRID) * GRID + off;
+  const mid = (ey1 + ey2) / 2 + off;
   const ax = a.x + off, bx = b.x + off;
   return {
     d: `M ${ax} ${ey1} L ${ax} ${mid} L ${bx} ${mid} L ${bx} ${ey2}`,
