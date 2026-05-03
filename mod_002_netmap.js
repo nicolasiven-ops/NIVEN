@@ -3884,53 +3884,6 @@ function computeStackPairAggregations(s, absorbed) {
     if (!groups.has(key)) groups.set(key, { aSide, bSide, linkIds: [] });
     groups.get(key).linkIds.push(l.id);
   });
-  // Hub-tunnel pass: a JUMP (with optional couple peer) carries hub-legs
-  // from multiple stacks. Treat each pair of those stacks as if they shared a
-  // direct multi-link aggregate so the LAG-pair UI surfaces through the hub.
-  // Cross-zone hub-legs (via couple) are skipped — only legs visible in the
-  // active zone aggregate, otherwise a click would open an inspector for an
-  // off-screen stack.
-  const seenJumps = new Set();
-  s.devices.forEach((j) => {
-    if (!isReference(j)) return;
-    if (!zoneOk(j)) return;
-    if (seenJumps.has(j.id)) return;
-    seenJumps.add(j.id);
-    const peer = couplePeer(s, j);
-    if (peer) seenJumps.add(peer.id);
-    const stackLegs = new Map(); // stackId → [{ link, portN, devId }]
-    const collect = (jumpId) => {
-      hubLocalLegs(s, jumpId).forEach(({ device, portN, link }) => {
-        if (!zoneOk(device)) return;
-        const stk = findStack(s, device.id);
-        if (!stk) return;
-        if (!isStackCollapsed(s, stk)) return;
-        if (!zoneOk(stk)) return;
-        if (!stackLegs.has(stk.id)) stackLegs.set(stk.id, []);
-        stackLegs.get(stk.id).push({ link, portN, devId: device.id });
-      });
-    };
-    collect(j.id);
-    if (peer) collect(peer.id);
-    if (stackLegs.size < 2) return;
-    const stackIds = Array.from(stackLegs.keys());
-    for (let i = 0; i < stackIds.length; i++) {
-      for (let k = i + 1; k < stackIds.length; k++) {
-        const ids = [stackIds[i], stackIds[k]].sort();
-        const aSide = ids[0], bSide = ids[1];
-        const key = aSide + '::' + bSide;
-        if (pairedStackPairs.has(key)) continue;
-        // A direct stack-pair aggregation already speaks for this pair —
-        // don't blend the hub-tunnel legs into it (the inspector logic
-        // assumes either-direct-or-tunnel rows, not a mix).
-        if (groups.has(key)) continue;
-        const grp = { aSide, bSide, linkIds: [], hubTunnel: true, jumpId: j.id };
-        stackLegs.get(stackIds[i]).forEach((leg) => grp.linkIds.push(leg.link.id));
-        stackLegs.get(stackIds[k]).forEach((leg) => grp.linkIds.push(leg.link.id));
-        groups.set(key, grp);
-      }
-    }
-  });
   return groups;
 }
 
@@ -3939,13 +3892,7 @@ function ensureEdgeSlots(s) {
   const absorbed = computeAbsorbedLinkIds(s);
   const aggregations = computeStackPairAggregations(s, absorbed);
   const aggregatedLinkIds = new Set();
-  aggregations.forEach((agg) => {
-    // Hub-tunnel aggregations don't replace their constituent hub-leg lines —
-    // those keep drawing through the JUMP. Only direct stack-to-stack pairs
-    // roll their links up into a single dim summary line.
-    if (agg.hubTunnel) return;
-    agg.linkIds.forEach((id) => aggregatedLinkIds.add(id));
-  });
+  aggregations.forEach((agg) => agg.linkIds.forEach((id) => aggregatedLinkIds.add(id)));
   const groups = new Map();
   // Regular links — skip those absorbed into a LAG-pair line or rolled up
   // into a stack-pair aggregation (those are not drawn as their own edge).
@@ -5526,32 +5473,18 @@ function renderAggInspector(s, body, idEl) {
 
   // Resolve which port lives on which side per constituent link. The link's
   // .from might align with either aSide or bSide depending on creation order.
-  // Hub-tunnel aggregations carry hub-leg links — each link only touches ONE
-  // of the two stack sides; the other end is a JUMP (neither aSide nor
-  // bSide). For those, fill the matching side and leave the other empty.
   const linkRows = agg.linkIds.map((lid) => {
     const l = s.links.find((x) => x.id === lid);
     if (!l) return null;
     const fromStack = findStack(s, l.from);
-    const toStack = findStack(s, l.to);
-    const fromOnA = (fromStack && fromStack.id === agg.aSide) || l.from === agg.aSide;
-    const toOnA   = (toStack   && toStack.id   === agg.aSide) || l.to   === agg.aSide;
-    const fromOnB = (fromStack && fromStack.id === agg.bSide) || l.from === agg.bSide;
-    const toOnB   = (toStack   && toStack.id   === agg.bSide) || l.to   === agg.bSide;
-    let aDev = null, aPort = '', bDev = null, bPort = '';
-    if (fromOnA) { aDev = s.devices.find((d) => d.id === l.from); aPort = l.fromPort; }
-    else if (toOnA) { aDev = s.devices.find((d) => d.id === l.to); aPort = l.toPort; }
-    if (fromOnB) { bDev = s.devices.find((d) => d.id === l.from); bPort = l.fromPort; }
-    else if (toOnB) { bDev = s.devices.find((d) => d.id === l.to); bPort = l.toPort; }
-    // Tunnel-side (the JUMP) — only present for hub-tunnel rows where one
-    // side stays empty. The inspector renders it as a "via JUMP-Name" hint.
-    let viaJump = null;
-    if (!aDev || !bDev) {
-      const otherId = (aDev && aDev.id === l.from) || (bDev && bDev.id === l.from) ? l.to : l.from;
-      const other = s.devices.find((d) => d.id === otherId);
-      if (other && isReference(other)) viaJump = other;
-    }
-    return { l, aDev, bDev, aPort, bPort, viaJump };
+    const fromMatchesA = (fromStack && fromStack.id === agg.aSide) || l.from === agg.aSide;
+    const aDevId = fromMatchesA ? l.from : l.to;
+    const bDevId = fromMatchesA ? l.to : l.from;
+    const aPort = fromMatchesA ? l.fromPort : l.toPort;
+    const bPort = fromMatchesA ? l.toPort : l.fromPort;
+    const aDev = s.devices.find((d) => d.id === aDevId);
+    const bDev = s.devices.find((d) => d.id === bDevId);
+    return { l, aDev, bDev, aPort, bPort };
   }).filter(Boolean);
 
   idEl.textContent = `// LAG · ×${agg.linkIds.length}`;
@@ -5584,30 +5517,21 @@ function renderAggInspector(s, body, idEl) {
     </div>`;
   };
 
-  const sideLabel = (dev, port, viaJump) => {
-    if (dev) return (dev.name || '?') + (port ? ` · p${port}` : '');
-    if (viaJump) return `(via ${viaJump.name || 'JUMP'})`;
-    return '?';
-  };
   const linksTable = `
     <div class="m002-l3-block">
       <div class="m002-l3-head"><span>LINKS (×${linkRows.length})</span></div>
       <div class="m002-agg-links">
         ${linkRows.map((r) => `<div class="m002-agg-link-row">
-          <span class="m002-agg-port">${escSvg(sideLabel(r.aDev, r.aPort, r.viaJump))}</span>
+          <span class="m002-agg-port">${escSvg((r.aDev?.name || '?') + (r.aPort ? ` · p${r.aPort}` : ''))}</span>
           <span class="m002-agg-arrow">⇄</span>
-          <span class="m002-agg-port">${escSvg(sideLabel(r.bDev, r.bPort, r.viaJump))}</span>
+          <span class="m002-agg-port">${escSvg((r.bDev?.name || '?') + (r.bPort ? ` · p${r.bPort}` : ''))}</span>
         </div>`).join('')}
       </div>
     </div>
   `;
 
-  const tunnelHint = agg.hubTunnel
-    ? `<p class="m002-link-hint">Hub-tunnel via <b>${escSvg((s.devices.find((d) => d.id === agg.jumpId)?.name) || 'JUMP')}</b>: hub-leg ports on each side bond into the LAG-pair. Hub-leg lines stay drawn through the JUMP after creation.</p>`
-    : '';
   body.innerHTML = `
     <p class="m002-link-hint">×${agg.linkIds.length} link${agg.linkIds.length === 1 ? '' : 's'} between <b>${escSvg(sideName(agg.aSide, stkA))}</b> and <b>${escSvg(sideName(agg.bSide, stkB))}</b>. Configure a LAG to bundle them.</p>
-    ${tunnelHint}
     ${sideBlock('SIDE A', agg.aSide, stkA)}
     ${sideBlock('SIDE B', agg.bSide, stkB)}
     ${linksTable}
@@ -5845,6 +5769,54 @@ function renderReferenceInspector(s, dev, body) {
     <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
   `;
 
+  // Cross-zone LAG-pair section — when a couple is in place, surface every
+  // stack-pair that shares the JUMP hub (one stack on each side) so the user
+  // can bond their hub-leg ports into a counterparted LAG without leaving
+  // the JUMP inspector. Stacks are the only entities with LAG state in this
+  // model; single-switch hub-leg pairings already work via the port-modal
+  // COUNTERPART tunnel.
+  let crossZoneSection = '';
+  if (peer) {
+    const groupByStack = (jumpId) => {
+      const out = new Map();
+      hubLocalLegs(s, jumpId).forEach((leg) => {
+        if (!leg.portN) return;
+        const stk = findStack(s, leg.device.id);
+        if (!stk) return;
+        if (!out.has(stk.id)) out.set(stk.id, []);
+        out.get(stk.id).push(leg);
+      });
+      return out;
+    };
+    const localStacks = groupByStack(dev.id);
+    const farStacks = groupByStack(peer.id);
+    const pairRows = [];
+    localStacks.forEach((aLegs, aId) => {
+      farStacks.forEach((bLegs, bId) => {
+        const aStk = s.stacks.find((st) => st.id === aId);
+        const bStk = s.stacks.find((st) => st.id === bId);
+        if (!aStk || !bStk) return;
+        const paired = (aStk.lags || []).some((lag) =>
+          lag.counterpart?.stackId === bStk.id &&
+          (bStk.lags || []).some((pl) => pl.id === lag.counterpart.lagId && pl.counterpart?.stackId === aStk.id)
+        );
+        pairRows.push(`<div class="m002-couple-card" data-cz-a="${escAttr(aId)}" data-cz-b="${escAttr(bId)}">
+          <div class="m002-couple-line"><span>${escSvg(aStk.name)}</span><span class="m002-couple-arrow">⇄</span><span>${escSvg(bStk.name)}</span></div>
+          <div class="m002-couple-zone">${aLegs.length} + ${bLegs.length} hub-leg ports</div>
+          <button type="button" class="m002-action" data-cz-pair ${paired ? 'disabled' : ''}>${paired ? 'PAIRED' : 'LAG-PAIR'}</button>
+        </div>`);
+      });
+    });
+    if (pairRows.length) {
+      crossZoneSection = `
+        <div class="m002-field">
+          <span>LAG-PAIR ÜBER COUPLE</span>
+        </div>
+        <p class="m002-link-hint">Stacks mit Hub-Legs auf beiden Seiten — ein Klick bondet alle Ports der Seite zu einer LAG und counterparts sie über das JUMP-Paar.</p>
+        ${pairRows.join('')}
+      `;
+    }
+  }
   body.innerHTML = `
     <label class="m002-field"><span>NAME</span><input data-f="name" value="${escAttr(dev.name)}"/></label>
     <label class="m002-field"><span>TYPE</span>
@@ -5855,6 +5827,7 @@ function renderReferenceInspector(s, dev, body) {
       <span>HUB LEGS</span>
       <div class="m002-field-static">${hubLegs} link${hubLegs === 1 ? '' : 's'} in dieser Zone</div>
     </div>
+    ${crossZoneSection}
     <label class="m002-field"><span>NOTES</span><textarea data-f="notes" rows="3">${escAttr(dev.notes || '')}</textarea></label>
     <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
   `;
@@ -5912,6 +5885,42 @@ function renderReferenceInspector(s, dev, body) {
     render(s);
     schedSave(s);
     openInspector(s);
+  });
+  body.querySelectorAll('[data-cz-pair]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const row = btn.closest('[data-cz-a]');
+      if (!row) return;
+      const aId = row.getAttribute('data-cz-a');
+      const bId = row.getAttribute('data-cz-b');
+      const peerNow = couplePeer(s, dev);
+      const aStk = s.stacks.find((st) => st.id === aId);
+      const bStk = s.stacks.find((st) => st.id === bId);
+      if (!aStk || !bStk || !peerNow) return;
+      const aLegs = hubLocalLegs(s, dev.id).filter((leg) => findStack(s, leg.device.id)?.id === aStk.id && leg.portN);
+      const bLegs = hubLocalLegs(s, peerNow.id).filter((leg) => findStack(s, leg.device.id)?.id === bStk.id && leg.portN);
+      if (!aLegs.length || !bLegs.length) { toast(s, 'Keine Hub-Leg-Ports zum Bonden'); return; }
+      snapshot(s);
+      const lagA = resolveOrCreateLag(aStk, '__new', `Po${(aStk.lags || []).length + 1}`);
+      const lagB = resolveOrCreateLag(bStk, '__new', `Po${(bStk.lags || []).length + 1}`);
+      aLegs.forEach((leg) => {
+        const portN = Number(leg.portN);
+        if (!lagA.ports.some((p) => p.deviceId === leg.device.id && Number(p.portN) === portN)) {
+          lagA.ports.push({ deviceId: leg.device.id, portN });
+        }
+      });
+      bLegs.forEach((leg) => {
+        const portN = Number(leg.portN);
+        if (!lagB.ports.some((p) => p.deviceId === leg.device.id && Number(p.portN) === portN)) {
+          lagB.ports.push({ deviceId: leg.device.id, portN });
+        }
+      });
+      lagA.counterpart = { stackId: bStk.id, lagId: lagB.id };
+      lagB.counterpart = { stackId: aStk.id, lagId: lagA.id };
+      toast(s, `LAG-pair via ${dev.name}: ${lagA.name} ⇄ ${lagB.name}`);
+      render(s);
+      schedSave(s);
+      openInspector(s);
+    });
   });
   body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
 }
@@ -8478,13 +8487,7 @@ function render(s) {
   // per-link / non-paired-LAG-bundle visuals between collapsed stacks.
   const aggregations = computeStackPairAggregations(s, absorbed);
   const aggregatedLinkIds = new Set();
-  aggregations.forEach((agg) => {
-    // Hub-tunnel aggregations don't replace their constituent hub-leg lines —
-    // those keep drawing through the JUMP. Only direct stack-to-stack pairs
-    // roll their links up into a single dim summary line.
-    if (agg.hubTunnel) return;
-    agg.linkIds.forEach((id) => aggregatedLinkIds.add(id));
-  });
+  aggregations.forEach((agg) => agg.linkIds.forEach((id) => aggregatedLinkIds.add(id)));
   s._bundleByLink = null;
   s.links.forEach((l) => {
     if (absorbed.has(l.id)) return;
