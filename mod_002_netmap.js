@@ -4878,6 +4878,10 @@ function redrawAllLagPairs(s) {
       seen.add(key);
       if (!isStackCollapsed(s, stA) || !isStackCollapsed(s, peer.stack)) return;
       if (!inZone(stA) || !inZone(peer.stack)) return;
+      // Cross-zone LAG-pair (bonded via a JUMP couple) — the line would jump
+      // out into the peer zone's coords. The LAG visualization belongs on the
+      // bundled hub-leg link in this zone instead.
+      if ((stA.zone || null) !== (peer.stack.zone || null)) return;
       drawLagLink(s, { stackA: stA, lagA: lag, stackB: peer.stack, lagB: peer.lag });
     });
   });
@@ -4903,6 +4907,9 @@ function updateLagPairsFor(s, deviceId) {
       seen.add(key);
       s.gLinks.querySelector(`[data-laglink-id="${stA.id}|${lag.id}"]`)?.remove();
       s.gLinks.querySelector(`[data-laglink-id="${peer.stack.id}|${peer.lag.id}"]`)?.remove();
+      // Cross-zone LAG-pair (couple-bonded) — see redrawAllLagPairs for the
+      // same gate. The bundled hub-leg link carries the LAG visual in zone.
+      if ((stA.zone || null) !== (peer.stack.zone || null)) return;
       if (isStackCollapsed(s, stA) && isStackCollapsed(s, peer.stack)) {
         drawLagLink(s, { stackA: stA, lagA: lag, stackB: peer.stack, lagB: peer.lag });
       }
@@ -8470,9 +8477,13 @@ function render(s) {
 
   // Explicit LAG-pair links — drawn after regular links so they sit on top.
   // Skip when either side is expanded, so the user sees the underlying member
-  // port-links instead of a synthetic stack-to-stack double-line.
+  // port-links instead of a synthetic stack-to-stack double-line. Cross-zone
+  // LAG-pairs (bonded via a JUMP couple) likewise skip the stack-to-stack
+  // line — the LAG visualization terminates at the in-zone JUMP via the
+  // bundled hub-leg link, not at the peer stack's coords in the other zone.
   lagPairs.forEach((p) => {
     if (!inZone(p.stackA) || !inZone(p.stackB)) return;
+    if ((p.stackA.zone || null) !== (p.stackB.zone || null)) return;
     if (!isStackCollapsed(s, p.stackA) || !isStackCollapsed(s, p.stackB)) return;
     drawLagLink(s, p);
   });
