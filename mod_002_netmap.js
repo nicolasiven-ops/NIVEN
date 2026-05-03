@@ -7842,13 +7842,20 @@ function vfxAnimateView(s, doRender, anchor) {
     if (key.includes('data-device-id')) {
       const oldF = oldEntry.frozen.split('|');
       const newF = newEntry.frozen.split('|');
+      const oldH = oldF.slice(2).join('|');
+      const newH = newF.slice(2).join('|');
+      let diffSnippet = 'same';
+      if (oldH !== newH) {
+        let i = 0;
+        while (i < oldH.length && i < newH.length && oldH[i] === newH[i]) i++;
+        const start = Math.max(0, i - 30);
+        diffSnippet = `@${i}: …${oldH.slice(start, i + 80)} ⟹ …${newH.slice(start, i + 80)}`;
+      }
       __dbg.push({
-        key,
+        id: key.split('|').pop(),
         opacity: oldF[0] === newF[0] ? 'same' : `${oldF[0]} → ${newF[0]}`,
         filter:  oldF[1] === newF[1] ? 'same' : `${oldF[1]} → ${newF[1]}`,
-        innerHTML: oldF[2] === newF[2] ? 'same' : 'CHANGED',
-        innerHTMLOld: oldF[2] === newF[2] ? null : oldF[2],
-        innerHTMLNew: oldF[2] === newF[2] ? null : newF[2],
+        innerHTMLDiff: diffSnippet,
       });
     }
 
