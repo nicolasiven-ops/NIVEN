@@ -2239,6 +2239,218 @@ function cancelRopeDrag(s) {
 }
 
 // =============================================================================
+// Auto-link suggestion — while a device is being dragged, the nearest unlinked
+// device within a sweet-spot range gets a tentative cable drawn from the
+// dragged device to it. Drop within the range commits the link; drop outside
+// just relocates as usual. Stack-merge (closer than 70 units, same type) takes
+// priority since the visuals would otherwise step on each other.
+// =============================================================================
+const AUTOLINK_MIN_DIST = 95;       // a hair above the stack-merge threshold so
+                                    // they don't both fight for the same hover
+const AUTOLINK_MAX_DIST = 200;
+const AUTOLINK_SAG_FACTOR = 0.18;
+const AUTOLINK_SAG_MAX    = 70;
+const AUTOLINK_SAG_BOB_DAMP  = 0.78;  // wobble decay per frame
+const AUTOLINK_SAG_BOB_GAIN  = 0.10;  // velocity → bob magnitude
+
+function alreadyLinkedDevices(s, deviceId) {
+  const set = new Set();
+  s.links?.forEach((l) => {
+    if (l.from === deviceId) set.add(l.to);
+    else if (l.to === deviceId) set.add(l.from);
+  });
+  return set;
+}
+
+function findAutoLinkCandidate(s, dev) {
+  // Skip when dragged inside a stack — links between stack members are
+  // stack-internal and have their own UI.
+  if (findStack(s, dev.id)) return null;
+  // JUMP couplings happen via the inspector, not the canvas. Skip both ends.
+  if (isReference(dev)) return null;
+  const linked = alreadyLinkedDevices(s, dev.id);
+  let best = null;
+  let bestDist = Infinity;
+  for (const d of s.devices) {
+    if (d.id === dev.id) continue;
+    if (linked.has(d.id)) continue;
+    if (isReference(d)) continue;
+    // Stack members surface the stack as the visual end, not the member —
+    // skip them; the user can still link to a stack via the regular L tool.
+    if (findStack(s, d.id)) continue;
+    const dx = dev.x - d.x, dy = dev.y - d.y;
+    const dist = Math.hypot(dx, dy);
+    if (dist < AUTOLINK_MIN_DIST || dist > AUTOLINK_MAX_DIST) continue;
+    if (dist < bestDist) { bestDist = dist; best = d; }
+  }
+  return best ? { dev: best, dist: bestDist } : null;
+}
+
+function ensureAutoLinkLayer(s) {
+  if (s.autoLink?.g && s.autoLink.g.isConnected) return s.autoLink;
+  if (!s.gOverlay) return null;
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-autolink');
+  g.setAttribute('pointer-events', 'none');
+  const halo = document.createElementNS(SVG_NS, 'path');
+  halo.setAttribute('class', 'm002-autolink-halo');
+  halo.setAttribute('fill', 'none');
+  halo.setAttribute('stroke-width', '7');
+  halo.setAttribute('stroke-linecap', 'round');
+  halo.setAttribute('opacity', '0');
+  const line = document.createElementNS(SVG_NS, 'path');
+  line.setAttribute('class', 'm002-autolink-line');
+  line.setAttribute('fill', 'none');
+  line.setAttribute('stroke-width', '1.8');
+  line.setAttribute('stroke-linecap', 'round');
+  line.setAttribute('stroke-dasharray', '5 4');
+  line.setAttribute('opacity', '0');
+  g.appendChild(halo);
+  g.appendChild(line);
+  s.gOverlay.appendChild(g);
+  s.autoLink = {
+    g, halo, line,
+    targetId: null,
+    fromId: null,
+    sagBob: 0,         // current bob offset (added on top of static sag)
+    sagBobV: 0,        // bob velocity
+    lastFromX: null, lastFromY: null,
+    raf: null,
+  };
+  return s.autoLink;
+}
+
+function autoLinkPathD(ox, oy, tx, ty, sagBob) {
+  const dx = tx - ox, dy = ty - oy;
+  const dist = Math.hypot(dx, dy);
+  const sag = Math.min(dist * AUTOLINK_SAG_FACTOR, AUTOLINK_SAG_MAX) + sagBob;
+  const c1x = ox + dx * 0.33;
+  const c1y = oy + dy * 0.33 + sag;
+  const c2x = ox + dx * 0.66;
+  const c2y = oy + dy * 0.66 + sag;
+  return `M ${ox.toFixed(2)} ${oy.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${tx.toFixed(2)} ${ty.toFixed(2)}`;
+}
+
+function setAutoLinkTarget(s, fromDev, candidate) {
+  const al = ensureAutoLinkLayer(s);
+  if (!al) return;
+  const desiredTarget = candidate?.dev?.id || null;
+  // Highlight swap if target changed.
+  if (al.targetId !== desiredTarget) {
+    if (al.targetId) {
+      s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
+    }
+    al.targetId = desiredTarget;
+    if (al.targetId) {
+      s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.add('m002-autolink-target');
+    }
+  }
+  al.fromId = fromDev.id;
+
+  if (!candidate) {
+    // No target — fade out and stop the bob loop.
+    al.halo.setAttribute('opacity', '0');
+    al.line.setAttribute('opacity', '0');
+    if (al.raf) { cancelAnimationFrame(al.raf); al.raf = null; }
+    al.lastFromX = null; al.lastFromY = null;
+    return;
+  }
+
+  // Tint cable in the dragged device's accent so it reads as "his thread".
+  const t = typeOf(fromDev.type);
+  const accent = t?.accent || '#ff003c';
+  al.halo.setAttribute('stroke', accent);
+  al.line.setAttribute('stroke', accent);
+  // Opacity scales linearly with how deep into the band we are — fades in/out.
+  const dist = candidate.dist;
+  const span = AUTOLINK_MAX_DIST - AUTOLINK_MIN_DIST;
+  const t01 = 1 - Math.min(1, Math.max(0, (dist - AUTOLINK_MIN_DIST) / span));
+  al.line.setAttribute('opacity', String(0.45 + 0.45 * t01));
+  al.halo.setAttribute('opacity', String(0.10 + 0.18 * t01));
+
+  // Update bob from velocity (delta of from-position since last frame). The
+  // cable swings down when the source decelerates, then floats back to rest.
+  const fx = fromDev.x, fy = fromDev.y;
+  if (al.lastFromX != null) {
+    const vy = fy - al.lastFromY;
+    al.sagBobV += vy * AUTOLINK_SAG_BOB_GAIN;
+  }
+  al.lastFromX = fx; al.lastFromY = fy;
+
+  drawAutoLinkPath(s, fromDev, candidate.dev);
+
+  // Run a settle loop so the bob returns to zero even after the user stops moving.
+  if (!al.raf) {
+    const tick = () => {
+      const a = s.autoLink;
+      if (!a || !a.targetId) { if (a) a.raf = null; return; }
+      // Damped oscillator — bob decays and recenters on 0.
+      a.sagBobV *= AUTOLINK_SAG_BOB_DAMP;
+      a.sagBob = a.sagBob * AUTOLINK_SAG_BOB_DAMP + a.sagBobV;
+      const fdev = s.devices.find((dd) => dd.id === a.fromId);
+      const tdev = s.devices.find((dd) => dd.id === a.targetId);
+      if (fdev && tdev) drawAutoLinkPath(s, fdev, tdev);
+      if (Math.abs(a.sagBob) < 0.1 && Math.abs(a.sagBobV) < 0.1) { a.raf = null; return; }
+      a.raf = requestAnimationFrame(tick);
+    };
+    al.raf = requestAnimationFrame(tick);
+  }
+}
+
+function drawAutoLinkPath(s, fromDev, toDev) {
+  const al = s.autoLink;
+  if (!al) return;
+  const a = effectivePos(s, fromDev.id);
+  const b = effectivePos(s, toDev.id);
+  if (!a || !b) return;
+  const d = autoLinkPathD(a.x, a.y, b.x, b.y, al.sagBob);
+  al.halo.setAttribute('d', d);
+  al.line.setAttribute('d', d);
+}
+
+function clearAutoLink(s) {
+  const al = s.autoLink;
+  if (!al) return;
+  if (al.targetId) {
+    s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
+  }
+  if (al.raf) cancelAnimationFrame(al.raf);
+  al.g?.remove();
+  s.autoLink = null;
+}
+
+function commitAutoLink(s, fromId, toId) {
+  // Same validity gate as handleLinkClick / commitRopeLink — auto-link is just
+  // another path to the same data mutation, the constraints stay identical.
+  const devA = s.devices.find((d) => d.id === fromId);
+  const devB = s.devices.find((d) => d.id === toId);
+  if (!devA || !devB) return false;
+  const stA = findStack(s, fromId);
+  const stB = findStack(s, toId);
+  if (stA && stA === stB) return false;
+  if (isReference(devA) && isReference(devB)) return false;
+  if ((isReference(devA) || isReference(devB)) && devA.zone !== devB.zone) return false;
+  // Defensive: if a link already exists between this pair, skip — auto-link
+  // is a one-shot suggestion, not a way to stack duplicates.
+  const dup = s.links?.some((l) => (l.from === fromId && l.to === toId) || (l.from === toId && l.to === fromId));
+  if (dup) return false;
+  snapshot(s);
+  const link = { id: rid(), from: fromId, to: toId, fromPort: '', toPort: '' };
+  s.links.push(link);
+  invalidateEdgeSlots(s);
+  const newKey = visualEndpointKey(s, link.from, link.to);
+  s.links.forEach((l) => {
+    if (l.id === link.id) return;
+    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+  });
+  drawLink(s, link);
+  if (s.activeLayer === 'routing') drawL3Paths(s);
+  updateStatus(s);
+  schedSave(s);
+  return true;
+}
+
+// =============================================================================
 // Board interaction — pan / zoom / drag
 // =============================================================================
 function bindBoard(s) {
@@ -2527,6 +2739,17 @@ function bindBoard(s) {
       // will overrule anyway. Clear on every tick while a target is locked
       // (the snap preview was re-scheduled above this block).
       if (s.dragStackTarget) clearSnapPreview(s);
+
+      // Auto-link suggestion. Only kicks in once the gesture has clearly
+      // become a drag (recenterPending flipped off) and never competes with a
+      // pending stack-merge — close enough to merge, the user likely wants the
+      // stack, not a wire. Shift suppresses it as an escape hatch.
+      if (!e.shiftKey && !s.dragStackTarget && s.drag.recenterPending === false) {
+        const cand = findAutoLinkCandidate(s, dev);
+        setAutoLinkTarget(s, dev, cand);
+      } else if (s.autoLink) {
+        setAutoLinkTarget(s, dev, null);
+      }
     } else if (s.drag.kind === 'stack') {
       if (s.drag.recenterPending && s.drag.startX != null) {
         if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
@@ -2610,6 +2833,7 @@ function bindBoard(s) {
       s.drag = null;
       s.host.classList.remove('m002-dragging');
       cancelDragLift(s); // jumping unmounts the zone — no settle animation possible
+      clearAutoLink(s);
       if (dev) jumpToReference(s, dev);
       return;
     }
@@ -2632,6 +2856,7 @@ function bindBoard(s) {
       s.dragStackTargetCompat = null;
       s.drag = null;
       cancelDragLift(s); // merging re-renders the source — kill the wobble before its element vanishes
+      clearAutoLink(s);
       if (!compat) {
         toast(s, 'Stack only allowed between same device types');
         return;
@@ -2654,6 +2879,23 @@ function bindBoard(s) {
       tel?.classList.remove('m002-drag-stack-target', 'm002-merge-ok', 'm002-merge-bad');
       s.dragStackTarget = null;
       s.dragStackTargetCompat = null;
+    }
+    // Auto-link commit. The on-screen suggestion turns into a real link the
+    // moment the user releases — same threshold band that drew the cable.
+    if (s.drag?.kind === 'device' && s.autoLink?.targetId) {
+      const fromId = s.drag.id;
+      const toId = s.autoLink.targetId;
+      const ok = commitAutoLink(s, fromId, toId);
+      clearAutoLink(s);
+      if (ok) {
+        const dev = s.devices.find((d) => d.id === toId);
+        if (dev) {
+          const t = typeOf(dev.type);
+          if (t?.accent) vfxGridPulse(s, dev.x, dev.y, t.accent);
+        }
+      }
+    } else if (s.autoLink) {
+      clearAutoLink(s);
     }
     if (s.drag) {
       // True background click (mousedown→mouseup with no real pan) → deselect.
@@ -8763,6 +9005,10 @@ const MOD002_CSS = `
 .m002-device.m002-rope-target .m002-dev-bg{stroke-width:2.4;stroke-dasharray:none;filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px var(--accent));}
 .m002-host.m002-roping .m002-svg{cursor:crosshair;}
 .m002-host.m002-roping .m002-device{cursor:crosshair;}
+.m002-autolink{pointer-events:none;}
+.m002-autolink .m002-autolink-line{filter:drop-shadow(0 0 2px currentColor);transition:opacity 80ms ease-out;}
+.m002-autolink .m002-autolink-halo{transition:opacity 120ms ease-out;}
+.m002-device.m002-autolink-target .m002-dev-bg{stroke-width:2;stroke-dasharray:none;filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 12px var(--accent));}
 .m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
 .m002-dev-ip{font-size:10px;font-family:'Share Tech Mono',monospace;fill:#7a7f8e;}
