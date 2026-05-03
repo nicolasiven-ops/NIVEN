@@ -2751,7 +2751,7 @@ function bindBoard(s) {
         // recenterPending stays false: JUMPs hop on click (no auto-recenter
         // semantics), but the flag still needs to read `false` after a real
         // drag so snap-on-drop in onUp accepts it as a "real drag".
-        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, recenterPending: false, moved: false };
+        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, recenterPending: false, moved: false, zoneShiftStart: { x: dev.x, y: dev.y } };
         s.host.classList.add('m002-dragging');
         e.preventDefault();
         return;
@@ -3104,6 +3104,18 @@ function bindBoard(s) {
       if (realDrag && s.prefs?.snapOnDrop && !altAtRelease
           && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
         snapDropToGrid(s, s.drag.kind, s.drag.id);
+      }
+      // JUMP zone-shift on drop: slide every zone-mate by the JUMP's net
+      // travel so the layout around the portal stays intact. Applied at
+      // release (not during drag) so the JUMP visibly moves on screen
+      // instead of looking cursor-anchored while the world pans under it.
+      if (realDrag && s.drag.kind === 'device' && s.drag.zoneShiftStart) {
+        const dev = s.devices.find((d) => d.id === s.drag.id);
+        if (dev && isReference(dev)) {
+          const ddx = dev.x - s.drag.zoneShiftStart.x;
+          const ddy = dev.y - s.drag.zoneShiftStart.y;
+          shiftJumpZoneMates(s, dev, ddx, ddy);
+        }
       }
       // Grid energy pulse on real drops (palette spawn handled separately
       // in spawnDeviceAt). Skip stacks-being-merged-into-other-stacks —
@@ -4063,27 +4075,21 @@ function refreshMultiSelectClasses(s) {
 function collectGroupTargets(s, primary) {
   const k = selKey(primary.kind, primary.id);
   const inGroup = s.multiSelected.has(k) || (s.selected && s.selected.kind === primary.kind && s.selected.id === primary.id && s.multiSelected.size > 0);
-  if (inGroup && s.multiSelected.size > 0) {
-    const out = [primary];
-    s.multiSelected.forEach((mk) => {
-      if (mk === k) return;
-      const [kind, id] = mk.split(':');
-      out.push({ kind, id });
-    });
-    return out;
-  }
-  // JUMP solo-drag pulls its whole zone along — moving a portal in isolation
-  // otherwise tears the zone's layout apart.
-  if (primary.kind === 'device') {
-    const dev = s.devices.find((d) => d.id === primary.id);
-    if (dev && isReference(dev)) return collectZoneMates(s, dev);
-  }
-  return [primary];
+  if (!inGroup || s.multiSelected.size === 0) return [primary];
+  const out = [primary];
+  s.multiSelected.forEach((mk) => {
+    if (mk === k) return;
+    const [kind, id] = mk.split(':');
+    out.push({ kind, id });
+  });
+  return out;
 }
 
-function collectZoneMates(s, jump) {
+// All zone-mates of a JUMP, excluding the JUMP itself. Stack members are
+// represented by their owning stack so a stack moves as one entity.
+function collectJumpZoneMates(s, jump) {
   const zone = jump.zone || null;
-  const out = [{ kind: 'device', id: jump.id }];
+  const out = [];
   const stackedMembers = new Set();
   s.stacks.forEach((st) => {
     if ((st.zone || null) !== zone) return;
@@ -4097,6 +4103,27 @@ function collectZoneMates(s, jump) {
     out.push({ kind: 'device', id: d.id });
   });
   return out;
+}
+
+// Shift every zone-mate of `jump` by (ddx, ddy) and refresh their visuals.
+// Used at JUMP-drag drop to slide the zone over to the JUMP's new home so the
+// internal layout stays intact — running this *during* the drag would make the
+// JUMP appear cursor-anchored (everything in screen view moves uniformly).
+function shiftJumpZoneMates(s, jump, ddx, ddy) {
+  if (!ddx && !ddy) return;
+  const mates = collectJumpZoneMates(s, jump);
+  if (!mates.length) return;
+  mates.forEach((it) => moveItemBy(s, it, ddx, ddy));
+  mates.forEach((it) => {
+    if (it.kind === 'stack') {
+      const st = findStackById(s, it.id);
+      if (st) st.members.forEach((mid) => updateLagPairsFor(s, mid));
+    } else {
+      updateLagPairsFor(s, it.id);
+    }
+  });
+  if (s.activeLayer === 'routing') drawL3Paths(s);
+  refreshAggregates(s);
 }
 
 function moveItemBy(s, target, ddx, ddy) {
