@@ -7113,28 +7113,47 @@ function vfxGridPulse(s, wx, wy, color) {
   const count = VFX_PULSE_COUNT_MIN
     + Math.floor(Math.random() * (VFX_PULSE_COUNT_MAX - VFX_PULSE_COUNT_MIN + 1));
   // Distribute first-segment directions evenly across the four sides so the
-  // tendrils never bunch up at a single corner. For count=8 that's 2 per
-  // side; for 7 it's 2-2-2-1; for 6 it's 2-2-1-1; etc. The order is then
-  // shuffled so successive tendrils don't always fire on the same side.
-  const launchDirs = [];
-  for (let i = 0; i < count; i++) launchDirs.push(DIRS[i % 4]);
-  for (let i = launchDirs.length - 1; i > 0; i--) {
+  // tendrils never bunch up at a single corner. For count=12 that's 3 per
+  // side; for 13 it's 4-3-3-3; etc. Order is then shuffled so successive
+  // tendrils don't always fire from the same edge. Each entry stores the
+  // direction index — needed below to draw a unique offset from the
+  // matching per-side pool.
+  const launchDirIdx = [];
+  for (let i = 0; i < count; i++) launchDirIdx.push(i % 4);
+  for (let i = launchDirIdx.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [launchDirs[i], launchDirs[j]] = [launchDirs[j], launchDirs[i]];
+    [launchDirIdx[i], launchDirIdx[j]] = [launchDirIdx[j], launchDirIdx[i]];
   }
 
-  // Launch from a random grid intersection on the perimeter edge that
+  // Pre-shuffled per-side pools of grid-aligned offsets. Each tendril on a
+  // given side pops a fresh offset, so no two tendrils ever start from the
+  // same grid intersection (which would have made them visually merge).
+  // Right/left edges vary in y; top/bottom edges vary in x.
+  function buildPool(maxCells) {
+    const arr = [];
+    for (let i = -maxCells; i <= maxCells; i++) arr.push(i * GRID);
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+  const pools = [
+    buildPool(halfH / GRID), // 0: right edge — y offsets
+    buildPool(halfH / GRID), // 1: left edge  — y offsets
+    buildPool(halfW / GRID), // 2: down edge  — x offsets
+    buildPool(halfW / GRID), // 3: up edge    — x offsets
+  ];
+
+  // Launch from a unique grid intersection on the perimeter edge that
   // matches the chosen first direction. The first segment then heads
   // straight out away from the element.
-  function launchPoint([dx, dy]) {
-    if (dx !== 0) {
-      const cells = halfH / GRID;
-      const j = (Math.floor(Math.random() * (2 * cells + 1)) - cells) * GRID;
-      return [cx + dx * halfW, cy + j];
-    }
-    const cells = halfW / GRID;
-    const j = (Math.floor(Math.random() * (2 * cells + 1)) - cells) * GRID;
-    return [cx + j, cy + dy * halfH];
+  function launchPoint(dirIdx) {
+    const [dx, dy] = DIRS[dirIdx];
+    const pool = pools[dirIdx];
+    const offset = pool.length > 0 ? pool.pop() : 0;
+    if (dx !== 0) return [cx + dx * halfW, cy + offset];
+    return [cx + offset, cy + dy * halfH];
   }
 
   // After a turn, the new direction is "away from the element" iff its
@@ -7146,9 +7165,9 @@ function vfxGridPulse(s, wx, wy, color) {
 
   const tendrils = [];
   for (let i = 0; i < count; i++) {
-    const firstDir = launchDirs[i];
-    let [dx, dy] = firstDir;
-    let [x, y] = launchPoint(firstDir);
+    const dirIdx = launchDirIdx[i];
+    let [dx, dy] = DIRS[dirIdx];
+    let [x, y] = launchPoint(dirIdx);
     const pts = [[x, y]];
     const segs = VFX_PULSE_SEGS_MIN
       + Math.floor(Math.random() * (VFX_PULSE_SEGS_MAX - VFX_PULSE_SEGS_MIN + 1));
