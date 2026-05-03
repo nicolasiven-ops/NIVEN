@@ -2269,6 +2269,7 @@ function findAutoLinkCandidate(s, dev) {
   // JUMP couplings happen via the inspector, not the canvas. Skip both ends.
   if (isReference(dev)) return null;
   const linked = alreadyLinkedDevices(s, dev.id);
+  const devZone = dev.zone || null;
   let best = null;
   let bestDist = Infinity;
   for (const d of s.devices) {
@@ -2278,6 +2279,9 @@ function findAutoLinkCandidate(s, dev) {
     // Stack members surface the stack as the visual end, not the member —
     // skip them; the user can still link to a stack via the regular L tool.
     if (findStack(s, d.id)) continue;
+    // Cross-zone candidates aren't visible in the current view — never
+    // suggest a wire to a hidden node.
+    if ((d.zone || null) !== devZone) continue;
     const dx = dev.x - d.x, dy = dev.y - d.y;
     const dist = Math.hypot(dx, dy);
     if (dist < AUTOLINK_MIN_DIST || dist > AUTOLINK_MAX_DIST) continue;
@@ -2698,17 +2702,23 @@ function bindBoard(s) {
       // is too ambiguous for the prototype) or when shift is held.
       if (!e.shiftKey && !findStack(s, dev.id) && !isReference(dev)) {
         const STACK_MERGE_THRESH = 70;
+        // Cross-zone entities are invisible in the current view — never let
+        // a coincidental overlap create an interaction with a hidden node.
+        const devZone = dev.zone || null;
+        const sameZone = (other) => (other?.zone || null) === devZone;
         let target = null;
         for (const d of s.devices) {
           if (d.id === dev.id) continue;
           if (findStack(s, d.id)) continue;
           if (isReference(d)) continue;
+          if (!sameZone(d)) continue;
           if (Math.hypot(dev.x - d.x, dev.y - d.y) < STACK_MERGE_THRESH) { target = { kind: 'device', id: d.id }; break; }
         }
         if (!target) {
           for (const st2 of s.stacks) {
             if (!isStackCollapsed(s, st2)) continue;
             if (st2.members.includes(dev.id)) continue;
+            if (!sameZone(st2)) continue;
             if (Math.hypot(dev.x - st2.x, dev.y - st2.y) < STACK_MERGE_THRESH) { target = { kind: 'stack', id: st2.id }; break; }
           }
         }
