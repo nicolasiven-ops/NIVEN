@@ -6407,7 +6407,10 @@ function openInspector(s) {
       <button type="button" class="m002-insp-del" data-del>DELETE LINK</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
-      el.addEventListener('input', () => updateLinkField(s, link, el));
+      // <select> only ever commits via 'change' — listening to 'input' too made
+      // updateLinkField fire twice per pick, which under some browsers raced
+      // with the inspector re-render and silently dropped the new selection
+      // when the picked port was already wired by another link.
       el.addEventListener('change', () => updateLinkField(s, link, el));
     });
     body.querySelector('[data-del]')?.addEventListener('click', () => deleteSelected(s));
@@ -6926,10 +6929,12 @@ function updateLinkField(s, link, el) {
   redrawLink(s, link);
   schedSave(s);
   // Live-refresh: the VLAN picker and the link summary depend on the new port
-  // selection, so rebuild the inspector immediately. All [data-f] elements in
-  // the link inspector are <select>, so this only fires on commit (no focus
-  // loss mid-typing).
-  openInspector(s);
+  // selection, so rebuild the inspector. Deferred via rAF so the browser's
+  // native <select> event cycle finishes BEFORE we replace the DOM — under
+  // synchronous re-render the option click could land on a now-detached node
+  // and the picked port (especially one already in use by another link) was
+  // silently dropped.
+  requestAnimationFrame(() => openInspector(s));
 }
 
 function deleteSelected(s) {
