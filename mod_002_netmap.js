@@ -6317,8 +6317,30 @@ function openInspector(s) {
       }
       const f = side === 'FROM' ? 'fromPort' : 'toPort';
       const cur = side === 'FROM' ? link.fromPort : link.toPort;
+      // Mirror the port-modal counterpart picker: ports already wired by *another*
+      // link slide to the bottom and read as "— in use" in muted grey. They stay
+      // selectable (the user may legitimately want to repurpose one), but the
+      // greyed-out tail makes the free ports unambiguous at a glance.
+      const isUsedByOther = (portN) => s.links.some((l) =>
+        l !== link && (
+          (l.from === dev.id && Number(l.fromPort) === portN) ||
+          (l.to   === dev.id && Number(l.toPort)   === portN)
+        )
+      );
+      const opts = (dev?.ports || []).map((p) => ({ p, occupied: isUsedByOther(p.n) }));
+      // Stable sort: free first, occupied last; original order preserved within each group.
+      opts.sort((a, b) => Number(a.occupied) - Number(b.occupied));
+      const optsHTML = opts.map(({ p, occupied }) => {
+        const selected = String(cur) === String(p.n);
+        // Currently-selected port reads as "occupied" (its own link wires it),
+        // but must remain selectable and visually highlighted — only mark *other*
+        // occupied ports as muted.
+        const dim = occupied && !selected;
+        const label = `${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}${dim ? ' — in use' : ''}`;
+        return `<option value="${p.n}"${selected ? ' selected' : ''}${dim ? ' class="is-occupied"' : ''}>${label}</option>`;
+      }).join('');
       return `<label class="m002-field"><span>${side} PORT</span>
-        <select data-f="${f}"><option value="">—</option>${(dev?.ports || []).map((p) => `<option value="${p.n}" ${String(cur) === String(p.n) ? 'selected' : ''}>${p.n}${p.name ? ' · ' + escAttr(p.name) : ''}</option>`).join('')}</select>
+        <select class="m002-link-port-select" data-f="${f}"><option value="">—</option>${optsHTML}</select>
       </label>`;
     };
     const isHubLeg = aRef || bRef;
@@ -10147,7 +10169,8 @@ const MOD002_CSS = `
 .m002-vlan-input:focus{border-color:#ff003c;}
 .m002-vlan-add-btn{background:transparent;border:1px solid #ff003c;color:#ff003c;padding:5px 10px;font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;}
 .m002-vlan-add-btn:hover{background:rgba(255,0,60,0.1);}
-.m002-pmodal-cp option.is-occupied{color:#5a5f6e;}
+.m002-pmodal-cp option.is-occupied,
+.m002-link-port-select option.is-occupied{color:#5a5f6e;}
 /* Collapsible details block in the device inspector — wraps HOSTNAME, IP and
    NOTES so the inspector stays tidy by default but the metadata is one click
    away. Mirrors the .m002-ref-fallback summary treatment. */
