@@ -4809,6 +4809,9 @@ function drawLink(s, link) {
     if (tp) {
       g.classList.add('m002-link-bundle');
       if (layer === 'vlan') {
+        // Mirror drawLagLink's VLAN treatment: when soloed VLAN stripes are
+        // present they REPLACE the LAG double-line entirely (no middle gray
+        // line underneath). Otherwise the double-line carries a count badge.
         const vlans = (tp.localLag.vlans || []).map(String).filter((v) =>
           (tp.peerLag.vlans || []).map(String).includes(v)
         );
@@ -4824,16 +4827,11 @@ function drawLink(s, link) {
             inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
           });
-        } else if (vlans.length === 0) {
-          inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
-          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#5a5f6e" text-anchor="middle">0x</text>`;
         } else {
-          inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
-          if (!isFiltered) {
-            inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
-          }
+          inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane });
+          const countColor = vlans.length === 0 ? '#5a5f6e' : '#9aa0a8';
+          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="${countColor}" text-anchor="middle">${vlans.length}x</text>`;
         }
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
       } else if (layer === 'routing') {
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
