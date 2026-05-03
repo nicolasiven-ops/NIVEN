@@ -3679,6 +3679,12 @@ function drawDevice(s, dev) {
   // layer so switches without an IP visibly recede.
   g.setAttribute('data-l3', isL3Device(dev) ? 'true' : 'false');
   if (isDefaultGateway(s, dev)) g.setAttribute('data-gw', 'true');
+  // VLAN solo state — drives the dim / yellow / orange CSS on the VLAN layer.
+  // References don't carry their own VLANs, so they're exempt.
+  if (!isReference(dev)) {
+    const vsState = vlanSoloStateForDevice(s, dev);
+    if (vsState) g.setAttribute('data-vlan-solo', vsState);
+  }
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
 
@@ -4402,6 +4408,8 @@ function drawCollapsedStack(s, stack) {
   });
   g.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   if (stackIsDefaultGateway(s, stack)) g.setAttribute('data-gw', 'true');
+  const vsState = vlanSoloStateForStack(s, stack);
+  if (vsState) g.setAttribute('data-vlan-solo', vsState);
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
@@ -4712,6 +4720,78 @@ function effectiveVlanSolo(s) {
   const hover = s._vlanHover != null ? String(s._vlanHover) : null;
   if (hover && !filter.includes(hover)) return [...filter, hover];
   return filter;
+}
+
+// Per-element VLAN-solo state for canvas dimming. Four states, tuned to flag
+// "should this element have the VLAN?" at a glance:
+//   'matched'             VLAN configured AND ≥1 port carries it       → normal
+//   'configured-only'     VLAN configured, no port carries it          → orange
+//   'unmatched-adjacent'  no VLAN, but a linked neighbor has it        → yellow
+//   'unmatched-isolated'  no VLAN, no neighbor has it either           → grey
+//   null                  no filter active                              → normal
+function vlanSoloCtx(s) {
+  const filter = effectiveVlanSolo(s);
+  if (!filter.length) return null;
+  // Reuse cached context within a single render cycle. render() clears the
+  // cache so the next paint sees fresh state; redraw* paths recompute.
+  if (s._vlanSoloCtx && s._vlanSoloCtx.filterKey === filter.join('|')) return s._vlanSoloCtx;
+  const carrier = new Map();    // device.id → has any soloed VLAN at dev level
+  const neighbors = new Map();  // device.id → Set of linked device ids
+  s.devices.forEach((d) => {
+    carrier.set(d.id, (d.vlans || []).some((v) => filter.includes(String(v))));
+    neighbors.set(d.id, new Set());
+  });
+  (s.links || []).forEach((l) => {
+    if (!l.from || !l.to || l.from === l.to) return;
+    neighbors.get(l.from)?.add(l.to);
+    neighbors.get(l.to)?.add(l.from);
+  });
+  const ctx = { filter, filterKey: filter.join('|'), carrier, neighbors };
+  s._vlanSoloCtx = ctx;
+  return ctx;
+}
+function vlanSoloStateForDevice(s, dev) {
+  const ctx = vlanSoloCtx(s);
+  if (!ctx) return null;
+  const { filter, carrier, neighbors } = ctx;
+  const devHas = carrier.get(dev.id);
+  if (devHas) {
+    const portCarries = (dev.ports || []).some((p) =>
+      (p.vlans || []).some((v) => filter.includes(String(v)))
+    );
+    return portCarries ? 'matched' : 'configured-only';
+  }
+  const adj = neighbors.get(dev.id);
+  if (adj) {
+    for (const nid of adj) if (carrier.get(nid)) return 'unmatched-adjacent';
+  }
+  return 'unmatched-isolated';
+}
+function vlanSoloStateForStack(s, stack) {
+  const ctx = vlanSoloCtx(s);
+  if (!ctx) return null;
+  const { filter, carrier, neighbors } = ctx;
+  const memberIds = new Set(stack.members || []);
+  let stackHas = false;
+  let portCarries = false;
+  (stack.members || []).forEach((id) => {
+    if (carrier.get(id)) stackHas = true;
+    const m = s.devices.find((d) => d.id === id);
+    if (!m) return;
+    if ((m.ports || []).some((p) => (p.vlans || []).some((v) => filter.includes(String(v))))) {
+      portCarries = true;
+    }
+  });
+  if (stackHas) return portCarries ? 'matched' : 'configured-only';
+  for (const id of memberIds) {
+    const adj = neighbors.get(id);
+    if (!adj) continue;
+    for (const nid of adj) {
+      if (memberIds.has(nid)) continue;
+      if (carrier.get(nid)) return 'unmatched-adjacent';
+    }
+  }
+  return 'unmatched-isolated';
 }
 
 function portLabel(dev, portN) {
@@ -8547,6 +8627,9 @@ function render(s) {
   renderSubnetLegend(s);
   invalidateEdgeSlots(s);
   s._dgwWinners = null;
+  // VLAN-solo per-render context cache — drop so neighbor + carrier maps
+  // rebuild against the current device/link snapshot.
+  s._vlanSoloCtx = null;
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
@@ -10252,6 +10335,28 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
+/* VLAN solo dim — three diagnostic tiers:
+   - isolated unmatched: no VLAN here, no neighbor with it → fade to grey
+   - adjacent unmatched: no VLAN here, but linked neighbor has it → yellow
+     ("you probably want to extend the VLAN to this device")
+   - configured-only: VLAN at device level but no port carries it → orange
+     ("declared but not wired") */
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]:hover{opacity:.45 !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]{filter:drop-shadow(0 0 4px #f5d65a) drop-shadow(0 0 12px #f5d65a) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover{filter:drop-shadow(0 0 6px #f5d65a) drop-shadow(0 0 18px #f5d65a) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"] .m002-dev-bg,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"] .m002-dev-bg{stroke:#f5d65a;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ff9b3c) drop-shadow(0 0 12px #ff9b3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ff9b3c) drop-shadow(0 0 18px #ff9b3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ff9b3c;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
