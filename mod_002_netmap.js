@@ -2522,6 +2522,11 @@ function bindBoard(s) {
           }
         }
       }
+      // Stack-merge glow wins over the snap-to-grid ghost — they share the
+      // same visual weight and the ghost predicts a landing spot the drop
+      // will overrule anyway. Clear on every tick while a target is locked
+      // (the snap preview was re-scheduled above this block).
+      if (s.dragStackTarget) clearSnapPreview(s);
     } else if (s.drag.kind === 'stack') {
       if (s.drag.recenterPending && s.drag.startX != null) {
         if (Math.hypot(e.clientX - s.drag.startX, e.clientY - s.drag.startY) > 4) {
@@ -3834,19 +3839,16 @@ function layoutStackMembersIfOverlapping(s, st) {
     }
   }
   if (!overlap) return;
-  const cols = Math.min(devs.length, Math.max(2, Math.ceil(Math.sqrt(devs.length))));
-  const rows = Math.ceil(devs.length / cols);
-  const stepX = DEVICE_W + GRID;
+  // Vertical column — mirrors a physical switch stack (one switch on top of
+  // the next). One grid line of breathing room between cells, centered on
+  // the stack anchor.
   const stepY = DEVICE_H + GRID;
-  const totalW = (cols - 1) * stepX;
-  const totalH = (rows - 1) * stepY;
-  const startX = Math.round((st.x - totalW / 2) / GRID) * GRID;
+  const totalH = (devs.length - 1) * stepY;
+  const colX = Math.round(st.x / GRID) * GRID;
   const startY = Math.round((st.y - totalH / 2) / GRID) * GRID;
   devs.forEach((d, i) => {
-    const r = Math.floor(i / cols);
-    const c = i % cols;
-    d.x = Math.round((startX + c * stepX) / GRID) * GRID;
-    d.y = Math.round((startY + r * stepY) / GRID) * GRID;
+    d.x = colX;
+    d.y = Math.round((startY + i * stepY) / GRID) * GRID;
   });
 }
 
