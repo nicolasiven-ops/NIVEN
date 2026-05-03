@@ -4459,6 +4459,8 @@ function drawStackEnvelope(s, stack) {
   // speak L3 individually; the envelope must stay neutral in routing layer.
   const stackIsL3 = stackHasVip(stack);
   env.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
+  const envVsState = vlanSoloStateForStack(s, stack);
+  if (envVsState) env.setAttribute('data-vlan-solo', envVsState);
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
     <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
@@ -10342,17 +10344,24 @@ const MOD002_CSS = `
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"],
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-isolated"],
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"]:hover,
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"]:hover,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ffbf3c) drop-shadow(0 0 12px #ffbf3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{filter:drop-shadow(0 0 4px #ffbf3c) drop-shadow(0 0 12px #ffbf3c) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ffbf3c) drop-shadow(0 0 18px #ffbf3c) !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"]:hover,
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]:hover{filter:drop-shadow(0 0 6px #ffbf3c) drop-shadow(0 0 18px #ffbf3c) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ffbf3c;}
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"] .m002-stack-env-bg{stroke:#ffbf3c;}
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.
