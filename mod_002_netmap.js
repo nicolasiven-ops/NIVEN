@@ -2290,6 +2290,24 @@ function alreadyLinkedDevices(s, deviceId) {
     if (l.from === deviceId) set.add(l.to);
     else if (l.to === deviceId) set.add(l.from);
   });
+  // Hub-tunnel: a JUMP relays its broadcast domain to every other hub-leg in
+  // its zone AND to the hub-legs of its coupled peer in the other zone. Treat
+  // anything sharing that domain as already connected — auto-link should not
+  // suggest a redundant wire to a node the JUMP already speaks for.
+  const direct = Array.from(set);
+  direct.forEach((nbId) => {
+    const nb = s.devices.find((d) => d.id === nbId);
+    if (!isReference(nb)) return;
+    hubLocalLegs(s, nb.id).forEach(({ device }) => { if (device.id !== deviceId) set.add(device.id); });
+    hubFarLegs(s, nb.id).forEach(({ device }) => { if (device.id !== deviceId) set.add(device.id); });
+  });
+  // Source side: a JUMP being dragged also shares a domain with its couple
+  // peer's hub-legs (cross-zone), so include them too for symmetry. The
+  // auto-link zone filter still hides cross-zone candidates from the canvas.
+  const self = s.devices.find((d) => d.id === deviceId);
+  if (isReference(self)) {
+    hubFarLegs(s, deviceId).forEach(({ device }) => set.add(device.id));
+  }
   return set;
 }
 
@@ -2297,8 +2315,6 @@ function findAutoLinkCandidate(s, dev) {
   // Skip when dragged inside a stack — links between stack members are
   // stack-internal and have their own UI.
   if (findStack(s, dev.id)) return null;
-  // JUMP couplings happen via the inspector, not the canvas. Skip both ends.
-  if (isReference(dev)) return null;
   const linked = alreadyLinkedDevices(s, dev.id);
   const devZone = dev.zone || null;
   let best = null;
@@ -2306,7 +2322,9 @@ function findAutoLinkCandidate(s, dev) {
   for (const d of s.devices) {
     if (d.id === dev.id) continue;
     if (linked.has(d.id)) continue;
-    if (isReference(d)) continue;
+    // JUMP↔JUMP couplings happen via the inspector, not the canvas — skip the
+    // pair where both ends are JUMPs. JUMP + non-JUMP is a valid hub-leg.
+    if (isReference(dev) && isReference(d)) continue;
     // Stack members surface the stack as the visual end, not the member —
     // skip them; the user can still link to a stack via the regular L tool.
     if (findStack(s, d.id)) continue;
@@ -2900,10 +2918,11 @@ function bindBoard(s) {
       if (s.dragStackTarget) clearSnapPreview(s);
 
       // Auto-link suggestion. Only kicks in once the gesture has clearly
-      // become a drag (recenterPending flipped off) and never competes with a
-      // pending stack-merge — close enough to merge, the user likely wants the
-      // stack, not a wire. Shift suppresses it as an escape hatch.
-      if (!e.shiftKey && !s.dragStackTarget && s.drag.recenterPending === false) {
+      // become a drag (recenterPending flipped off, JUMP click-vs-drag past
+      // its 4px threshold) and never competes with a pending stack-merge —
+      // close enough to merge, the user likely wants the stack, not a wire.
+      // Shift suppresses it as an escape hatch.
+      if (!e.shiftKey && !s.dragStackTarget && s.drag.recenterPending === false && !s.drag.jumpPending) {
         const cand = findAutoLinkCandidate(s, dev);
         setAutoLinkTarget(s, dev, cand);
       } else if (s.autoLink) {
