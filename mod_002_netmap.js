@@ -1984,10 +1984,8 @@ function snapDropToGrid(s, kind, id) {
   if (ddx === 0 && ddy === 0) return;
   const group = collectGroupTargets(s, { kind, id });
   group.forEach((it) => moveItemBy(s, it, ddx, ddy));
-  // Keep coupled JUMP peer in sync after the snap, mirroring onMove.
   if (kind === 'device') {
     const dev = s.devices.find((d) => d.id === id);
-    if (dev && isReference(dev)) syncCouplePeerPosition(s, dev);
     if (dev) updateLinksFor(s, dev.id);
   }
   // Mirror onMove: redraw LAG-pair lines for every involved stack member.
@@ -2751,7 +2749,7 @@ function bindBoard(s) {
         // recenterPending stays false: JUMPs hop on click (no auto-recenter
         // semantics), but the flag still needs to read `false` after a real
         // drag so snap-on-drop in onUp accepts it as a "real drag".
-        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, recenterPending: false, moved: false, zoneShiftStart: { x: dev.x, y: dev.y } };
+        s.drag = { kind: 'device', id: dev.id, dx: dev.x - w.x, dy: dev.y - w.y, startX: e.clientX, startY: e.clientY, jumpPending: true, recenterPending: false, moved: false };
         s.host.classList.add('m002-dragging');
         e.preventDefault();
         return;
@@ -2863,10 +2861,6 @@ function bindBoard(s) {
       // If this drag is part of a multi-selection, move every selected item
       const group = collectGroupTargets(s, { kind: 'device', id: dev.id });
       group.forEach((it) => moveItemBy(s, it, ddx, ddy));
-      // Coupled JUMP: keep the peer locked at the same world coords so the
-      // no-drift hop invariant survives a relocate. Peer is in another zone,
-      // not currently rendered — data update only.
-      if (isReference(dev)) syncCouplePeerPosition(s, dev);
       updateLinksFor(s, dev.id);
       const stk = findStack(s, dev.id);
       if (stk && !isStackCollapsed(s, stk)) refreshStackVisuals(s, stk);
@@ -3104,18 +3098,6 @@ function bindBoard(s) {
       if (realDrag && s.prefs?.snapOnDrop && !altAtRelease
           && (s.drag.kind === 'device' || s.drag.kind === 'stack')) {
         snapDropToGrid(s, s.drag.kind, s.drag.id);
-      }
-      // JUMP zone-shift on drop: slide every zone-mate by the JUMP's net
-      // travel so the layout around the portal stays intact. Applied at
-      // release (not during drag) so the JUMP visibly moves on screen
-      // instead of looking cursor-anchored while the world pans under it.
-      if (realDrag && s.drag.kind === 'device' && s.drag.zoneShiftStart) {
-        const dev = s.devices.find((d) => d.id === s.drag.id);
-        if (dev && isReference(dev)) {
-          const ddx = dev.x - s.drag.zoneShiftStart.x;
-          const ddy = dev.y - s.drag.zoneShiftStart.y;
-          shiftJumpZoneMates(s, dev, ddx, ddy);
-        }
       }
       // Grid energy pulse on real drops (palette spawn handled separately
       // in spawnDeviceAt). Skip stacks-being-merged-into-other-stacks —
@@ -3500,18 +3482,6 @@ function couplePeer(s, dev) {
   return peer;
 }
 
-// Couple peers must share world coordinates so a JUMP-triggered zone hop
-// (which keeps the current view) lands the peer at the exact same screen
-// position as the source — no view drift on hop. Mirrors dev → peer.
-function syncCouplePeerPosition(s, dev) {
-  if (!isReference(dev)) return;
-  const peer = couplePeer(s, dev);
-  if (!peer) return;
-  if (peer.x === dev.x && peer.y === dev.y) return;
-  peer.x = dev.x;
-  peer.y = dev.y;
-}
-
 // Mutually couple two Jumps. Drops any prior couples on either side. Both
 // Jumps must already exist in s.devices and live in different zones.
 function coupleJumps(s, devA, devB) {
@@ -3573,10 +3543,10 @@ function jumpToReference(s, dev) {
   // select the peer so the user lands directly on the wormhole's other end.
   const peer = couplePeer(s, dev);
   if (peer) {
-    // Restore the saved Z2 view so the camera glides to where the user last
-    // worked in that zone. Because coupled peers share world coords, the
-    // visual transition is now coherent — the JUMP icon doesn't teleport
-    // mid-glide, only the surrounding scenery does.
+    // Restore the saved peer-side view so the camera glides to where the
+    // user last worked in that zone. Couple is purely logical (broadcast
+    // domain) — peers keep independent world coordinates, so the camera
+    // anchor is what makes the hop land coherently.
     const anchorView = peer.cameraAnchor || null;
     if (peer.zone && peer.zone !== s.activeZone) {
       switchZone(s, peer.zone, { x: dev.x, y: dev.y }, anchorView ? { toView: anchorView } : {});
@@ -4030,47 +4000,6 @@ function collectGroupTargets(s, primary) {
     out.push({ kind, id });
   });
   return out;
-}
-
-// All zone-mates of a JUMP, excluding the JUMP itself. Stack members are
-// represented by their owning stack so a stack moves as one entity.
-function collectJumpZoneMates(s, jump) {
-  const zone = jump.zone || null;
-  const out = [];
-  const stackedMembers = new Set();
-  s.stacks.forEach((st) => {
-    if ((st.zone || null) !== zone) return;
-    out.push({ kind: 'stack', id: st.id });
-    st.members.forEach((mid) => stackedMembers.add(mid));
-  });
-  s.devices.forEach((d) => {
-    if (d.id === jump.id) return;
-    if ((d.zone || null) !== zone) return;
-    if (stackedMembers.has(d.id)) return;
-    out.push({ kind: 'device', id: d.id });
-  });
-  return out;
-}
-
-// Shift every zone-mate of `jump` by (ddx, ddy) and refresh their visuals.
-// Used at JUMP-drag drop to slide the zone over to the JUMP's new home so the
-// internal layout stays intact — running this *during* the drag would make the
-// JUMP appear cursor-anchored (everything in screen view moves uniformly).
-function shiftJumpZoneMates(s, jump, ddx, ddy) {
-  if (!ddx && !ddy) return;
-  const mates = collectJumpZoneMates(s, jump);
-  if (!mates.length) return;
-  mates.forEach((it) => moveItemBy(s, it, ddx, ddy));
-  mates.forEach((it) => {
-    if (it.kind === 'stack') {
-      const st = findStackById(s, it.id);
-      if (st) st.members.forEach((mid) => updateLagPairsFor(s, mid));
-    } else {
-      updateLagPairsFor(s, it.id);
-    }
-  });
-  if (s.activeLayer === 'routing') drawL3Paths(s);
-  refreshAggregates(s);
 }
 
 function moveItemBy(s, target, ddx, ddy) {
@@ -5735,7 +5664,13 @@ function renderReferenceInspector(s, dev, body) {
         <option value="">— select JUMP in another zone —</option>
         ${[...byZone.entries()].map(([zid, group]) => `
           <optgroup label="${escAttr(group.name)}">
-            ${group.items.map((j) => `<option value="${escAttr(j.id)}" ${j.zone === dev.zone ? 'disabled' : ''}>${escSvg(j.name)}${j.zone === dev.zone ? ' (same zone)' : ''}</option>`).join('')}
+            ${group.items.map((j) => {
+              const sameZone = j.zone === dev.zone;
+              const taken = !!j.coupleId;
+              const disabled = sameZone || taken;
+              const suffix = sameZone ? ' (same zone)' : (taken ? ' · coupled' : '');
+              return `<option value="${escAttr(j.id)}" ${disabled ? 'disabled' : ''}>${escSvg(j.name)}${suffix}</option>`;
+            }).join('')}
           </optgroup>
         `).join('')}
       </select>
