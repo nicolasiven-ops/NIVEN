@@ -2275,9 +2275,14 @@ function cancelRopeDrag(s) {
 // =============================================================================
 const AUTOLINK_MIN_DIST = 95;       // a hair above the stack-merge threshold so
                                     // they don't both fight for the same hover
-const AUTOLINK_MAX_DIST = 200;
-const AUTOLINK_CONNECT_T  = 0.96;   // when reach-progress crosses this, the two
-                                    // stubs collapse into a single full line
+const AUTOLINK_MAX_DIST = 360;      // suggestion starts pre-fading from here so
+                                    // approaching a device feels magnetic well
+                                    // before the link actually arms
+const AUTOLINK_CONNECT_T  = 0.50;   // mid-band: stubs snap into one solid line
+                                    // and the drop is armed for commit. A wide
+                                    // armed band → easy to land the connection
+                                    // without having to nudge devices on top of
+                                    // each other.
 
 function alreadyLinkedDevices(s, deviceId) {
   const set = new Set();
@@ -2357,6 +2362,7 @@ function ensureAutoLinkLayer(s) {
     g, fromStub, toStub, fromTip, toTip, fullLine,
     targetId: null,
     fromId: null,
+    armed: false, // true once the stubs would meet — the only state that allows commit
   };
   return s.autoLink;
 }
@@ -2382,6 +2388,7 @@ function setAutoLinkTarget(s, fromDev, candidate) {
     al.fromTip.setAttribute('opacity', '0');
     al.toTip.setAttribute('opacity', '0');
     al.fullLine.setAttribute('opacity', '0');
+    al.armed = false;
     return;
   }
 
@@ -2420,7 +2427,9 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
 
   if (reach >= AUTOLINK_CONNECT_T) {
     // Stubs would meet → render the completed connection as a single line so
-    // the two halves don't overdraw with a seam in the middle.
+    // the two halves don't overdraw with a seam in the middle. This is also
+    // the only state in which a release commits the link; outside of it, the
+    // suggestion is just a hint and dropping nukes nothing.
     al.fullLine.setAttribute('x1', a.x.toFixed(2));
     al.fullLine.setAttribute('y1', a.y.toFixed(2));
     al.fullLine.setAttribute('x2', b.x.toFixed(2));
@@ -2430,8 +2439,10 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
     al.toStub.setAttribute('opacity', '0');
     al.fromTip.setAttribute('opacity', '0');
     al.toTip.setAttribute('opacity', '0');
+    al.armed = true;
     return;
   }
+  al.armed = false;
 
   const aTipX = a.x + ux * stubLen;
   const aTipY = a.y + uy * stubLen;
@@ -2945,9 +2956,11 @@ function bindBoard(s) {
       s.dragStackTarget = null;
       s.dragStackTargetCompat = null;
     }
-    // Auto-link commit. The on-screen suggestion turns into a real link the
-    // moment the user releases — same threshold band that drew the cable.
-    if (s.drag?.kind === 'device' && s.autoLink?.targetId) {
+    // Auto-link commit. Only the "armed" state — when the two stubs have
+    // visually fused into one line — actually creates the link. Faint hints
+    // along the approach are visual nudges, not commitments; releasing in
+    // that range just relocates the device.
+    if (s.drag?.kind === 'device' && s.autoLink?.targetId && s.autoLink.armed) {
       const fromId = s.drag.id;
       const toId = s.autoLink.targetId;
       const ok = commitAutoLink(s, fromId, toId);
