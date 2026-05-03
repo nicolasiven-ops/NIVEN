@@ -1253,6 +1253,40 @@ body.view-runtime footer { display: none; }
 body.view-runtime { overflow: hidden; }
 body.view-runtime main { padding: 0; max-width: none; }
 
+/* === Immersive Mode (Plexus runtime: hide all hub chrome, peek HUD on top edge) === */
+body.view-runtime #bg-canvas,
+body.view-runtime .vignette,
+body.view-runtime .cursor,
+body.view-runtime .cursor-dot { display: none !important; }
+
+body.view-runtime .runtime-hud {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  transform: translateY(-100%);
+  transition: transform 0.28s ease;
+  z-index: 100;
+  background: rgba(7, 7, 12, 0.88);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid rgba(255, 0, 60, 0.25);
+}
+body.view-runtime .immersive-hotzone {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 14px;
+  z-index: 99;
+  background: transparent;
+}
+body.view-runtime .immersive-hotzone:hover ~ .runtime-hud,
+body.view-runtime .runtime-hud:hover,
+body.view-runtime .runtime-hud:focus-within {
+  transform: translateY(0);
+}
+
 /* === Module detail view === */
 .module-detail {
   position: relative;
