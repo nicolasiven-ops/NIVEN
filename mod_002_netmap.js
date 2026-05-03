@@ -7112,12 +7112,15 @@ function vfxGridPulse(s, wx, wy, color) {
   const DIRS = [[1, 0], [-1, 0], [0, 1], [0, -1]];
   const count = VFX_PULSE_COUNT_MIN
     + Math.floor(Math.random() * (VFX_PULSE_COUNT_MAX - VFX_PULSE_COUNT_MIN + 1));
-  // Seed the first 4 with one of each cardinal so tendrils don't bunch up;
-  // anything beyond that picks freely.
-  const startDirs = DIRS.slice();
-  for (let i = startDirs.length - 1; i > 0; i--) {
+  // Distribute first-segment directions evenly across the four sides so the
+  // tendrils never bunch up at a single corner. For count=8 that's 2 per
+  // side; for 7 it's 2-2-2-1; for 6 it's 2-2-1-1; etc. The order is then
+  // shuffled so successive tendrils don't always fire on the same side.
+  const launchDirs = [];
+  for (let i = 0; i < count; i++) launchDirs.push(DIRS[i % 4]);
+  for (let i = launchDirs.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
-    [startDirs[i], startDirs[j]] = [startDirs[j], startDirs[i]];
+    [launchDirs[i], launchDirs[j]] = [launchDirs[j], launchDirs[i]];
   }
 
   // Launch from a random grid intersection on the perimeter edge that
@@ -7143,7 +7146,7 @@ function vfxGridPulse(s, wx, wy, color) {
 
   const tendrils = [];
   for (let i = 0; i < count; i++) {
-    const firstDir = i < 4 ? startDirs[i] : DIRS[Math.floor(Math.random() * 4)];
+    const firstDir = launchDirs[i];
     let [dx, dy] = firstDir;
     let [x, y] = launchPoint(firstDir);
     const pts = [[x, y]];
