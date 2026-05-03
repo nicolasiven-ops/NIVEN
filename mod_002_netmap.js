@@ -2266,18 +2266,18 @@ function cancelRopeDrag(s) {
 
 // =============================================================================
 // Auto-link suggestion — while a device is being dragged, the nearest unlinked
-// device within a sweet-spot range gets a tentative cable drawn from the
-// dragged device to it. Drop within the range commits the link; drop outside
+// device within a sweet-spot range grows a tentative connection toward it.
+// Visually it's two straight stubs reaching out from each end; their length
+// scales with proximity, and the moment the gap collapses they snap together
+// into a single solid line. Drop within range commits the link; drop outside
 // just relocates as usual. Stack-merge (closer than 70 units, same type) takes
 // priority since the visuals would otherwise step on each other.
 // =============================================================================
 const AUTOLINK_MIN_DIST = 95;       // a hair above the stack-merge threshold so
                                     // they don't both fight for the same hover
 const AUTOLINK_MAX_DIST = 200;
-const AUTOLINK_SAG_FACTOR = 0.18;
-const AUTOLINK_SAG_MAX    = 70;
-const AUTOLINK_SAG_BOB_DAMP  = 0.78;  // wobble decay per frame
-const AUTOLINK_SAG_BOB_GAIN  = 0.10;  // velocity → bob magnitude
+const AUTOLINK_CONNECT_T  = 0.96;   // when reach-progress crosses this, the two
+                                    // stubs collapse into a single full line
 
 function alreadyLinkedDevices(s, deviceId) {
   const set = new Set();
@@ -2322,50 +2322,49 @@ function ensureAutoLinkLayer(s) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-autolink');
   g.setAttribute('pointer-events', 'none');
-  const halo = document.createElementNS(SVG_NS, 'path');
-  halo.setAttribute('class', 'm002-autolink-halo');
-  halo.setAttribute('fill', 'none');
-  halo.setAttribute('stroke-width', '7');
-  halo.setAttribute('stroke-linecap', 'round');
-  halo.setAttribute('opacity', '0');
-  const line = document.createElementNS(SVG_NS, 'path');
-  line.setAttribute('class', 'm002-autolink-line');
-  line.setAttribute('fill', 'none');
-  line.setAttribute('stroke-width', '1.8');
-  line.setAttribute('stroke-linecap', 'round');
-  line.setAttribute('stroke-dasharray', '5 4');
-  line.setAttribute('opacity', '0');
-  g.appendChild(halo);
-  g.appendChild(line);
+  // Two reaching stubs (one rooted on each device) plus a "completed" line we
+  // swap to once the stubs would meet — easier than animating them merging.
+  const fromStub = document.createElementNS(SVG_NS, 'line');
+  fromStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-from');
+  fromStub.setAttribute('stroke-linecap', 'round');
+  fromStub.setAttribute('stroke-width', '2');
+  fromStub.setAttribute('opacity', '0');
+  const toStub = document.createElementNS(SVG_NS, 'line');
+  toStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-to');
+  toStub.setAttribute('stroke-linecap', 'round');
+  toStub.setAttribute('stroke-width', '2');
+  toStub.setAttribute('opacity', '0');
+  const fromTip = document.createElementNS(SVG_NS, 'circle');
+  fromTip.setAttribute('class', 'm002-autolink-tip');
+  fromTip.setAttribute('r', '2.4');
+  fromTip.setAttribute('opacity', '0');
+  const toTip = document.createElementNS(SVG_NS, 'circle');
+  toTip.setAttribute('class', 'm002-autolink-tip');
+  toTip.setAttribute('r', '2.4');
+  toTip.setAttribute('opacity', '0');
+  const fullLine = document.createElementNS(SVG_NS, 'line');
+  fullLine.setAttribute('class', 'm002-autolink-full');
+  fullLine.setAttribute('stroke-linecap', 'round');
+  fullLine.setAttribute('stroke-width', '2.4');
+  fullLine.setAttribute('opacity', '0');
+  g.appendChild(fromStub);
+  g.appendChild(toStub);
+  g.appendChild(fromTip);
+  g.appendChild(toTip);
+  g.appendChild(fullLine);
   s.gOverlay.appendChild(g);
   s.autoLink = {
-    g, halo, line,
+    g, fromStub, toStub, fromTip, toTip, fullLine,
     targetId: null,
     fromId: null,
-    sagBob: 0,         // current bob offset (added on top of static sag)
-    sagBobV: 0,        // bob velocity
-    lastFromX: null, lastFromY: null,
-    raf: null,
   };
   return s.autoLink;
-}
-
-function autoLinkPathD(ox, oy, tx, ty, sagBob) {
-  const dx = tx - ox, dy = ty - oy;
-  const dist = Math.hypot(dx, dy);
-  const sag = Math.min(dist * AUTOLINK_SAG_FACTOR, AUTOLINK_SAG_MAX) + sagBob;
-  const c1x = ox + dx * 0.33;
-  const c1y = oy + dy * 0.33 + sag;
-  const c2x = ox + dx * 0.66;
-  const c2y = oy + dy * 0.66 + sag;
-  return `M ${ox.toFixed(2)} ${oy.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${tx.toFixed(2)} ${ty.toFixed(2)}`;
 }
 
 function setAutoLinkTarget(s, fromDev, candidate) {
   const al = ensureAutoLinkLayer(s);
   if (!al) return;
   const desiredTarget = candidate?.dev?.id || null;
-  // Highlight swap if target changed.
   if (al.targetId !== desiredTarget) {
     if (al.targetId) {
       s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
@@ -2378,64 +2377,88 @@ function setAutoLinkTarget(s, fromDev, candidate) {
   al.fromId = fromDev.id;
 
   if (!candidate) {
-    // No target — fade out and stop the bob loop.
-    al.halo.setAttribute('opacity', '0');
-    al.line.setAttribute('opacity', '0');
-    if (al.raf) { cancelAnimationFrame(al.raf); al.raf = null; }
-    al.lastFromX = null; al.lastFromY = null;
+    al.fromStub.setAttribute('opacity', '0');
+    al.toStub.setAttribute('opacity', '0');
+    al.fromTip.setAttribute('opacity', '0');
+    al.toTip.setAttribute('opacity', '0');
+    al.fullLine.setAttribute('opacity', '0');
     return;
   }
 
-  // Tint cable in the dragged device's accent so it reads as "his thread".
-  const t = typeOf(fromDev.type);
-  const accent = t?.accent || '#ff003c';
-  al.halo.setAttribute('stroke', accent);
-  al.line.setAttribute('stroke', accent);
-  // Opacity scales linearly with how deep into the band we are — fades in/out.
-  const dist = candidate.dist;
-  const span = AUTOLINK_MAX_DIST - AUTOLINK_MIN_DIST;
-  const t01 = 1 - Math.min(1, Math.max(0, (dist - AUTOLINK_MIN_DIST) / span));
-  al.line.setAttribute('opacity', String(0.45 + 0.45 * t01));
-  al.halo.setAttribute('opacity', String(0.10 + 0.18 * t01));
+  // Each stub wears its own device's accent so the two reach toward each
+  // other in their own colours; they only blend at the moment of contact.
+  const fromT = typeOf(fromDev.type);
+  const toT   = typeOf(candidate.dev.type);
+  const fromAccent = fromT?.accent || '#ff003c';
+  const toAccent   = toT?.accent   || fromAccent;
+  al.fromStub.setAttribute('stroke', fromAccent);
+  al.toStub.setAttribute('stroke', toAccent);
+  al.fromTip.setAttribute('fill', fromAccent);
+  al.toTip.setAttribute('fill', toAccent);
+  al.fullLine.setAttribute('stroke', fromAccent);
 
-  // Update bob from velocity (delta of from-position since last frame). The
-  // cable swings down when the source decelerates, then floats back to rest.
-  const fx = fromDev.x, fy = fromDev.y;
-  if (al.lastFromX != null) {
-    const vy = fy - al.lastFromY;
-    al.sagBobV += vy * AUTOLINK_SAG_BOB_GAIN;
-  }
-  al.lastFromX = fx; al.lastFromY = fy;
-
-  drawAutoLinkPath(s, fromDev, candidate.dev);
-
-  // Run a settle loop so the bob returns to zero even after the user stops moving.
-  if (!al.raf) {
-    const tick = () => {
-      const a = s.autoLink;
-      if (!a || !a.targetId) { if (a) a.raf = null; return; }
-      // Damped oscillator — bob decays and recenters on 0.
-      a.sagBobV *= AUTOLINK_SAG_BOB_DAMP;
-      a.sagBob = a.sagBob * AUTOLINK_SAG_BOB_DAMP + a.sagBobV;
-      const fdev = s.devices.find((dd) => dd.id === a.fromId);
-      const tdev = s.devices.find((dd) => dd.id === a.targetId);
-      if (fdev && tdev) drawAutoLinkPath(s, fdev, tdev);
-      if (Math.abs(a.sagBob) < 0.1 && Math.abs(a.sagBobV) < 0.1) { a.raf = null; return; }
-      a.raf = requestAnimationFrame(tick);
-    };
-    al.raf = requestAnimationFrame(tick);
-  }
+  drawAutoLinkReach(s, fromDev, candidate.dev, candidate.dist);
 }
 
-function drawAutoLinkPath(s, fromDev, toDev) {
+function drawAutoLinkReach(s, fromDev, toDev, dist) {
   const al = s.autoLink;
   if (!al) return;
   const a = effectivePos(s, fromDev.id);
   const b = effectivePos(s, toDev.id);
   if (!a || !b) return;
-  const d = autoLinkPathD(a.x, a.y, b.x, b.y, al.sagBob);
-  al.halo.setAttribute('d', d);
-  al.line.setAttribute('d', d);
+
+  const span = AUTOLINK_MAX_DIST - AUTOLINK_MIN_DIST;
+  const raw  = 1 - Math.min(1, Math.max(0, (dist - AUTOLINK_MIN_DIST) / span));
+  // Smoothstep — slow start, snappy finish so the moment of contact has bite.
+  const reach = raw * raw * (3 - 2 * raw);
+
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const dlen = Math.hypot(dx, dy) || 1;
+  const ux = dx / dlen, uy = dy / dlen;
+  const half = dlen / 2;
+  const stubLen = half * reach;
+
+  if (reach >= AUTOLINK_CONNECT_T) {
+    // Stubs would meet → render the completed connection as a single line so
+    // the two halves don't overdraw with a seam in the middle.
+    al.fullLine.setAttribute('x1', a.x.toFixed(2));
+    al.fullLine.setAttribute('y1', a.y.toFixed(2));
+    al.fullLine.setAttribute('x2', b.x.toFixed(2));
+    al.fullLine.setAttribute('y2', b.y.toFixed(2));
+    al.fullLine.setAttribute('opacity', '1');
+    al.fromStub.setAttribute('opacity', '0');
+    al.toStub.setAttribute('opacity', '0');
+    al.fromTip.setAttribute('opacity', '0');
+    al.toTip.setAttribute('opacity', '0');
+    return;
+  }
+
+  const aTipX = a.x + ux * stubLen;
+  const aTipY = a.y + uy * stubLen;
+  const bTipX = b.x - ux * stubLen;
+  const bTipY = b.y - uy * stubLen;
+
+  al.fromStub.setAttribute('x1', a.x.toFixed(2));
+  al.fromStub.setAttribute('y1', a.y.toFixed(2));
+  al.fromStub.setAttribute('x2', aTipX.toFixed(2));
+  al.fromStub.setAttribute('y2', aTipY.toFixed(2));
+  al.toStub.setAttribute('x1', b.x.toFixed(2));
+  al.toStub.setAttribute('y1', b.y.toFixed(2));
+  al.toStub.setAttribute('x2', bTipX.toFixed(2));
+  al.toStub.setAttribute('y2', bTipY.toFixed(2));
+  al.fromTip.setAttribute('cx', aTipX.toFixed(2));
+  al.fromTip.setAttribute('cy', aTipY.toFixed(2));
+  al.toTip.setAttribute('cx', bTipX.toFixed(2));
+  al.toTip.setAttribute('cy', bTipY.toFixed(2));
+
+  // Opacity ramps with reach so very faint stubs at first contact don't
+  // distract while the user is just passing by.
+  const op = 0.30 + 0.65 * reach;
+  al.fromStub.setAttribute('opacity', String(op));
+  al.toStub.setAttribute('opacity', String(op));
+  al.fromTip.setAttribute('opacity', String(0.40 + 0.55 * reach));
+  al.toTip.setAttribute('opacity', String(0.40 + 0.55 * reach));
+  al.fullLine.setAttribute('opacity', '0');
 }
 
 function clearAutoLink(s) {
@@ -2444,7 +2467,6 @@ function clearAutoLink(s) {
   if (al.targetId) {
     s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
   }
-  if (al.raf) cancelAnimationFrame(al.raf);
   al.g?.remove();
   s.autoLink = null;
 }
@@ -9186,8 +9208,11 @@ const MOD002_CSS = `
 .m002-host.m002-roping .m002-svg{cursor:crosshair;}
 .m002-host.m002-roping .m002-device{cursor:crosshair;}
 .m002-autolink{pointer-events:none;}
-.m002-autolink .m002-autolink-line{filter:drop-shadow(0 0 2px currentColor);transition:opacity 80ms ease-out;}
-.m002-autolink .m002-autolink-halo{transition:opacity 120ms ease-out;}
+.m002-autolink .m002-autolink-stub{filter:drop-shadow(0 0 3px currentColor);transition:opacity 60ms ease-out;}
+.m002-autolink .m002-autolink-stub-from{stroke:currentColor;color:var(--accent);}
+.m002-autolink .m002-autolink-stub-to{stroke:currentColor;color:var(--accent);}
+.m002-autolink .m002-autolink-tip{filter:drop-shadow(0 0 3px currentColor) drop-shadow(0 0 7px currentColor);}
+.m002-autolink .m002-autolink-full{filter:drop-shadow(0 0 3px currentColor) drop-shadow(0 0 9px currentColor);}
 .m002-device.m002-autolink-target .m002-dev-bg{stroke-width:2;stroke-dasharray:none;filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 12px var(--accent));}
 .m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
