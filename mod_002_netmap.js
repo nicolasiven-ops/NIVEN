@@ -7607,10 +7607,10 @@ const RADIAL_GAP_DEG = 4;          // gap between outer-ring segments
 const RADIAL_SUB_GAP_DEG = 3;      // gap inside the device submenu
 
 const RADIAL_PRIMARY = [
-  { id: 'new',    dir: 'N', center: -90, label: 'NEW',    glyph: '+'  },
-  { id: 'move',   dir: 'E', center:   0, label: 'MOVE',   glyph: '↦' },
-  { id: 'delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×'  },
-  { id: 'undo',   dir: 'W', center: 180, label: 'UNDO',   glyph: '↶' },
+  { id: 'new',  dir: 'N', center: -90, label: 'NEW',  glyph: '+'  },
+  { id: 'move', dir: 'E', center:   0, label: 'MOVE', glyph: '↦' },
+  { id: 'tool', dir: 'S', center:  90, label: 'TOOL', glyph: '⚙' },
+  { id: 'undo', dir: 'W', center: 180, label: 'UNDO', glyph: '↶' },
 ];
 
 // MOVE submenu — switches the active layer or jumps the user into the zone
@@ -7621,6 +7621,17 @@ const RADIAL_MOVE = [
   { id: 'layer:routing',  dir: 'E', center:   0, label: 'ROUTING',  glyph: '↯' },
   { id: 'zones',          dir: 'S', center:  90, label: 'ZONE',     glyph: '◉' },
   { id: 'layer:physical', dir: 'W', center: 180, label: 'PHYSICAL', glyph: '⌗' },
+];
+
+// TOOL submenu — picks an interaction mode. SELECT clears any armed mode
+// (the default state, so it acts as a quick "back to neutral"); LINK and
+// DELETE arm their respective modes; UNDO steps back. UNDO is reachable
+// from both primary and TOOL by design — a future cleanup will dedupe.
+const RADIAL_TOOL = [
+  { id: 'select', dir: 'N', center: -90, label: 'SELECT', glyph: '↖' },
+  { id: 'link',   dir: 'E', center:   0, label: 'LINK',   glyph: '⌇' },
+  { id: 'delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×' },
+  { id: 'undo',   dir: 'W', center: 180, label: 'UNDO',   glyph: '↶' },
 ];
 
 function polarXY(cx, cy, r, deg) {
@@ -7654,6 +7665,10 @@ function openRadialMenu(s, clientX, clientY) {
   root.style.left = `${localX}px`;
   root.style.top  = `${localY}px`;
   root.dataset.level = 'primary';
+  // data-fresh marks the very first open so the build-in animation only runs
+  // once. swapRadialContent leaves it alone for re-entries; the back-action
+  // handler strips it before swapping primary back in.
+  root.dataset.fresh = '1';
   root.innerHTML = renderRadialPrimary();
   s.host.appendChild(root);
   s.radial = { el: root, world: w, level: 'primary' };
@@ -7713,11 +7728,19 @@ function handleRadialAction(s, action) {
     showRadialMoveSubmenu(s);
     return;
   }
+  if (action === 'tool') {
+    showRadialToolSubmenu(s);
+    return;
+  }
   if (action === 'zones') {
     showRadialZonesSubmenu(s);
     return;
   }
   if (action === 'back') {
+    // Returning to primary from any submenu — strip the fresh marker so the
+    // build-in animation doesn't replay. The CSS gates the keyframes on
+    // [data-fresh]; without it the final UI just appears at full opacity.
+    s.radial?.el.removeAttribute('data-fresh');
     swapRadialContent(s, renderRadialPrimary(), 'primary');
     return;
   }
@@ -7731,6 +7754,18 @@ function handleRadialAction(s, action) {
     if (s.linkMode) toggleLinkMode(s);
     if (s.deleteMode) toggleDeleteMode(s);
     closeRadialMenu(s);
+    return;
+  }
+  if (action === 'select') {
+    // TOOL submenu's default — clears any armed mode, then dismisses.
+    if (s.linkMode) toggleLinkMode(s);
+    if (s.deleteMode) toggleDeleteMode(s);
+    closeRadialMenu(s);
+    return;
+  }
+  if (action === 'link') {
+    closeRadialMenu(s);
+    if (!s.linkMode) toggleLinkMode(s);
     return;
   }
   if (action === 'delete') {
@@ -7774,6 +7809,11 @@ function showRadialDeviceSubmenu(s) {
 function showRadialMoveSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialMove(), 'move');
+}
+
+function showRadialToolSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialTool(), 'tool');
 }
 
 function showRadialZonesSubmenu(s) {
@@ -7885,6 +7925,38 @@ function renderRadialMove() {
   const half = (360 / RADIAL_MOVE.length) / 2; // 45
   let segs = '';
   RADIAL_MOVE.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
+    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialTool() {
+  // Tool / mode picker submenu — same 4-cardinal layout as primary. Centre
+  // walks back to primary.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / RADIAL_TOOL.length) / 2;
+  let segs = '';
+  RADIAL_TOOL.forEach((seg) => {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
     const end   = seg.center + half - RADIAL_GAP_DEG / 2;
     const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
@@ -10274,28 +10346,32 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-rad-dot{fill:#e8e8ee;transform-box:fill-box;transform-origin:center;transform:scale(0);}
 .m002-rad-vline{stroke:#e8e8ee;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${RADIAL_OUTER_R};stroke-dashoffset:${RADIAL_OUTER_R};}
 .m002-rad-arc{stroke:#e8e8ee;stroke-width:1.5;stroke-linecap:round;stroke-dasharray:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};stroke-dashoffset:${(Math.PI * (RADIAL_OUTER_R - 0.5)).toFixed(2)};}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-dot{animation:m002-rad-dot-in 140ms ease-out forwards;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-vline{animation:m002-rad-line-draw 180ms cubic-bezier(.55,.05,.35,1) 110ms forwards;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-arc{animation:m002-rad-arc-draw 320ms cubic-bezier(.5,.05,.35,1) 250ms forwards;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-anim{animation:m002-rad-fade-out 240ms ease-out 600ms forwards;}
+/* Build-in animation gates on [data-fresh] — set only on the very first
+   open. Returning to primary via the back tile strips the marker so the
+   final UI just appears at full opacity instead of replaying the sequence.
+   Durations are ~30% tighter than the original draft for a snappier feel. */
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-dot{animation:m002-rad-dot-in 100ms ease-out forwards;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-vline{animation:m002-rad-line-draw 125ms cubic-bezier(.55,.05,.35,1) 75ms forwards;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-arc{animation:m002-rad-arc-draw 225ms cubic-bezier(.5,.05,.35,1) 175ms forwards;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-anim{animation:m002-rad-fade-out 170ms ease-out 420ms forwards;}
 @keyframes m002-rad-dot-in{0%{transform:scale(0);opacity:0;}40%{opacity:1;}100%{transform:scale(1);opacity:1;}}
 @keyframes m002-rad-line-draw{to{stroke-dashoffset:0;}}
 @keyframes m002-rad-arc-draw{to{stroke-dashoffset:0;}}
 @keyframes m002-rad-fade-out{to{opacity:0;}}
 
 /* Final UI is invisible until the construct lines have done their work. */
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-bg,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core-label,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-path,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-glyph,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-label{opacity:0;animation:m002-rad-fade-final 220ms ease-out forwards;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-bg        {animation-delay:540ms;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-path  {animation-delay:580ms;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core      {animation-delay:620ms;}
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-glyph,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-seg-label,
-.m002-radial.m002-radial-in[data-level="primary"] .m002-rad-core-label{animation-delay:680ms;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-bg,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-core,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-core-label,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-path,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-glyph,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-label{opacity:0;animation:m002-rad-fade-final 155ms ease-out forwards;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-bg        {animation-delay:380ms;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-path  {animation-delay:405ms;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-core      {animation-delay:435ms;}
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-glyph,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-label,
+.m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-core-label{animation-delay:475ms;}
 @keyframes m002-rad-fade-final{from{opacity:0;}to{opacity:1;}}
 `;
 
