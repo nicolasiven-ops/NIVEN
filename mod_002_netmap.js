@@ -7080,8 +7080,8 @@ function renderRadialDevices() {
 // the element "patching itself into" the mainframe grid behind, not as a
 // big radial halo.
 
-const VFX_PULSE_COUNT_MIN = 6;        // tendrils per drop
-const VFX_PULSE_COUNT_MAX = 10;
+const VFX_PULSE_COUNT_MIN = 9;        // tendrils per drop
+const VFX_PULSE_COUNT_MAX = 13;
 const VFX_PULSE_SEGS_MIN = 2;         // segments per tendril
 const VFX_PULSE_SEGS_MAX = 4;
 const VFX_PULSE_SEG_CELLS_MIN = 1;    // cells per segment
