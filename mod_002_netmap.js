@@ -2295,16 +2295,15 @@ function isHiddenInCollapsedStack(s, devId) {
   return !!(st && isStackCollapsed(s, st));
 }
 
-function findAutoLinkCandidate(s, dev) {
+function findAutoLinkCandidates(s, dev) {
   // Dragged member of a collapsed stack: only the icon is visible, no per-member
   // wire to draw. Member of an EXPANDED stack is fair game — its body is on
   // screen and the user can pull a wire out of it.
-  if (isHiddenInCollapsedStack(s, dev.id)) return null;
+  if (isHiddenInCollapsedStack(s, dev.id)) return [];
   const linked = alreadyLinkedDevices(s, dev.id);
   const devZone = dev.zone || null;
   const fromStack = findStack(s, dev.id);
-  let best = null;
-  let bestDist = Infinity;
+  const out = [];
   for (const d of s.devices) {
     if (d.id === dev.id) continue;
     if (linked.has(d.id)) continue;
@@ -2323,9 +2322,23 @@ function findAutoLinkCandidate(s, dev) {
     const dx = dev.x - d.x, dy = dev.y - d.y;
     const dist = Math.hypot(dx, dy);
     if (dist < AUTOLINK_MIN_DIST || dist > AUTOLINK_MAX_DIST) continue;
-    if (dist < bestDist) { bestDist = dist; best = d; }
+    out.push({ dev: d, dist });
   }
-  return best ? { dev: best, dist: bestDist } : null;
+  // For multiple members of the SAME stack within range, only keep the nearest
+  // — the others would just stack visually on top of each other and the user
+  // explicitly only wants the closest representative per stack.
+  const bestPerStack = new Map(); // stackId → idx in out
+  out.forEach((c, i) => {
+    const st = findStack(s, c.dev.id);
+    if (!st) return;
+    const cur = bestPerStack.get(st.id);
+    if (cur == null || out[cur].dist > c.dist) bestPerStack.set(st.id, i);
+  });
+  return out.filter((c, i) => {
+    const st = findStack(s, c.dev.id);
+    if (!st) return true;
+    return bestPerStack.get(st.id) === i;
+  });
 }
 
 function ensureAutoLinkLayer(s) {
@@ -2334,88 +2347,111 @@ function ensureAutoLinkLayer(s) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-autolink');
   g.setAttribute('pointer-events', 'none');
-  // Two reaching stubs (one rooted on each device). Paths instead of straight
-  // lines so they can wave/snake-search as they extend toward each other.
+  s.gOverlay.appendChild(g);
+  s.autoLink = {
+    g,
+    fromId: null,
+    targets: new Map(), // deviceId → record { fromStub, toStub, fromTip, toTip, geom, armed, phase, fromAccent, toAccent }
+    t0: performance.now(),
+    raf: null,
+  };
+  return s.autoLink;
+}
+
+function createAutoLinkRecord(parentG, fromAccent, toAccent) {
   const fromStub = document.createElementNS(SVG_NS, 'path');
   fromStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-from');
   fromStub.setAttribute('fill', 'none');
   fromStub.setAttribute('stroke-linecap', 'round');
   fromStub.setAttribute('stroke-width', '2');
+  fromStub.setAttribute('stroke', fromAccent);
   fromStub.setAttribute('opacity', '0');
   const toStub = document.createElementNS(SVG_NS, 'path');
   toStub.setAttribute('class', 'm002-autolink-stub m002-autolink-stub-to');
   toStub.setAttribute('fill', 'none');
   toStub.setAttribute('stroke-linecap', 'round');
   toStub.setAttribute('stroke-width', '2');
+  toStub.setAttribute('stroke', toAccent);
   toStub.setAttribute('opacity', '0');
   const fromTip = document.createElementNS(SVG_NS, 'circle');
   fromTip.setAttribute('class', 'm002-autolink-tip');
   fromTip.setAttribute('r', '2.4');
+  fromTip.setAttribute('fill', fromAccent);
   fromTip.setAttribute('opacity', '0');
   const toTip = document.createElementNS(SVG_NS, 'circle');
   toTip.setAttribute('class', 'm002-autolink-tip');
   toTip.setAttribute('r', '2.4');
+  toTip.setAttribute('fill', toAccent);
   toTip.setAttribute('opacity', '0');
-  const fullLine = document.createElementNS(SVG_NS, 'line');
-  fullLine.setAttribute('class', 'm002-autolink-full');
-  fullLine.setAttribute('stroke-linecap', 'round');
-  fullLine.setAttribute('stroke-width', '2.4');
-  fullLine.setAttribute('opacity', '0');
-  g.appendChild(fromStub);
-  g.appendChild(toStub);
-  g.appendChild(fromTip);
-  g.appendChild(toTip);
-  g.appendChild(fullLine);
-  s.gOverlay.appendChild(g);
-  s.autoLink = {
-    g, fromStub, toStub, fromTip, toTip, fullLine,
-    targetId: null,
-    fromId: null,
-    armed: false, // true once the stubs would meet — the only state that allows commit
-    t0: performance.now(), // animation epoch — drives the wave phase
-    raf: null,
+  parentG.appendChild(fromStub);
+  parentG.appendChild(toStub);
+  parentG.appendChild(fromTip);
+  parentG.appendChild(toTip);
+  return {
+    fromStub, toStub, fromTip, toTip,
+    geom: null,
+    armed: false,
+    phase: Math.random() * Math.PI * 2, // independent wobble per snake
+    fromAccent, toAccent,
   };
-  return s.autoLink;
 }
 
-function setAutoLinkTarget(s, fromDev, candidate) {
+function destroyAutoLinkRecord(s, deviceId, rec) {
+  s.gDevices?.querySelector(`[data-device-id="${deviceId}"]`)?.classList.remove('m002-autolink-target');
+  rec.fromStub.remove();
+  rec.toStub.remove();
+  rec.fromTip.remove();
+  rec.toTip.remove();
+}
+
+function setAutoLinkCandidates(s, fromDev, candidates) {
   const al = ensureAutoLinkLayer(s);
   if (!al) return;
-  const desiredTarget = candidate?.dev?.id || null;
-  if (al.targetId !== desiredTarget) {
-    if (al.targetId) {
-      s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
-    }
-    al.targetId = desiredTarget;
-    if (al.targetId) {
-      s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.add('m002-autolink-target');
-    }
-  }
   al.fromId = fromDev.id;
 
-  if (!candidate) {
-    al.fromStub.setAttribute('opacity', '0');
-    al.toStub.setAttribute('opacity', '0');
-    al.fromTip.setAttribute('opacity', '0');
-    al.toTip.setAttribute('opacity', '0');
-    al.fullLine.setAttribute('opacity', '0');
-    al.armed = false;
-    return;
+  const fromT = typeOf(fromDev.type);
+  const fromAccent = fromT?.accent || '#ff003c';
+
+  const seen = new Set();
+  for (const cand of candidates) {
+    const targetId = cand.dev.id;
+    seen.add(targetId);
+    const toT = typeOf(cand.dev.type);
+    const toAccent = toT?.accent || fromAccent;
+
+    let rec = al.targets.get(targetId);
+    if (!rec) {
+      rec = createAutoLinkRecord(al.g, fromAccent, toAccent);
+      al.targets.set(targetId, rec);
+      s.gDevices?.querySelector(`[data-device-id="${targetId}"]`)?.classList.add('m002-autolink-target');
+    } else if (rec.fromAccent !== fromAccent || rec.toAccent !== toAccent) {
+      rec.fromStub.setAttribute('stroke', fromAccent);
+      rec.toStub.setAttribute('stroke', toAccent);
+      rec.fromTip.setAttribute('fill', fromAccent);
+      rec.toTip.setAttribute('fill', toAccent);
+      rec.fromAccent = fromAccent;
+      rec.toAccent = toAccent;
+    }
+    drawAutoLinkReachFor(s, rec, fromDev, cand.dev, cand.dist);
   }
 
-  // Each stub wears its own device's accent so the two reach toward each
-  // other in their own colours; they only blend at the moment of contact.
-  const fromT = typeOf(fromDev.type);
-  const toT   = typeOf(candidate.dev.type);
-  const fromAccent = fromT?.accent || '#ff003c';
-  const toAccent   = toT?.accent   || fromAccent;
-  al.fromStub.setAttribute('stroke', fromAccent);
-  al.toStub.setAttribute('stroke', toAccent);
-  al.fromTip.setAttribute('fill', fromAccent);
-  al.toTip.setAttribute('fill', toAccent);
-  al.fullLine.setAttribute('stroke', fromAccent);
+  // Drop records whose target left the candidate set.
+  for (const [id, rec] of al.targets) {
+    if (seen.has(id)) continue;
+    destroyAutoLinkRecord(s, id, rec);
+    al.targets.delete(id);
+  }
 
-  drawAutoLinkReach(s, fromDev, candidate.dev, candidate.dist);
+  // (Re)start the wobble loop while we have anything to animate.
+  if (!al.raf && al.targets.size > 0) {
+    const tick = () => {
+      const cur = s.autoLink;
+      if (!cur || cur.targets.size === 0) { if (cur) cur.raf = null; return; }
+      for (const rec of cur.targets.values()) applyAutoLinkFrame(cur, rec);
+      cur.raf = requestAnimationFrame(tick);
+    };
+    al.raf = requestAnimationFrame(tick);
+  }
 }
 
 // Ray from a centred rectangle's centre along (ux, uy) hits the rect border at:
@@ -2457,9 +2493,9 @@ function snakePathD(ax, ay, bx, by, ux, uy, time, phase, amp) {
   return `M ${ax.toFixed(2)} ${ay.toFixed(2)} C ${c1x.toFixed(2)} ${c1y.toFixed(2)}, ${c2x.toFixed(2)} ${c2y.toFixed(2)}, ${bx.toFixed(2)} ${by.toFixed(2)}`;
 }
 
-function drawAutoLinkReach(s, fromDev, toDev, dist) {
+function drawAutoLinkReachFor(s, rec, fromDev, toDev, dist) {
   const al = s.autoLink;
-  if (!al) return;
+  if (!al || !rec) return;
   const aCenter = effectivePos(s, fromDev.id);
   const bCenter = effectivePos(s, toDev.id);
   if (!aCenter || !bCenter) return;
@@ -2477,30 +2513,21 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
   const ux = dx / dlen, uy = dy / dlen;
   const a = rectEdgeAlongDir(aCenter.x, aCenter.y, DEVICE_W / 2, DEVICE_H / 2,  ux,  uy);
   const b = rectEdgeAlongDir(bCenter.x, bCenter.y, DEVICE_W / 2, DEVICE_H / 2, -ux, -uy);
-  // Recompute the gap between the two edge points — the stubs grow into THIS
-  // gap, not the full centre-to-centre distance, so the meeting point sits
-  // visually between the two icons.
   const gx = b.x - a.x, gy = b.y - a.y;
   const glen = Math.hypot(gx, gy) || 1;
   const half = glen / 2;
 
-  // Stubs scale so they fully meet at midpoint exactly when reach hits
-  // CONNECT_T. Past that they hold the meeting visual instead of overshooting
-  // — calm and steady, no oscillation, and the moment of "joined" lasts the
-  // entire armed band so the user has a generous landing window.
   const lenFactor = Math.min(1, reach / AUTOLINK_CONNECT_T);
   const stubLen = half * lenFactor;
   const armed = reach >= AUTOLINK_CONNECT_T;
-  al.armed = armed;
+  rec.armed = armed;
 
   const aTipX = a.x + ux * stubLen;
   const aTipY = a.y + uy * stubLen;
   const bTipX = b.x - ux * stubLen;
   const bTipY = b.y - uy * stubLen;
 
-  // Cache the geometry so the rAF tick can re-render the wavy path each frame
-  // without recomputing reach/edge intersections from scratch.
-  al.geom = {
+  rec.geom = {
     ax: a.x, ay: a.y, aTipX, aTipY,
     bx: b.x, by: b.y, bTipX, bTipY,
     ux, uy,
@@ -2508,65 +2535,43 @@ function drawAutoLinkReach(s, fromDev, toDev, dist) {
     armed,
     reach,
   };
-  applyAutoLinkFrame(al);
+  applyAutoLinkFrame(al, rec);
 
-  al.fromTip.setAttribute('cx', aTipX.toFixed(2));
-  al.fromTip.setAttribute('cy', aTipY.toFixed(2));
-  al.toTip.setAttribute('cx', bTipX.toFixed(2));
-  al.toTip.setAttribute('cy', bTipY.toFixed(2));
+  rec.fromTip.setAttribute('cx', aTipX.toFixed(2));
+  rec.fromTip.setAttribute('cy', aTipY.toFixed(2));
+  rec.toTip.setAttribute('cx', bTipX.toFixed(2));
+  rec.toTip.setAttribute('cy', bTipY.toFixed(2));
 
-  // Opacity ramps with reach; once armed, both stubs go full strength so the
-  // joined line reads as solid. Tip dots dim out at meeting because the two
-  // would just overlap on the midpoint.
   const op = armed ? 1 : (0.30 + 0.65 * reach);
-  al.fromStub.setAttribute('opacity', String(op));
-  al.toStub.setAttribute('opacity', String(op));
+  rec.fromStub.setAttribute('opacity', String(op));
+  rec.toStub.setAttribute('opacity', String(op));
   const tipOp = armed ? 0 : (0.40 + 0.55 * reach);
-  al.fromTip.setAttribute('opacity', String(tipOp));
-  al.toTip.setAttribute('opacity', String(tipOp));
-  // The pre-rendered fullLine layer is no longer needed — stubs do the whole
-  // animation continuously now, no discrete swap.
-  al.fullLine.setAttribute('opacity', '0');
-
-  // Make sure the wave loop is running — rAF stops itself once the layer is
-  // cleared, so kick it back on every time we get a fresh candidate.
-  if (!al.raf) {
-    const tick = () => {
-      const cur = s.autoLink;
-      if (!cur || !cur.targetId || !cur.geom) { if (cur) cur.raf = null; return; }
-      applyAutoLinkFrame(cur);
-      cur.raf = requestAnimationFrame(tick);
-    };
-    al.raf = requestAnimationFrame(tick);
-  }
+  rec.fromTip.setAttribute('opacity', String(tipOp));
+  rec.toTip.setAttribute('opacity', String(tipOp));
 }
 
-// Re-render the snake paths from cached geometry. Called on every move (so
-// the spine keeps up with cursor) and on every rAF (so the wave keeps moving
-// even when the pointer is still).
-function applyAutoLinkFrame(al) {
-  const g = al.geom;
+// Re-render one snake-pair from its cached geometry. Per-record phase keeps
+// the multiple snakes from oscillating in lockstep when several candidates
+// are in range.
+function applyAutoLinkFrame(al, rec) {
+  const g = rec.geom;
   if (!g) return;
   const time = performance.now() - al.t0;
-  // Wave amplitude — generous mid-reach so the stubs really hunt for each
-  // other, then tames down once armed so the joined line reads as a calm
-  // commitment rather than a wriggling worm.
   const baseAmp = g.armed
-    ? 4.0 + 2.0 * Math.sin(time * 0.0030)         // gentle live pulse, more presence
-    : 8.0 + 16.0 * g.reach * (1 - g.reach * 0.5); // bigger swing, especially mid-reach
-  // Two stubs run at different phases so they don't mirror each other.
-  const dFrom = snakePathD(g.ax, g.ay, g.aTipX, g.aTipY, g.ux, g.uy, time, 0,    baseAmp);
-  const dTo   = snakePathD(g.bx, g.by, g.bTipX, g.bTipY, -g.ux, -g.uy, time, 2.1, baseAmp);
-  al.fromStub.setAttribute('d', dFrom);
-  al.toStub.setAttribute('d', dTo);
+    ? 4.0 + 2.0 * Math.sin(time * 0.0030)
+    : 8.0 + 16.0 * g.reach * (1 - g.reach * 0.5);
+  const dFrom = snakePathD(g.ax, g.ay, g.aTipX, g.aTipY,  g.ux,  g.uy, time, rec.phase,        baseAmp);
+  const dTo   = snakePathD(g.bx, g.by, g.bTipX, g.bTipY, -g.ux, -g.uy, time, rec.phase + 2.1,  baseAmp);
+  rec.fromStub.setAttribute('d', dFrom);
+  rec.toStub.setAttribute('d', dTo);
 }
 
 function clearAutoLink(s) {
   const al = s.autoLink;
   if (!al) return;
   if (al.raf) cancelAnimationFrame(al.raf);
-  if (al.targetId) {
-    s.gDevices?.querySelector(`[data-device-id="${al.targetId}"]`)?.classList.remove('m002-autolink-target');
+  for (const id of al.targets.keys()) {
+    s.gDevices?.querySelector(`[data-device-id="${id}"]`)?.classList.remove('m002-autolink-target');
   }
   al.g?.remove();
   s.autoLink = null;
@@ -2907,10 +2912,10 @@ function bindBoard(s) {
       // close enough to merge, the user likely wants the stack, not a wire.
       // Shift suppresses it as an escape hatch.
       if (!e.shiftKey && !s.dragStackTarget && s.drag.recenterPending === false && !s.drag.jumpPending) {
-        const cand = findAutoLinkCandidate(s, dev);
-        setAutoLinkTarget(s, dev, cand);
+        const cands = findAutoLinkCandidates(s, dev);
+        setAutoLinkCandidates(s, dev, cands);
       } else if (s.autoLink) {
-        setAutoLinkTarget(s, dev, null);
+        setAutoLinkCandidates(s, dev, []);
       }
     } else if (s.drag.kind === 'stack') {
       if (s.drag.recenterPending && s.drag.startX != null) {
@@ -3042,20 +3047,25 @@ function bindBoard(s) {
       s.dragStackTarget = null;
       s.dragStackTargetCompat = null;
     }
-    // Auto-link commit. Only the "armed" state — when the two stubs have
-    // visually fused into one line — actually creates the link. Faint hints
-    // along the approach are visual nudges, not commitments; releasing in
-    // that range just relocates the device.
-    if (s.drag?.kind === 'device' && s.autoLink?.targetId && s.autoLink.armed) {
+    // Auto-link commit. Only "armed" records — those whose stubs have visually
+    // fused into one line — turn into real links. Faint hints in the approach
+    // band are nudges, not commitments. Every armed target lands at once so a
+    // single drop can wire up to several neighbours in one gesture.
+    if (s.drag?.kind === 'device' && s.autoLink && s.autoLink.targets.size > 0) {
       const fromId = s.drag.id;
-      const toId = s.autoLink.targetId;
-      const ok = commitAutoLink(s, fromId, toId);
+      const armedTargets = [];
+      for (const [id, rec] of s.autoLink.targets) {
+        if (rec.armed) armedTargets.push(id);
+      }
       clearAutoLink(s);
-      if (ok) {
-        const dev = s.devices.find((d) => d.id === toId);
-        if (dev) {
-          const t = typeOf(dev.type);
-          if (t?.accent) vfxGridPulse(s, dev.x, dev.y, t.accent);
+      for (const toId of armedTargets) {
+        const ok = commitAutoLink(s, fromId, toId);
+        if (ok) {
+          const dev = s.devices.find((d) => d.id === toId);
+          if (dev) {
+            const t = typeOf(dev.type);
+            if (t?.accent) vfxGridPulse(s, dev.x, dev.y, t.accent);
+          }
         }
       }
     } else if (s.autoLink) {
