@@ -650,6 +650,14 @@
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym .m002-lag-line,
 .m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym .m002-link-line,
 .m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym .m002-lag-line{stroke:#ffbf3c !important;}
+/* Stacking cables ride along with the parent stack envelope's solo state —
+   when the stack itself is dimmed/amber, the internal cables follow so they
+   don't visually contradict the wrapper. */
+.m002-host[data-active-layer="vlan"] .m002-stacklink{transition:opacity .6s ease-out;}
+.m002-host[data-active-layer="vlan"] .m002-stacklink[data-vlan-solo="unmatched-isolated"],
+.m002-host[data-active-layer="vlan"] .m002-stacklink[data-vlan-solo="unmatched-adjacent"]{opacity:.07;}
+.m002-host[data-active-layer="vlan"] .m002-stacklink[data-vlan-solo="configured-only"]{animation:m002-link-vsolo-asym-pulse 2.4s ease-in-out infinite;}
+.m002-host[data-active-layer="vlan"] .m002-stacklink[data-vlan-solo="configured-only"] .m002-stack-cable{stroke:#ffbf3c !important;opacity:1;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],

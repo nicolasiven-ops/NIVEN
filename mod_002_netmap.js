@@ -3692,9 +3692,18 @@ function drawDevice(s, dev) {
   // layer so switches without an IP visibly recede.
   g.setAttribute('data-l3', isL3Device(dev) ? 'true' : 'false');
   if (isDefaultGateway(s, dev)) g.setAttribute('data-gw', 'true');
-  // VLAN solo state — drives the dim / yellow / orange CSS on the VLAN layer.
-  // References don't carry their own VLANs, so they're exempt.
-  if (!isReference(dev)) {
+  // VLAN solo state — drives the dim / amber CSS on the VLAN layer. JUMPs
+  // (references) borrow their peer's state when coupled so the portal mirrors
+  // the real device on the other side; uncoupled JUMPs have no peer to speak
+  // for them and dim out as 'isolated' when a filter is active.
+  if (isReference(dev)) {
+    const filter = effectiveVlanSolo(s);
+    if (filter.length) {
+      const peerForVsolo = couplePeer(s, dev);
+      const peerState = peerForVsolo ? vlanSoloStateForDevice(s, peerForVsolo) : null;
+      g.setAttribute('data-vlan-solo', peerState || 'unmatched-isolated');
+    }
+  } else {
     const vsState = vlanSoloStateForDevice(s, dev);
     if (vsState) g.setAttribute('data-vlan-solo', vsState);
   }
@@ -4500,6 +4509,10 @@ function drawStackEnvelope(s, stack) {
     cab.setAttribute('class', 'm002-stacklink');
     cab.setAttribute('data-stack-id', stack.id);
     cab.setAttribute('data-stacklink-id', sl.id);
+    // Stack-internal cables share the parent stack's VLAN-solo state — when
+    // the stack itself is dimmed/amber, its stacking cables follow suit
+    // instead of staying lit and visually contradicting the envelope.
+    if (envVsState) cab.setAttribute('data-vlan-solo', envVsState);
     const path = orthPath(a, b, off, s, [a.id, b.id]);
     let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
     // Port labels on stacking cables only in Physical — VLAN/Routing layers
@@ -4914,10 +4927,17 @@ function vlanSoloStateForDevice(s, dev) {
 function applyVlanSoloVisuals(s) {
   s._vlanSoloCtx = null;
   if (s.gDevices) {
+    const filterActive = effectiveVlanSolo(s).length > 0;
     s.devices.forEach((dev) => {
       const g = s.gDevices.querySelector(`[data-device-id="${dev.id}"]`);
       if (!g) return;
-      if (isReference(dev)) { g.removeAttribute('data-vlan-solo'); return; }
+      if (isReference(dev)) {
+        if (!filterActive) { g.removeAttribute('data-vlan-solo'); return; }
+        const peerForVsolo = couplePeer(s, dev);
+        const peerState = peerForVsolo ? vlanSoloStateForDevice(s, peerForVsolo) : null;
+        g.setAttribute('data-vlan-solo', peerState || 'unmatched-isolated');
+        return;
+      }
       const st = vlanSoloStateForDevice(s, dev);
       if (st) g.setAttribute('data-vlan-solo', st);
       else g.removeAttribute('data-vlan-solo');
@@ -4925,8 +4945,9 @@ function applyVlanSoloVisuals(s) {
     s.stacks.forEach((stack) => {
       const collapsed = s.gDevices.querySelector(`.m002-stack-collapsed[data-stack-id="${stack.id}"]`);
       const envelope = s.gStacksBg?.querySelector(`.m002-stack-envelope[data-stack-id="${stack.id}"]`);
+      const cables = s.gStacksBg?.querySelectorAll(`.m002-stacklink[data-stack-id="${stack.id}"]`) || [];
       const st = vlanSoloStateForStack(s, stack);
-      [collapsed, envelope].forEach((el) => {
+      [collapsed, envelope, ...cables].forEach((el) => {
         if (!el) return;
         if (st) el.setAttribute('data-vlan-solo', st);
         else el.removeAttribute('data-vlan-solo');
