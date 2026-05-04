@@ -5188,6 +5188,24 @@ function computePortSortOrder(ports) {
   return m;
 }
 
+// Returns Set<port.n> of every port whose trimmed name collides with at
+// least one other port on the same device. Empty names are exempt — multiple
+// unnamed ports are normal. Case-sensitive (typical network conventions).
+function findDuplicatePortNs(ports) {
+  const counts = new Map();
+  (ports || []).forEach((p) => {
+    const k = (p?.name || '').trim();
+    if (!k) return;
+    counts.set(k, (counts.get(k) || 0) + 1);
+  });
+  const dupes = new Set();
+  (ports || []).forEach((p) => {
+    const k = (p?.name || '').trim();
+    if (k && counts.get(k) > 1) dupes.add(p.n);
+  });
+  return dupes;
+}
+
 function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
@@ -6646,13 +6664,16 @@ function openInspector(s) {
           </div>
           ${(() => {
             const sortPos = computePortSortOrder(dev.ports);
+            const dupes = findDuplicatePortNs(dev.ports);
             return dev.ports.map((p) => {
               const cp = counterpartFor(s, dev.id, p.n);
               const lagInfo = findPortLag(s, dev.id, p.n);
               const lagBadge = lagInfo ? ` <span class="m002-port-lagtag" title="part of ${escAttr(lagInfo.lag.name)} (${escAttr(lagInfo.stack.name)})">→ ${escSvg(lagInfo.lag.name)}</span>` : '';
               const order = sortPos.get(p.n) ?? 0;
+              const dupeCls = dupes.has(p.n) ? ' is-duplicate' : '';
+              const dupeTitle = dupes.has(p.n) ? ' title="Duplicate port name — ignored"' : '';
               return `
-              <div class="m002-port-row" data-port-open="${p.n}" tabindex="0" style="order:${order}">
+              <div class="m002-port-row${dupeCls}" data-port-open="${p.n}" tabindex="0" style="order:${order}"${dupeTitle}>
                 <span class="m002-port-num">${p.n}</span>
                 <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="port name"/>
                 <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}${lagBadge}</span>
@@ -6716,6 +6737,18 @@ function openInspector(s) {
         else { hint.hidden = true; }
       }
     };
+    // Live duplicate-name detection: any port whose trimmed name collides
+    // with another port on this device gets the .is-duplicate class so the
+    // row glows red. Recomputes on every keystroke + on commit.
+    const refreshDupes = () => {
+      const dupes = findDuplicatePortNs(dev.ports);
+      body.querySelectorAll('[data-port-open]').forEach((row) => {
+        const isDupe = dupes.has(Number(row.dataset.portOpen));
+        row.classList.toggle('is-duplicate', isDupe);
+        if (isDupe) row.title = 'Duplicate port name — ignored';
+        else if (row.title === 'Duplicate port name — ignored') row.removeAttribute('title');
+      });
+    };
     body.querySelectorAll('[data-port]').forEach((el) => {
       el.addEventListener('input', () => {
         const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
@@ -6724,6 +6757,7 @@ function openInspector(s) {
         // Counterpart text in this row stays the same; redraw link labels
         s.links.filter((l) => (l.from === dev.id && Number(l.fromPort) === p.n) || (l.to === dev.id && Number(l.toPort) === p.n))
               .forEach((l) => redrawLink(s, l));
+        if (el.dataset.pf === 'name') refreshDupes();
         schedSave(s);
         refreshDetailViewIfSettled(s);
       });
@@ -6738,6 +6772,7 @@ function openInspector(s) {
             el.value = dev.portPrefix;
             p.name = dev.portPrefix;
             try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+            refreshDupes();
             schedSave(s);
             refreshDetailViewIfSettled(s);
           }
@@ -6757,6 +6792,7 @@ function openInspector(s) {
             refreshDetailViewIfSettled(s);
           }
           reflowPortTable();
+          refreshDupes();
           schedSave(s);
         });
       }
@@ -7809,6 +7845,16 @@ function openPortModal(s, deviceId, portN) {
     if (dev.portPrefix) { txt.textContent = dev.portPrefix; hint.hidden = false; }
     else { hint.hidden = true; }
   };
+  const refreshModalDupe = () => {
+    const input = body.querySelector('.m002-pmodal-name');
+    if (!input) return;
+    const dupes = findDuplicatePortNs(dev.ports);
+    const isDupe = dupes.has(portN);
+    input.classList.toggle('is-duplicate', isDupe);
+    if (isDupe) input.title = 'Duplicate port name — ignored';
+    else if (input.title === 'Duplicate port name — ignored') input.removeAttribute('title');
+  };
+  refreshModalDupe();
   body.querySelector('.m002-pmodal-name').addEventListener('focus', (e) => {
     if (!e.target.value && dev.portPrefix) {
       e.target.value = dev.portPrefix;
@@ -7816,6 +7862,7 @@ function openPortModal(s, deviceId, portN) {
       try { e.target.setSelectionRange(e.target.value.length, e.target.value.length); } catch {}
       const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
       if (row) row.value = port.name;
+      refreshModalDupe();
       schedSave(s);
       refreshDetailViewIfSettled(s);
     }
@@ -7827,6 +7874,7 @@ function openPortModal(s, deviceId, portN) {
           .forEach((l) => redrawLink(s, l));
     const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
     if (row) row.value = port.name;
+    refreshModalDupe();
     refreshDetailViewIfSettled(s);
   });
   body.querySelector('.m002-pmodal-name').addEventListener('change', (e) => {
@@ -7841,6 +7889,7 @@ function openPortModal(s, deviceId, portN) {
       refreshDetailViewIfSettled(s);
     }
     refreshModalPrefixHint();
+    refreshModalDupe();
     schedSave(s);
   });
   body.querySelector('[data-prefix-clear]')?.addEventListener('click', (ev) => {

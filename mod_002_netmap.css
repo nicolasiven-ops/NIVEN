@@ -413,6 +413,11 @@
 .m002-port-head-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;font-family:'Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 4px;order:-1;}
 .m002-port-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;cursor:pointer;padding:2px 4px;border:1px solid transparent;border-radius:2px;}
 .m002-port-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
+.m002-port-row.is-duplicate{background:rgba(255,0,60,0.14);border-color:#ff003c;animation:m002-dupe-pulse 1.6s ease-in-out infinite;}
+.m002-port-row.is-duplicate input{border-color:#ff003c;color:#ff5a78;}
+.m002-port-row.is-duplicate .m002-port-num{color:#ff5a78;}
+.m002-pmodal-name.is-duplicate{border-color:#ff003c !important;color:#ff5a78;animation:m002-dupe-pulse 1.6s ease-in-out infinite;}
+@keyframes m002-dupe-pulse{0%,100%{box-shadow:0 0 4px rgba(255,0,60,0.45);}50%{box-shadow:0 0 12px rgba(255,0,60,0.85);}}
 .m002-port-num{font-family:'Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;text-align:left;}
 .m002-port-row input{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:3px 6px;font-size:11px;font-family:'Share Tech Mono',monospace;outline:none;}
 .m002-port-row input:focus{border-color:#ff003c;}
