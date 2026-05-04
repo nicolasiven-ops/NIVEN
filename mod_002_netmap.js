@@ -1807,33 +1807,46 @@ function buildDOM(s) {
   // The dblclick handler above still gets the *bg* exit because [data-detail-stop]
   // sits on both ports and the device, so neither single-click bubbles into bg.
   detailOverlay?.addEventListener('click', (e) => {
+    // 1. Peer-tile click — Streetview hop to the peer device.
+    const peerEl = e.target.closest('[data-detail-peer-id]');
+    if (peerEl && s.detailDeviceId) {
+      const peerId = peerEl.dataset.detailPeerId;
+      hopToPeer(s, peerId, peerEl);
+      return;
+    }
+    // 2. Peer-link click — select the underlying link (same behaviour as
+    //    clicking a wire on the main grid). Visually mark the line as
+    //    selected within the overlay too, since markSelected() targets
+    //    s.gLinks and won't reach the overlay's standalone link element.
+    const linkEl = e.target.closest('[data-detail-link]');
+    if (linkEl && s.detailDeviceId) {
+      const linkId = linkEl.dataset.detailLink;
+      detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
+      linkEl.classList.add('m002-selected');
+      detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
+      select(s, 'link', linkId);
+      return;
+    }
+    // 3. Port click — highlight the port and open it in the inspector
+    //    (port modal). Peer navigation lives on the peer-tile now, so the
+    //    port itself is purely a "show me this port's detail" affordance.
     const portEl = e.target.closest('[data-detail-port]');
     if (portEl && s.detailDeviceId) {
       const portN = Number(portEl.dataset.detailPort);
       if (!Number.isFinite(portN)) return;
-      // Streetview-style hop: clicking a port whose peer is itself a
-      // navigable element (switch / router / firewall / cloud / JUMP — i.e.
-      // anything that isn't an endpoint) flies the camera over and re-roots
-      // the detail view on that peer. Endpoint peers and empty ports keep
-      // the existing behaviour (open port modal in the inspector).
-      const dev = s.devices.find((d) => d.id === s.detailDeviceId);
-      const info = dev ? classifyDetailPort(s, dev, portN) : null;
-      const peer = info?.peer;
-      if (peer && peer.type !== 'endpoint') {
-        detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
-        detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
-        portEl.classList.add('is-selected');
-        hopToPeer(s, peer.id, portEl);
-        return;
-      }
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
       detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
       portEl.classList.add('is-selected');
       openPortModal(s, s.detailDeviceId, portN);
       return;
     }
+    // 4. Central-device click — drop port focus, reselect the central
+    //    element so the inspector shows device-level info.
     if (e.target.closest('.m002-detail-device') && s.detailDeviceId) {
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+      detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
       detailOverlay.querySelector('.m002-detail-device')?.classList.add('is-selected');
       if (s.portModalOpen) closePortModal(s);
     }
@@ -9256,17 +9269,28 @@ function classifyDetailPort(s, dev, portN) {
     (l.from === dev.id && Number(l.fromPort) === portN) ||
     (l.to === dev.id && Number(l.toPort) === portN)
   );
-  if (!link) return { kind: 'access', occupied: false, peer: null };
+  if (!link) return { kind: 'access', occupied: false, peer: null, link: null };
   const peerId = link.from === dev.id ? link.to : link.from;
   const peer = s.devices.find((d) => d.id === peerId) || null;
   const isUplink = peer && peer.type !== 'endpoint';
-  return { kind: isUplink ? 'uplink' : 'access', occupied: true, peer };
+  return { kind: isUplink ? 'uplink' : 'access', occupied: true, peer, link };
 }
 
 const DETAIL = {
   port: { w: 44, h: 52 },
   gap: 6,
   device: { w: 720, h: 180 },
+  // Peer-tile size and spacing for the row of "neighbour switches" rendered
+  // above the central element. Same dimensions as a grid device tile so the
+  // CSS classes (.m002-dev-bg / -type / -name / -notes / -ip) inherit
+  // identical typography and proportions — the user gets the same
+  // "this is a switch" visual language inside the detail view.
+  peer: { w: 144, h: 96 },
+  peerGap: 28,
+  // Vertical breathing room between the peer-tile row and the uplink-port
+  // row. Long enough that a Z-bend in the connecting link reads cleanly,
+  // short enough that the eye still groups the peer with its port.
+  peerLinkGap: 64,
   vgap: 32,
   pad: 48,
   maxCols: 24,
@@ -9300,6 +9324,17 @@ function renderDetailBody(s, dev, t) {
   const uplinks = cls.filter((c) => c.info.kind === 'uplink');
   const access  = cls.filter((c) => c.info.kind === 'access');
 
+  // Unique peer devices among the uplinks, in port-order — the leftmost
+  // uplink port's peer becomes the leftmost peer-tile, which keeps the
+  // connecting links from criss-crossing in the common case (LAG'd ports go
+  // to the same peer, so they group naturally).
+  const peerOrder = [];
+  const peerSeen = new Set();
+  uplinks.forEach((c) => {
+    const peer = c.info.peer;
+    if (peer && !peerSeen.has(peer.id)) { peerSeen.add(peer.id); peerOrder.push(peer); }
+  });
+
   const D = DETAIL;
   const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
   const upCount = Math.min(D.maxCols, uplinks.length);
@@ -9307,26 +9342,42 @@ function renderDetailBody(s, dev, t) {
   const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
   const upW     = rowW(upCount);
   const acW     = access.length ? rowW(acCols) : 0;
-  const innerW  = Math.max(D.device.w, upW, acW);
+  const peerCount = peerOrder.length;
+  const peerRowW  = peerCount ? peerCount * D.peer.w + (peerCount - 1) * D.peerGap : 0;
+  const innerW  = Math.max(D.device.w, peerRowW, upW, acW);
   const totalW  = innerW + D.pad * 2;
 
-  // Stub line length and the matching padding so the stub never overflows the
-  // viewBox. Defined here (above the layout math) so the totalH calculation
-  // can grow the page when sections are present.
+  // Downward stub length for access ports (which still terminate at unrendered
+  // endpoints). Uplink ports no longer carry an upward stub — the connection
+  // is drawn explicitly as a link path to the peer-tile above.
   const STUB_LEN = (D.vgap - 8) * 5;
   const stubPad  = STUB_LEN + 12;
-  const upPad    = uplinks.length ? Math.max(D.pad, stubPad) : D.pad;
+  const upPad    = D.pad;
   const dnPad    = access.length  ? Math.max(D.pad, stubPad) : D.pad;
 
-  const upRowH  = uplinks.length ? D.port.h + D.vgap : 0;
-  const acRowsH = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
-  const totalH  = upPad + upRowH + D.device.h + acRowsH + dnPad;
+  const peerRowH = peerCount ? D.peer.h + D.peerLinkGap : 0;
+  const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
+  const acRowsH  = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
+  const totalH   = upPad + peerRowH + upRowH + D.device.h + acRowsH + dnPad;
 
   const cx     = totalW / 2;
   const devX   = cx - D.device.w / 2;
-  const devY   = upPad + upRowH;
-  const upY    = upPad;
+  const peerRowTopY = upPad;
+  const peerCenterY = peerRowTopY + D.peer.h / 2;
+  const upY    = peerRowTopY + peerRowH;
+  const devY   = upY + upRowH;
   const acStartY = devY + D.device.h + D.vgap;
+
+  // Peer-tile center positions, keyed by peer.id, so the link router can
+  // resolve "which tile does this uplink point at" in O(1).
+  const peerPos = new Map();
+  if (peerCount) {
+    const startX = cx - peerRowW / 2;
+    peerOrder.forEach((peer, i) => {
+      const pcx = startX + D.peer.w / 2 + i * (D.peer.w + D.peerGap);
+      peerPos.set(peer.id, { cx: pcx, cy: peerCenterY });
+    });
+  }
 
   // Per-port enter delay (animation cascade). Element finishes around 1000ms,
   // then ports stagger every PORT_STAGGER_MS. Stubs derive their delay from
@@ -9357,16 +9408,16 @@ function renderDetailBody(s, dev, t) {
       labelSvg += `<text class="m002-detail-port-name" x="${D.port.w / 2}" y="${D.port.h / 2 + 4}" text-anchor="middle">${escSvg(trimmed)}</text>`;
     }
 
-    // Stub: only on occupied ports. Drawn behind the box (via SVG order).
+    // Stub: only on occupied access ports — those terminate at endpoints
+    // we don't render, so the gradient stub stands in for the unseen peer.
+    // Uplink ports get a real <path> link to a real peer-tile instead, so
+    // the upward stub is intentionally suppressed here to avoid drawing
+    // two visuals for the same connection.
     let stubSvg = '';
-    if (occ) {
+    if (occ && dir === 'down') {
       const stubW = 1.4;
       const stubX = D.port.w / 2 - stubW / 2;
-      if (dir === 'up') {
-        stubSvg = `<rect class="m002-detail-stub" x="${stubX}" y="${-STUB_LEN}" width="${stubW}" height="${STUB_LEN}" fill="url(#m002-stub-up)"/>`;
-      } else {
-        stubSvg = `<rect class="m002-detail-stub" x="${stubX}" y="${D.port.h}" width="${stubW}" height="${STUB_LEN}" fill="url(#m002-stub-down)"/>`;
-      }
+      stubSvg = `<rect class="m002-detail-stub" x="${stubX}" y="${D.port.h}" width="${stubW}" height="${STUB_LEN}" fill="url(#m002-stub-down)"/>`;
     }
 
     const enterDelay = PORT_BASE_DELAY + portIndex * PORT_STAGGER_MS;
@@ -9429,6 +9480,75 @@ function renderDetailBody(s, dev, t) {
     </g>
   `;
 
+  // Peer-link paths — drawn before the peer-tiles and before the uplink ports
+  // so both visual endpoints (the tile bottom-edge and the port top-edge)
+  // paint over the line termini. Each occupied uplink port resolves to one
+  // peer-tile; multiple ports → same peer (LAG) produce parallel lines that
+  // converge at the same tile-bottom, which reads naturally as "this is a
+  // bonded pair". The path is a simple Z (down → across → down) — no
+  // obstacle avoidance needed because the detail-view layout is fixed and
+  // nothing else lives in the gap between tile-row and port-row.
+  const peerLinkSvgs = [];
+  if (uplinks.length) {
+    const portStartX = cx - upW / 2;
+    uplinks.slice(0, D.maxCols).forEach((c, i) => {
+      const peer = c.info.peer;
+      const linkObj = c.info.link;
+      const tilePos = peer ? peerPos.get(peer.id) : null;
+      if (!peer || !tilePos || !linkObj) return;
+      const portCx = portStartX + i * (D.port.w + D.gap) + D.port.w / 2;
+      const portTopY = upY;
+      const tileBottomY = tilePos.cy + D.peer.h / 2;
+      const tileCx = tilePos.cx;
+      const midY = (tileBottomY + portTopY) / 2;
+      const d = `M ${portCx} ${portTopY} V ${midY} H ${tileCx} V ${tileBottomY}`;
+      const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
+      // Stripe colour: VLAN-tinted if the port carries one, otherwise the
+      // device's accent — same precedence as the port stripe right below.
+      const firstV = (c.p.vlans || [])[0];
+      const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
+      // Two layered <path>s — invisible thick hit-area + visible thin line —
+      // mirrors how the grid does it (.m002-link-hit + .m002-link-line),
+      // so existing CSS for hover / selected lights up automatically.
+      peerLinkSvgs.push(
+        `<g class="m002-link m002-detail-peer-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
+          <path class="m002-link-hit" d="${d}"/>
+          <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
+        </g>`
+      );
+    });
+  }
+  inner += peerLinkSvgs.join('');
+
+  // Peer-tile row — one tile per unique uplink-peer device. The markup
+  // mirrors drawDevice() for a regular grid device so the existing
+  // .m002-dev-bg / -type / -name / -notes / -ip CSS picks them up
+  // unchanged, including the per-type accent via the --accent custom
+  // property. Inner wrapper exists for the hop morph (WAAPI on
+  // .m002-detail-peer-inner translates + scales without disturbing the
+  // outer's SVG translate that places the tile in the row).
+  if (peerCount) {
+    peerOrder.forEach((peer) => {
+      const pos = peerPos.get(peer.id);
+      const pt = typeOf(peer.type);
+      const w = D.peer.w, h = D.peer.h;
+      const isSel = s.selected?.kind === 'device' && s.selected.id === peer.id;
+      const ipText = peer.ip ? escSvg(peer.ip) : '';
+      const notesText = escSvg(truncate(peer.notes || '', 18) || '—');
+      inner += `
+        <g class="m002-detail-peer ${isSel ? 'is-selected' : ''}" data-detail-peer-id="${escAttr(peer.id)}" data-detail-stop="1" transform="translate(${pos.cx} ${pos.cy})" style="--accent:${pt.accent}">
+          <g class="m002-detail-peer-inner">
+            <rect class="m002-dev-bg" x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="3"/>
+            <text class="m002-dev-type" x="${-w / 2 + 10}" y="${-h / 2 + 18}">${pt.label}</text>
+            <text class="m002-dev-name" x="${-w / 2 + 10}" y="${-h / 2 + 40}">${escSvg(peer.name || '')}</text>
+            <text class="m002-dev-notes" x="${-w / 2 + 10}" y="${h / 2 - 10}">${notesText}</text>
+            ${ipText ? `<text class="m002-dev-ip" x="${w / 2 - 10}" y="${h / 2 - 10}" text-anchor="end">${ipText}</text>` : ''}
+          </g>
+        </g>
+      `;
+    });
+  }
+
   // Uplink row (centered above device)
   if (uplinks.length) {
     const startX = cx - upW / 2;
@@ -9483,15 +9603,18 @@ function animateView(s, target, durationMs) {
 
 // =============================================================================
 // HOP — Streetview-style navigation between switches inside Detail View.
-// Click an uplink port (peer is a switch / router / firewall / cloud / JUMP)
-// and the view "hops" to that peer:
-//   Phase 1 (HOP_FADE_MS) — every port + the central device fade away; the
-//     clicked port stays visible.
-//   Phase 2 (HOP_FLY_MS) — the surviving port flies to the centre and scales
-//     up to ~switch-card size, "becoming" the new central element.
+// Click a peer-tile in the row above the central element and the view
+// "hops" to that peer:
+//   Phase 1 (HOP_FADE_MS) — every port + every other peer-tile + the central
+//     device + every connecting link fades away; the clicked peer-tile stays
+//     visible.
+//   Phase 2 (HOP_FLY_MS) — the surviving peer-tile flies down to the centre
+//     and scales up to roughly the central element's height, "becoming" the
+//     new central element.
 //   Phase 3 — detailDeviceId swaps to the peer, the body re-renders, and the
 //     standard entry choreography replays automatically (the new device tile
-//     emerges at the centre, ports cascade in around it).
+//     emerges at the centre, the new neighbour-row + links + ports cascade
+//     in around it).
 // The camera tween runs in parallel so when the user exits later, exit still
 // returns them to the original pre-detail viewport (s._viewBeforeDetail is
 // NOT overwritten on hop).
@@ -9499,15 +9622,15 @@ function animateView(s, target, durationMs) {
 const HOP_FADE_MS = 240;
 const HOP_FLY_MS  = 460;
 
-function hopToPeer(s, peerId, fromPortEl) {
+function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
   if (s._detailHopActive) return;
   const peer = s.devices.find((d) => d.id === peerId);
   if (!peer) return;
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (!overlay) return;
-  const portEl = fromPortEl || overlay.querySelector('.m002-detail-port.is-selected');
-  if (!portEl) return;
+  const tileEl = fromEl || overlay.querySelector(`[data-detail-peer-id="${peerId}"]`);
+  if (!tileEl) return;
   const deviceEl = overlay.querySelector('.m002-detail-device');
   if (!deviceEl) return;
 
@@ -9520,36 +9643,36 @@ function hopToPeer(s, peerId, fromPortEl) {
   // hold (settled forces transform:none / opacity:1 with !important).
   overlay.classList.remove('m002-detail-overlay-settled');
 
-  // Geometry — convert the port → device translation into the SVG's user
-  // coordinate system using the bounding rects in screen space, then divide
-  // by the SVG's actual screen scale. CSS transforms on SVG elements use the
-  // SVG user-coordinate system, so we need the translation in user units.
-  const portRect = portEl.getBoundingClientRect();
+  // Geometry — translate the peer-tile centre to the central-device centre,
+  // expressed in the SVG's user coordinate system. CSS transforms on SVG
+  // elements use user units (not screen pixels), so we divide the screen-px
+  // delta by the SVG's effective scale. The peer-tile's screen width over
+  // its intrinsic width (DETAIL.peer.w = 144) gives that scale directly.
+  const tileRect = tileEl.getBoundingClientRect();
   const deviceRect = deviceEl.getBoundingClientRect();
-  const portCx = portRect.left + portRect.width / 2;
-  const portCy = portRect.top  + portRect.height / 2;
+  const tileCx = tileRect.left + tileRect.width / 2;
+  const tileCy = tileRect.top  + tileRect.height / 2;
   const deviceCx = deviceRect.left + deviceRect.width / 2;
   const deviceCy = deviceRect.top  + deviceRect.height / 2;
-  // Screen→user scale: the SVG is rendered at width/height set on the element,
-  // but CSS may scale it via max-width:100%. Use the ratio of screen width to
-  // the port's intrinsic width (DETAIL.port.w = 44).
-  const screenScale = portRect.width / DETAIL.port.w;
-  const dxUser = (deviceCx - portCx) / screenScale;
-  const dyUser = (deviceCy - portCy) / screenScale;
-  // Target scale: grow the port to ~85% of the device's vertical height.
-  // Uniform — distorting a 44×52 box into 720×180 would mangle the label.
-  const targetScale = (DETAIL.device.h / DETAIL.port.h) * 0.85;
+  const screenScale = tileRect.width / DETAIL.peer.w;
+  const dxUser = (deviceCx - tileCx) / screenScale;
+  const dyUser = (deviceCy - tileCy) / screenScale;
+  // Target scale: grow the peer-tile until its height matches roughly the
+  // central element's height. 144→ ~270 wide, 96→180 tall. Anything larger
+  // would mean the surviving tile briefly overshoots the central footprint
+  // before the new body re-renders, which reads as a visual hiccup.
+  const targetScale = DETAIL.device.h / DETAIL.peer.h;
 
-  // Phase 1+2: classes + WAAPI morph on the surviving port.
+  // Phase 1+2: classes + WAAPI morph on the surviving peer-tile.
   overlay.classList.add('m002-detail-hop');
-  portEl.classList.add('m002-detail-hopper');
+  tileEl.classList.add('m002-detail-hopper');
   // Boost the survivor's z-order so the morph happens over (not under) the
   // fading device tile. SVG paints in document order, so move the element
   // to the end of its parent.
-  const portParent = portEl.parentNode;
-  if (portParent && portEl.nextSibling) portParent.appendChild(portEl);
+  const tileParent = tileEl.parentNode;
+  if (tileParent && tileEl.nextSibling) tileParent.appendChild(tileEl);
 
-  const inner = portEl.querySelector('.m002-detail-port-inner');
+  const inner = tileEl.querySelector('.m002-detail-peer-inner');
 
   const launchHop = () => {
     if (reduceMotion || !inner || typeof inner.animate !== 'function') {
