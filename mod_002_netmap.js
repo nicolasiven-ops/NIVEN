@@ -6937,8 +6937,33 @@ function onL3DeviceFieldChanged(s, dev) {
 }
 
 function updateLinkField(s, link, el) {
-  link[el.dataset.f] = el.value;
+  const field = el.dataset.f;       // 'fromPort' | 'toPort'
+  const newVal = el.value;
+  link[field] = newVal;
+  // Port-conflict resolution: a port can only carry one link at a time. When
+  // the user re-assigns a port that another link is already wired into, that
+  // other link must release the port (set its matching side to '') so the
+  // picker stops showing it as "still wired" and the canvas stops rendering
+  // a phantom line into the now-stolen port. Empty values skip — clearing a
+  // port doesn't conflict with anyone.
+  const stolenLinks = [];
+  if (newVal) {
+    const deviceId = field === 'fromPort' ? link.from : link.to;
+    const portN = Number(newVal);
+    s.links.forEach((l) => {
+      if (l === link) return;
+      if (l.from === deviceId && Number(l.fromPort) === portN) {
+        l.fromPort = '';
+        stolenLinks.push(l);
+      }
+      if (l.to === deviceId && Number(l.toPort) === portN) {
+        l.toPort = '';
+        stolenLinks.push(l);
+      }
+    });
+  }
   redrawLink(s, link);
+  stolenLinks.forEach((l) => redrawLink(s, l));
   schedSave(s);
   // Live-refresh: the VLAN picker and the link summary depend on the new port
   // selection, so rebuild the inspector. Deferred via rAF so the browser's
