@@ -57,16 +57,10 @@ import {
   openRadialMenu,
 } from './mod_002_radial.js';
 
-// Wire migrate + toast into the persistence module, and the assorted callbacks
-// + DEVICE_TYPES getter into the radial module. All injected references are
-// either function declarations (hoisted) or read lazily from getters
-// (DEVICE_TYPES is a const lower in the file → TDZ-safe via the getter).
-configurePersistence({ migrate, toast });
-configureRadial({
-  clientToWorld, toggleLinkMode, toggleDeleteMode, undo,
-  spawnDeviceAt, switchZone, escAttr, escSvg,
-  getDeviceTypes: () => DEVICE_TYPES,
-});
+// Cross-module wiring lives inside mount() to keep this top-level free of
+// any code path that could throw and prevent registerModule from running.
+// (See bottom of file: registerModule MUST execute or the runtime shows
+// "NO RUNTIME — module has no interface registered".)
 
 const MODULE_CODE = 'MOD_002';
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1329,6 +1323,19 @@ const LANE_GAP = 14;
 let state = null;
 
 async function mount(stage, ctx) {
+  // Wire cross-module deps before any persistence/radial code runs. Wrapped
+  // in try/catch so a malformed callback can't take the whole module down
+  // — registerModule has already fired by the time we get here.
+  try {
+    configurePersistence({ migrate, toast });
+    configureRadial({
+      clientToWorld, toggleLinkMode, toggleDeleteMode, undo,
+      spawnDeviceAt, switchZone, escAttr, escSvg,
+      getDeviceTypes: () => DEVICE_TYPES,
+    });
+  } catch (e) {
+    console.warn('[m002] dep wiring failed', e);
+  }
   state = createState(stage, ctx);
   buildDOM(state);
   bindBoard(state);
