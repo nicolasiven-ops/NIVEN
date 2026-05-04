@@ -1177,3 +1177,13 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 /* Inspector + ports-grid scrollbar thumb — cream tan instead of dark grey */
 .m002-host[data-grid-style="sketch"] .m002-inspector::-webkit-scrollbar-thumb,
 .m002-host[data-grid-style="sketch"] .m002-ports-grid::-webkit-scrollbar-thumb{background:#c8c2b0 !important;}
+/* Stack inspector — MEMBERS list rows. Dark panel + neon accent tag still
+   showed up in the otherwise-sketch'd Stack inspector. (.m002-stack-member is
+   re-used as a class on both the canvas device tile AND this list row — these
+   selectors are scoped to the list parent so only the panel rows recolour.) */
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member{background:#fefcf6 !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member-dot{box-shadow:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member-name{color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member-type{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member button{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member button:hover{color:#c44b3c !important;}
