@@ -1049,7 +1049,7 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
    hover. Keep the device-picker --accent tinting (it's already per-type) but
    soften it onto the cream substrate. */
 .m002-host[data-grid-style="sketch"] .m002-radial{filter:drop-shadow(0 4px 14px rgba(0,0,0,0.18)) !important;}
-.m002-host[data-grid-style="sketch"] .m002-rad-bg{fill:rgba(254,252,246,0.96) !important;stroke:#c8c2b0 !important;stroke-width:1 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-bg{fill:rgba(254,252,246,0.96) !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-core{fill:#fefcf6 !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-core-label{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-seg-path{fill:rgba(254,252,246,0.92) !important;stroke:#c8c2b0 !important;stroke-width:1 !important;}
