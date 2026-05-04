@@ -5124,6 +5124,51 @@ function portLabel(dev, portN) {
   return p.name || String(p.n);
 }
 
+// Natural compare for LAG names so "Po2" sorts between "Po1" and "Po10"
+// instead of lexicographic Po1/Po10/Po2/Po5. Splits each name into runs of
+// digits vs non-digits and compares run-by-run.
+function naturalCompareName(a, b) {
+  const ax = String(a ?? '').match(/(\d+|\D+)/g) || [];
+  const bx = String(b ?? '').match(/(\d+|\D+)/g) || [];
+  const n = Math.min(ax.length, bx.length);
+  for (let i = 0; i < n; i++) {
+    const an = /^\d+$/.test(ax[i]) ? Number(ax[i]) : null;
+    const bn = /^\d+$/.test(bx[i]) ? Number(bx[i]) : null;
+    if (an !== null && bn !== null) {
+      if (an !== bn) return an - bn;
+    } else {
+      const c = ax[i].localeCompare(bx[i], undefined, { sensitivity: 'base' });
+      if (c) return c;
+    }
+  }
+  return ax.length - bx.length;
+}
+
+function sortLagsInStack(stack) {
+  if (!stack || !Array.isArray(stack.lags)) return;
+  stack.lags.sort((a, b) => naturalCompareName(a?.name, b?.name));
+}
+
+// Auto-Prefix port naming: the user types a full port name once
+// (e.g. "eth1/1/1") and then for sibling ports types only the trailing
+// digit ("5") — we expand it back to "eth1/1/5" using the device's
+// learned prefix. Triggered on commit (change/blur), not on every
+// keystroke, so editing mid-string isn't disrupted.
+//   • Pure-digit input + known dev.portPrefix → expand.
+//   • Anything ending in <text><digits>            → learn prefix.
+// Returns the final string the input should display.
+function commitAutoPrefixPortName(dev, raw) {
+  let v = String(raw ?? '');
+  if (/^\d+$/.test(v.trim()) && dev.portPrefix) {
+    v = dev.portPrefix + v.trim();
+  }
+  const m = v.match(/^(.+?)(\d+)$/);
+  if (m && m[1]) {
+    dev.portPrefix = m[1];
+  }
+  return v;
+}
+
 function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
@@ -6182,6 +6227,7 @@ function resolveOrCreateLag(stack, lagId, defaultName) {
     vlans: [],
   };
   stack.lags.push(newLag);
+  sortLagsInStack(stack);
   return newLag;
 }
 
@@ -6637,6 +6683,23 @@ function openInspector(s) {
         schedSave(s);
         refreshDetailViewIfSettled(s);
       });
+      // Auto-prefix expansion fires on commit, not keystroke — typing "5" on
+      // a sibling port becomes "eth1/1/5" once the user blurs/Enters out.
+      if (el.dataset.pf === 'name') {
+        el.addEventListener('change', () => {
+          const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
+          if (!p) return;
+          const expanded = commitAutoPrefixPortName(dev, el.value);
+          if (expanded !== el.value) {
+            el.value = expanded;
+            p.name = expanded;
+            s.links.filter((l) => (l.from === dev.id && Number(l.fromPort) === p.n) || (l.to === dev.id && Number(l.toPort) === p.n))
+                  .forEach((l) => redrawLink(s, l));
+            refreshDetailViewIfSettled(s);
+          }
+          schedSave(s);
+        });
+      }
       // Don't open the port modal when the user clicks INTO the input
       el.addEventListener('click', (ev) => ev.stopPropagation());
     });
@@ -7676,6 +7739,19 @@ function openPortModal(s, deviceId, portN) {
     if (row) row.value = port.name;
     refreshDetailViewIfSettled(s);
   });
+  body.querySelector('.m002-pmodal-name').addEventListener('change', (e) => {
+    const expanded = commitAutoPrefixPortName(dev, e.target.value);
+    if (expanded !== e.target.value) {
+      e.target.value = expanded;
+      port.name = expanded;
+      s.links.filter((l) => (l.from === deviceId && Number(l.fromPort) === portN) || (l.to === deviceId && Number(l.toPort) === portN))
+            .forEach((l) => redrawLink(s, l));
+      const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
+      if (row) row.value = port.name;
+      refreshDetailViewIfSettled(s);
+    }
+    schedSave(s);
+  });
 
   body.querySelector('[data-pact="unlink"]')?.addEventListener('click', () => {
     if (!link) return;
@@ -7798,6 +7874,7 @@ function openLagModal(s, stackId, lagId) {
     } else {
       stack.lags.push({ id: 'lag_' + rid(), name, ports, vlans: [] });
     }
+    sortLagsInStack(stack);
     closeLagModal(s);
     schedSave(s);
     render(s);
@@ -9553,6 +9630,7 @@ function migrate(s) {
       }
     });
     st.lags = st.lags.filter((lag) => lag.ports.length > 0);
+    sortLagsInStack(st);
   });
   // Sanity-check Jump couples: must point at a live Jump in a different zone,
   // and must be mutual.
