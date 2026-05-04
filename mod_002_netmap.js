@@ -8318,6 +8318,22 @@ function vfxSuppressFilters(el) {
   el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = 'none'; });
 }
 
+// Drops the inline filter overrides so the natural CSS-defined drop-shadow
+// returns. Used at the end of a build to restore the steady-state halo.
+// Strips the empty style attribute so the next vfxSnapshot's innerHTML
+// digest matches the unmodified DOM (otherwise a leftover style="" drags
+// the element into the persisting-changed branch on the next layer toggle).
+function vfxRestoreFilters(el) {
+  el.style.filter = '';
+  vfxStripEmptyStyle(el);
+  el.querySelectorAll('*').forEach((n) => {
+    if (n instanceof SVGElement) {
+      n.style.filter = '';
+      vfxStripEmptyStyle(n);
+    }
+  });
+}
+
 // Setting individual style properties to '' empties them, but Firefox keeps
 // an empty `style=""` attribute on the element. The next vfxSnapshot reads
 // el.innerHTML, where `style=""` vs no style attribute serializes
@@ -8754,12 +8770,18 @@ function vfxAnimateView(s, doRender, anchor) {
   // Wrapper opacity is left to CSS; the dasharray + inline fades inside
   // vfxApplyDrain make the new element invisible at frame 0 (gap = full
   // perimeter, fillOpacity = 0, text opacity = 0) and grow it back in.
+  // Filters are suppressed during the build for the same reason drain
+  // clones suppress them — drop-shadow blur radius is fixed, so a half-
+  // built wall would project a full-size halo aura while content is still
+  // ramping up. Restored in finish() so the steady-state CSS halo returns
+  // when the wall is fully built.
   const builds = [];
   for (const [key, entry] of after) {
     if (before.has(key)) continue;
     const newEl = entry.el;
     const parts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (parts.shapes.length === 0 && parts.fades.length === 0) continue;
+    vfxSuppressFilters(newEl);
     builds.push({ el: newEl, parts });
   }
 
@@ -8790,10 +8812,12 @@ function vfxAnimateView(s, doRender, anchor) {
 
     // Build up the NEW look on the underlying real element. Same machinery
     // as fresh-entry builds — wrapper opacity stays at CSS target; dasharray
-    // + inline fades grow the element into view.
+    // + inline fades grow the element into view; filters suppressed until
+    // the build completes (avoids halo aura on partially-rendered content).
     const newEl = newEntry.el;
     const buildParts = vfxCollectAnimatables(newEl, buildAnchor, 'build');
     if (buildParts.shapes.length > 0 || buildParts.fades.length > 0) {
+      vfxSuppressFilters(newEl);
       builds.push({ el: newEl, parts: buildParts });
     }
   }
@@ -8816,6 +8840,7 @@ function vfxAnimateView(s, doRender, anchor) {
     for (const d of drains) d.clone.remove();
     for (const b of builds) {
       vfxResetInlineParts(b.parts);
+      vfxRestoreFilters(b.el);
     }
     if (s._vfxFinish === finish) s._vfxFinish = null;
   }
