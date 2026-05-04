@@ -5169,6 +5169,25 @@ function commitAutoPrefixPortName(dev, raw) {
   return v;
 }
 
+// Sort order for the port-table display: ports with names land in
+// natural-numeric order on the name; empty-name ports drop to the end
+// in physical-port-number order. Returns Map<port.n, sortIndex>.
+// dev.ports stays untouched — sorting is applied via CSS flex `order`
+// so live focus/listeners survive a name commit without DOM rebuild.
+function computePortSortOrder(ports) {
+  const sorted = (ports || []).slice().sort((a, b) => {
+    const aEmpty = !a?.name;
+    const bEmpty = !b?.name;
+    if (aEmpty && bEmpty) return (a?.n || 0) - (b?.n || 0);
+    if (aEmpty) return 1;
+    if (bEmpty) return -1;
+    return naturalCompareName(a.name, b.name) || (a.n - b.n);
+  });
+  const m = new Map();
+  sorted.forEach((p, i) => m.set(p.n, i));
+  return m;
+}
+
 function drawLink(s, link) {
   const a = s.devices.find((d) => d.id === link.from);
   const b = s.devices.find((d) => d.id === link.to);
@@ -6616,21 +6635,30 @@ function openInspector(s) {
       </div>
       <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
+        <div class="m002-ports-prefix" data-prefix-display${dev.portPrefix ? '' : ' hidden'}>
+          <span class="m002-ports-prefix-label">auto-prefix</span>
+          <code class="m002-ports-prefix-val" data-prefix-text>${escSvg(dev.portPrefix || '')}</code>
+          <button type="button" class="m002-ports-prefix-clear" data-prefix-clear title="Reset prefix">✕</button>
+        </div>
         <div class="m002-ports-grid">
           <div class="m002-port-head-row">
             <span>#</span><span>PORT</span><span>COUNTERPART</span>
           </div>
-          ${dev.ports.map((p) => {
-            const cp = counterpartFor(s, dev.id, p.n);
-            const lagInfo = findPortLag(s, dev.id, p.n);
-            const lagBadge = lagInfo ? ` <span class="m002-port-lagtag" title="part of ${escAttr(lagInfo.lag.name)} (${escAttr(lagInfo.stack.name)})">→ ${escSvg(lagInfo.lag.name)}</span>` : '';
-            return `
-            <div class="m002-port-row" data-port-open="${p.n}" tabindex="0">
-              <span class="m002-port-num">${p.n}</span>
-              <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="port name"/>
-              <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}${lagBadge}</span>
-            </div>`;
-          }).join('')}
+          ${(() => {
+            const sortPos = computePortSortOrder(dev.ports);
+            return dev.ports.map((p) => {
+              const cp = counterpartFor(s, dev.id, p.n);
+              const lagInfo = findPortLag(s, dev.id, p.n);
+              const lagBadge = lagInfo ? ` <span class="m002-port-lagtag" title="part of ${escAttr(lagInfo.lag.name)} (${escAttr(lagInfo.stack.name)})">→ ${escSvg(lagInfo.lag.name)}</span>` : '';
+              const order = sortPos.get(p.n) ?? 0;
+              return `
+              <div class="m002-port-row" data-port-open="${p.n}" tabindex="0" style="order:${order}">
+                <span class="m002-port-num">${p.n}</span>
+                <input data-port="${p.n}" data-pf="name" value="${escAttr(p.name)}" placeholder="port name"/>
+                <span class="m002-port-counter ${cp ? '' : 'dim'}">${escSvg(cp || '—')}${lagBadge}</span>
+              </div>`;
+            }).join('');
+          })()}
         </div>
       </div>
       <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
@@ -6672,6 +6700,22 @@ function openInspector(s) {
     body.querySelectorAll('[data-pcount-step]').forEach((btn) => {
       btn.addEventListener('click', () => setPortCount(dev.ports.length + parseInt(btn.dataset.pcountStep, 10)));
     });
+    // After a name commit, push every row's CSS `order` to its new sort
+    // position and refresh the prefix hint row — no DOM rebuild, focus and
+    // listeners on every input survive intact.
+    const reflowPortTable = () => {
+      const sortPos = computePortSortOrder(dev.ports);
+      body.querySelectorAll('[data-port-open]').forEach((row) => {
+        const o = sortPos.get(Number(row.dataset.portOpen));
+        if (o != null) row.style.order = String(o);
+      });
+      const hint = body.querySelector('[data-prefix-display]');
+      const txt  = body.querySelector('[data-prefix-text]');
+      if (hint && txt) {
+        if (dev.portPrefix) { txt.textContent = dev.portPrefix; hint.hidden = false; }
+        else { hint.hidden = true; }
+      }
+    };
     body.querySelectorAll('[data-port]').forEach((el) => {
       el.addEventListener('input', () => {
         const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
@@ -6683,9 +6727,24 @@ function openInspector(s) {
         schedSave(s);
         refreshDetailViewIfSettled(s);
       });
-      // Auto-prefix expansion fires on commit, not keystroke — typing "5" on
-      // a sibling port becomes "eth1/1/5" once the user blurs/Enters out.
       if (el.dataset.pf === 'name') {
+        // Click-into-empty: pre-fill with the learned prefix immediately so
+        // the user types only the trailing number on top of the visible
+        // prefix, instead of relying on a silent post-blur expansion.
+        el.addEventListener('focus', () => {
+          if (!el.value && dev.portPrefix) {
+            const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
+            if (!p) return;
+            el.value = dev.portPrefix;
+            p.name = dev.portPrefix;
+            try { el.setSelectionRange(el.value.length, el.value.length); } catch {}
+            schedSave(s);
+            refreshDetailViewIfSettled(s);
+          }
+        });
+        // Auto-prefix expansion fires on commit, not keystroke — typing "5"
+        // on a sibling port becomes "eth1/1/5" once the user blurs/Enters
+        // out. The reflow updates row order + prefix hint.
         el.addEventListener('change', () => {
           const p = dev.ports.find((pp) => pp.n === Number(el.dataset.port));
           if (!p) return;
@@ -6697,11 +6756,19 @@ function openInspector(s) {
                   .forEach((l) => redrawLink(s, l));
             refreshDetailViewIfSettled(s);
           }
+          reflowPortTable();
           schedSave(s);
         });
       }
       // Don't open the port modal when the user clicks INTO the input
       el.addEventListener('click', (ev) => ev.stopPropagation());
+    });
+    body.querySelector('[data-prefix-clear]')?.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      dev.portPrefix = '';
+      const hint = body.querySelector('[data-prefix-display]');
+      if (hint) hint.hidden = true;
+      schedSave(s);
     });
     body.querySelectorAll('[data-port-open]').forEach((row) => {
       row.addEventListener('click', () => openPortModal(s, dev.id, Number(row.dataset.portOpen)));
@@ -7503,6 +7570,11 @@ function openPortModal(s, deviceId, portN) {
     <label class="m002-field"><span>PORT NAME</span>
       <input class="m002-pmodal-name" value="${escAttr(port.name)}" placeholder="e.g. GE0/0/1"/>
     </label>
+    <div class="m002-ports-prefix m002-ports-prefix--modal" data-prefix-display${dev.portPrefix ? '' : ' hidden'}>
+      <span class="m002-ports-prefix-label">auto-prefix</span>
+      <code class="m002-ports-prefix-val" data-prefix-text>${escSvg(dev.portPrefix || '')}</code>
+      <button type="button" class="m002-ports-prefix-clear" data-prefix-clear title="Reset prefix">✕</button>
+    </div>
     <div class="m002-field">
       <span>COUNTERPART</span>
       ${(() => {
@@ -7730,6 +7802,24 @@ function openPortModal(s, deviceId, portN) {
     openPortModal(s, deviceId, portN);
   });
 
+  const refreshModalPrefixHint = () => {
+    const hint = body.querySelector('[data-prefix-display]');
+    const txt  = body.querySelector('[data-prefix-text]');
+    if (!hint || !txt) return;
+    if (dev.portPrefix) { txt.textContent = dev.portPrefix; hint.hidden = false; }
+    else { hint.hidden = true; }
+  };
+  body.querySelector('.m002-pmodal-name').addEventListener('focus', (e) => {
+    if (!e.target.value && dev.portPrefix) {
+      e.target.value = dev.portPrefix;
+      port.name = dev.portPrefix;
+      try { e.target.setSelectionRange(e.target.value.length, e.target.value.length); } catch {}
+      const row = s.inspector.querySelector(`[data-port-open="${portN}"] [data-port="${portN}"][data-pf="name"]`);
+      if (row) row.value = port.name;
+      schedSave(s);
+      refreshDetailViewIfSettled(s);
+    }
+  });
   body.querySelector('.m002-pmodal-name').addEventListener('input', (e) => {
     port.name = e.target.value;
     schedSave(s);
@@ -7750,6 +7840,13 @@ function openPortModal(s, deviceId, portN) {
       if (row) row.value = port.name;
       refreshDetailViewIfSettled(s);
     }
+    refreshModalPrefixHint();
+    schedSave(s);
+  });
+  body.querySelector('[data-prefix-clear]')?.addEventListener('click', (ev) => {
+    ev.stopPropagation();
+    dev.portPrefix = '';
+    refreshModalPrefixHint();
     schedSave(s);
   });
 
