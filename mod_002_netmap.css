@@ -1083,3 +1083,92 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-rad-dot{fill:#3a3a35 !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-vline,
 .m002-host[data-grid-style="sketch"] .m002-rad-arc{stroke:#3a3a35 !important;}
+
+/* --- Subnet legend (Routing layer) --- cream rows, graphite ink, no glow.
+   Replaces the dark glass + neon-CIDR look that clashed with the cream panel. */
+.m002-host[data-grid-style="sketch"] .m002-subnet-row{background:#fefcf6 !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row:hover{border-color:#2a2a30 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row.is-solo{background:rgba(196,75,60,0.06) !important;border-color:#c44b3c !important;box-shadow:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row.is-solo .m002-subnet-row-dot{box-shadow:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-dot{box-shadow:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-cidr{color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-name{color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-name:focus{background:rgba(196,75,60,0.06) !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-rm{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-row-rm:hover{color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-empty{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-input{background:#fefcf6 !important;border-color:#c8c2b0 !important;color:#2a2a30 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-input:focus{border-color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-add-btn{background:#fefcf6 !important;border-color:#c44b3c !important;color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-add-btn:hover{background:rgba(196,75,60,0.08) !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-auto{border-color:#c8c2b0 !important;color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-subnet-legend-auto:hover{border-color:#c44b3c !important;color:#c44b3c !important;}
+/* VLAN-legend "SOLO · N" filter banner — cream tint instead of neon-red field. */
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-filter{background:rgba(196,75,60,0.06) !important;border-color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-filter-label{color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-clear{background:#fefcf6 !important;border-color:#c44b3c !important;color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-clear:hover{background:rgba(196,75,60,0.12) !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-empty{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row-id{color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row-name{color:#3a3a35 !important;background:transparent !important;}
+
+/* --- Inspector internals (right panel) --- cream rows, graphite text. */
+/* DETAILS collapsible header */
+.m002-host[data-grid-style="sketch"] .m002-insp-details{background:rgba(254,252,246,0.6) !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-details>summary{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-details>summary::before{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-details[open]>summary{color:#c44b3c !important;border-bottom-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-details[open]>summary::before{color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-details>summary:hover{color:#c44b3c !important;}
+/* L3 collapsible header — sage green for sketch (matches link-tool tone) */
+.m002-host[data-grid-style="sketch"] .m002-insp-l3{border-top-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-l3>summary{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-l3>summary::before{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-l3[open]>summary::before{color:#6b8a6b !important;}
+/* L3 section heads (INTERFACES / ROUTES) */
+.m002-host[data-grid-style="sketch"] .m002-l3-head{color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-head,
+.m002-host[data-grid-style="sketch"] .m002-route-head{color:#7a7568 !important;}
+/* Iface rows */
+.m002-host[data-grid-style="sketch"] .m002-iface-row{background:#fefcf6 !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-row:hover{border-color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-dot{box-shadow:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-row input,
+.m002-host[data-grid-style="sketch"] .m002-iface-row select,
+.m002-host[data-grid-style="sketch"] .m002-route-row input,
+.m002-host[data-grid-style="sketch"] .m002-route-row select{background:#fefcf6 !important;border-color:#c8c2b0 !important;color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-row input:focus,
+.m002-host[data-grid-style="sketch"] .m002-iface-row select:focus,
+.m002-host[data-grid-style="sketch"] .m002-route-row input:focus,
+.m002-host[data-grid-style="sketch"] .m002-route-row select:focus{border-color:#6b8a6b !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-rm,
+.m002-host[data-grid-style="sketch"] .m002-route-rm{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-iface-rm:hover,
+.m002-host[data-grid-style="sketch"] .m002-route-rm:hover{color:#c44b3c !important;}
+/* Route rows */
+.m002-host[data-grid-style="sketch"] .m002-route-row{background:#fefcf6 !important;border-color:#c8c2b0 !important;}
+/* Default route highlight: was amber (#ffae00) — use pencil-red for sketch */
+.m002-host[data-grid-style="sketch"] .m002-route-row.is-default{border-color:#c44b3c !important;background:rgba(196,75,60,0.05) !important;}
+.m002-host[data-grid-style="sketch"] .m002-route-row.is-default .m002-route-dst{color:#c44b3c !important;}
+/* PORTS preset / +/- pcount buttons — cyan/green/red → graphite/sage/pencil-red */
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.preset{border-color:#3a3a35 !important;color:#3a3a35 !important;background:#fefcf6 !important;}
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.preset:hover{background:rgba(58,58,53,0.08) !important;}
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.step.plus{border-color:#6b8a6b !important;color:#6b8a6b !important;background:#fefcf6 !important;}
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.step.plus:hover{background:rgba(107,138,107,0.10) !important;}
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.step.minus{border-color:#c44b3c !important;color:#c44b3c !important;background:#fefcf6 !important;}
+.m002-host[data-grid-style="sketch"] .m002-pcount-btn.step.minus:hover{background:rgba(196,75,60,0.10) !important;}
+/* PORT TABLE rows — cream paper hover, graphite outline, cream input bg */
+.m002-host[data-grid-style="sketch"] .m002-port-row:hover{background:rgba(196,75,60,0.06) !important;border-color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-port-row input{background:#fefcf6 !important;border-color:#c8c2b0 !important;color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-port-row input:focus{border-color:#c44b3c !important;}
+/* VLAN chips wrapper (the dark frame around VLAN pills in port modal) */
+.m002-host[data-grid-style="sketch"] .m002-vlan-chips{background:rgba(254,252,246,0.6) !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-empty{color:#7a7568 !important;}
+/* DELETE NODE / DELETE LINK / UNGROUP STACK — keep pencil-red intent on cream */
+.m002-host[data-grid-style="sketch"] .m002-insp-del{background:#fefcf6 !important;border-color:#c44b3c !important;color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-del:hover{background:rgba(196,75,60,0.10) !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-back{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-insp-back:hover{color:#3a3a35 !important;}
+/* Inspector + ports-grid scrollbar thumb — cream tan instead of dark grey */
+.m002-host[data-grid-style="sketch"] .m002-inspector::-webkit-scrollbar-thumb,
+.m002-host[data-grid-style="sketch"] .m002-ports-grid::-webkit-scrollbar-thumb{background:#c8c2b0 !important;}
