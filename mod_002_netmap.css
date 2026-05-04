@@ -403,10 +403,10 @@
 .m002-link-arrow{color:#ff003c;font-family:'Share Tech Mono',monospace;}
 .m002-ports-block{display:flex;flex-direction:column;gap:4px;}
 .m002-ports-head{font-family:'Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1.5px;padding:4px 0;}
-.m002-ports-prefix{display:flex;align-items:center;gap:6px;padding:3px 6px;background:rgba(255,0,60,0.04);border:1px dashed #2a2a32;border-radius:2px;font-family:'Share Tech Mono',monospace;font-size:10px;}
+.m002-ports-prefix{display:flex;align-items:center;gap:6px;padding:3px 6px;background:transparent;border:1px dashed #2a2a32;border-radius:2px;font-family:'Share Tech Mono',monospace;font-size:10px;}
 .m002-ports-prefix[hidden]{display:none;}
 .m002-ports-prefix-label{color:#5a5f6e;letter-spacing:1.4px;}
-.m002-ports-prefix-val{color:#ff003c;background:#0a0a10;padding:1px 5px;border:1px solid #1a1a22;border-radius:2px;font-size:11px;}
+.m002-ports-prefix-val{color:inherit;background:transparent;padding:1px 5px;border:1px solid #1a1a22;border-radius:2px;font-size:11px;}
 .m002-ports-prefix-clear{margin-left:auto;background:transparent;border:1px solid #2a2a32;color:#9aa0a8;font-family:'Share Tech Mono',monospace;font-size:10px;width:18px;height:18px;line-height:1;cursor:pointer;border-radius:2px;padding:0;}
 .m002-ports-prefix-clear:hover{border-color:#ff003c;color:#ff003c;}
 .m002-ports-grid{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
@@ -1166,6 +1166,17 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-port-row:hover{background:rgba(196,75,60,0.06) !important;border-color:#c44b3c !important;}
 .m002-host[data-grid-style="sketch"] .m002-port-row input{background:#fefcf6 !important;border-color:#c8c2b0 !important;color:#3a3a35 !important;}
 .m002-host[data-grid-style="sketch"] .m002-port-row input:focus{border-color:#c44b3c !important;}
+/* Auto-prefix hint row — neutral cream/tan/graphite, no red on cream paper */
+.m002-host[data-grid-style="sketch"] .m002-ports-prefix{background:transparent !important;border-color:#c8c2b0 !important;}
+.m002-host[data-grid-style="sketch"] .m002-ports-prefix-label{color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-ports-prefix-val{background:transparent !important;border-color:#c8c2b0 !important;color:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-ports-prefix-clear{border-color:#c8c2b0 !important;color:#7a7568 !important;}
+.m002-host[data-grid-style="sketch"] .m002-ports-prefix-clear:hover{border-color:#c44b3c !important;color:#c44b3c !important;}
+/* Duplicate-name pulse — pencil-red on cream, drop the bright glow */
+.m002-host[data-grid-style="sketch"] .m002-port-row.is-duplicate{background:rgba(196,75,60,0.08) !important;border-color:#c44b3c !important;animation:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-port-row.is-duplicate input{border-color:#c44b3c !important;color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-port-row.is-duplicate .m002-port-num{color:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-pmodal-name.is-duplicate{border-color:#c44b3c !important;color:#c44b3c !important;animation:none !important;box-shadow:none !important;}
 /* VLAN chips wrapper (the dark frame around VLAN pills in port modal) */
 .m002-host[data-grid-style="sketch"] .m002-vlan-chips{background:rgba(254,252,246,0.6) !important;border-color:#c8c2b0 !important;}
 .m002-host[data-grid-style="sketch"] .m002-vlan-empty{color:#7a7568 !important;}
