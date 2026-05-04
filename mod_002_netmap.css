@@ -1248,8 +1248,13 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
      those are colour treatments, not glows.
    - .m002-vsolo-link-fade animation: opacity-only fade, no drop-shadow.
 
-   Single block + !important keeps the override surgical and trivial to
-   revert: delete this block and every drop-shadow halo comes back. */
+   The canvas-element kill block uses PLAIN filter:none (no !important) — it
+   still beats the original drop-shadow rules because it's later in source
+   order at the same specificity, but layer-dim rules like
+   `.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]`
+   have higher specificity and still win, so routing/VLAN dim treatments work.
+   The drag-pulse / vlan-solo-pulse block KEEPS !important because the source
+   rules use !important on their animation declaration. */
 .m002-device,
 .m002-device:hover,
 .m002-device.m002-selected,
@@ -1288,7 +1293,7 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-detail-port:hover .m002-detail-port-box,
 .m002-detail-port.is-selected .m002-detail-port-box,
 .m002-rad-seg-dev .m002-rad-seg-dot{
-  filter: none !important;
+  filter: none;
 }
 /* Drag-target merge-pulse + VLAN-solo amber-pulse animations bake drop-shadow
    into their keyframes; killing the filter alone isn't enough because the
