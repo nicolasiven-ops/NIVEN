@@ -7225,8 +7225,12 @@ function openInspector(s) {
     `;
     body.querySelector('[data-sf="name"]').addEventListener('input', (e) => {
       stack.name = e.target.value;
+      // Collapsed view: stack rendered as a device card in gDevices.
       const g = s.gDevices.querySelector(`[data-stack-id="${stack.id}"] .m002-dev-name`);
       if (g) g.textContent = stack.name;
+      // Expanded view: envelope label in gStacksBg uses a composed string.
+      const env = s.gStacksBg.querySelector(`g.m002-stack-envelope[data-stack-id="${stack.id}"] .m002-stack-env-label`);
+      if (env) env.textContent = `// STACK · ${stack.name} · ×${stack.members.length}`;
       schedSave(s);
     });
     body.querySelector('[data-stk="toggle"]').addEventListener('click', () => {
