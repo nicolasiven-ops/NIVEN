@@ -1415,63 +1415,6 @@ function savePrefs(prefs) {
 // Applies a visual style to the live host. Stamps the data-grid-style attr
 // the CSS keys off, and persists the choice. Safe to call before the host
 // exists (e.g. during early prefs hydration) — it just becomes a no-op then.
-// Tracks the MutationObserver that enforces sketch cursor colours via direct
-// inline-style on the bracket spans (CSS specificity battles with the global
-// tool-recolour rules kept failing in production — inline + setProperty
-// 'important' is the only thing that wins for sure).
-let _m002StyleEnforcer = null;
-let _m002StyleEnforcerInt = null;
-
-function _m002SketchCursorTone() {
-  if (typeof document === 'undefined' || !document.body) return null;
-  const cls = document.body.classList;
-  if (cls.contains('m002-tool-link'))   return '#3a5a3a';
-  if (cls.contains('m002-tool-delete')) return '#8a1f12';
-  return '#000000';
-}
-
-function _m002PaintSketchCursor() {
-  const tone = _m002SketchCursorTone();
-  if (!tone) return;
-  document.querySelectorAll('.cur-bracket').forEach((el) => {
-    // Build the inline style as a single setAttribute("style", ...) call so
-    // every border-color longhand gets !important explicitly. setProperty()
-    // calls collapse into a shorthand under some browsers, which then loses
-    // to a CSS `border-X-color !important` longhand on the same element.
-    // Writing the longhands directly in the style attribute prevents collapse.
-    el.setAttribute('style',
-      'border-top-color:' + tone + ' !important;' +
-      'border-right-color:' + tone + ' !important;' +
-      'border-bottom-color:' + tone + ' !important;' +
-      'border-left-color:' + tone + ' !important;'
-    );
-  });
-  document.querySelectorAll('.cursor-dot').forEach((el) => {
-    // Preserve transform/opacity (set every mousemove by the global cursor JS)
-    // by appending only colour-related properties; rebuild the style string
-    // each call so no stale colour entries linger.
-    const trans = el.style.transform || '';
-    const opac  = el.style.opacity || '';
-    el.setAttribute('style',
-      (trans ? 'transform:' + trans + ';' : '') +
-      (opac  ? 'opacity:' + opac + ';'  : '') +
-      'background:' + tone + ' !important;' +
-      'box-shadow:none !important;'
-    );
-  });
-}
-
-function _m002ClearSketchCursor() {
-  document.querySelectorAll('.cur-bracket').forEach((el) => {
-    el.removeAttribute('style');
-  });
-  document.querySelectorAll('.cursor-dot').forEach((el) => {
-    // Don't strip the transform/opacity that the global cursor JS depends on.
-    el.style.removeProperty('background');
-    el.style.removeProperty('box-shadow');
-  });
-}
-
 function applyStyle(s, styleId) {
   const valid = STYLES.find((x) => x.id === styleId) ? styleId : DEFAULT_STYLE;
   if (s.prefs) { s.prefs.style = valid; savePrefs(s.prefs); }
@@ -1480,55 +1423,6 @@ function applyStyle(s, styleId) {
     document.body.dataset.m002Style = valid;
     STYLES.forEach((x) => document.body.classList.remove('m002-style-' + x.id));
     document.body.classList.add('m002-style-' + valid);
-
-    // Tear down any previous enforcer
-    if (_m002StyleEnforcer) {
-      try { _m002StyleEnforcer.disconnect(); } catch (_) {}
-      _m002StyleEnforcer = null;
-    }
-    if (_m002StyleEnforcerInt) {
-      clearInterval(_m002StyleEnforcerInt);
-      _m002StyleEnforcerInt = null;
-    }
-
-    if (valid === 'sketch') {
-      // 1. Paint immediately
-      try {
-        console.info('[m002] sketch cursor enforcer engaged');
-        _m002PaintSketchCursor();
-        // Debug: dump the actual state after painting so we can see what's
-        // happening in the user's browser if brackets still look wrong.
-        setTimeout(() => {
-          const b = document.querySelector('.br-tl');
-          if (b) {
-            const cs = getComputedStyle(b);
-            console.info('[m002] cursor debug:', {
-              bodyClasses: document.body.className,
-              bodyAttr: document.body.dataset.m002Style,
-              brTlInlineStyle: b.getAttribute('style'),
-              brTlComputedTopColor: cs.borderTopColor,
-              brTlComputedLeftColor: cs.borderLeftColor,
-              brTlComputedTopWidth: cs.borderTopWidth,
-              brTlBorderTopStyle: cs.borderTopStyle,
-              cursorElExists: !!document.querySelector('.cursor'),
-              bracketsCount: document.querySelectorAll('.cur-bracket').length,
-            });
-          }
-        }, 200);
-      } catch (_) {}
-      // 2. Hook a MutationObserver — repaints on .cursor / body class flips
-      const obs = new MutationObserver(_m002PaintSketchCursor);
-      const cursor = document.querySelector('.cursor');
-      if (cursor) obs.observe(cursor, { attributes: true, attributeFilter: ['class'] });
-      obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
-      _m002StyleEnforcer = obs;
-      // 3. Belt-and-braces interval — re-paint every 300 ms regardless. Cheap
-      //    (just sets inline style on 4 spans + 1 dot). Catches anything the
-      //    observer misses (childList swaps, async re-renders, etc.).
-      _m002StyleEnforcerInt = setInterval(_m002PaintSketchCursor, 300);
-    } else {
-      _m002ClearSketchCursor();
-    }
   }
 }
 

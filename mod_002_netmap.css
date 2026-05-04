@@ -872,56 +872,26 @@ body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45de
 body.m002-tool-delete.m002-style-sketch .cursor::before,
 body.m002-tool-delete.m002-style-sketch .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#c44b3c;box-shadow:none;}
 /* Sketch cursor tones — applied via the body.m002-style-sketch class.
-   1px graphite was reportedly rendering as "white" in some browsers — likely
-   anti-aliasing on HiDPI (a 1px line on a 2x display becomes a half-pixel
-   smoothed to nothing) or a Chrome extension (Dark Reader, Video Speed
-   Controller etc.) overriding pixel render. We bump the bracket border to
-   2px solid pure black with `forced-color-adjust:none` to opt out of OS
-   forced-colours mode, and add `print-color-adjust:exact` so colour-managed
-   environments leave the tone alone. */
-body.m002-style-sketch{--red:#000000;--red-glow:#c44b3c;}
-body.m002-style-sketch.m002-tool-link{--red:#3a5a3a;}
-body.m002-style-sketch.m002-tool-delete{--red:#8a1f12;}
-/* Sketch brackets: ditch the border-only L-shape (which renders unreliably
-   under colour-modifying extensions / HiDPI subpixel anti-aliasing) and
-   replace each corner with two solid-coloured boxes via ::before/::after
-   pseudo-elements. Solid background blocks survive most browser pixel
-   manipulation; even Dark Reader doesn't typically wipe filled rects. */
-body.m002-style-sketch .cur-bracket{
-  border:none !important;
-  width:8px !important;
-  height:8px !important;
-  forced-color-adjust:none !important;
-  print-color-adjust:exact !important;
-  -webkit-print-color-adjust:exact !important;
-  position:absolute !important;
-}
-body.m002-style-sketch .cur-bracket::before,
-body.m002-style-sketch .cur-bracket::after{
-  content:'';
-  position:absolute;
-  background:var(--red) !important;
-  forced-color-adjust:none !important;
-  print-color-adjust:exact !important;
-}
-/* br-tl: horizontal stroke at top + vertical stroke at left */
-body.m002-style-sketch .br-tl::before{top:0;left:0;width:8px;height:2px;}
-body.m002-style-sketch .br-tl::after {top:0;left:0;width:2px;height:8px;}
-/* br-tr: horizontal stroke at top + vertical stroke at right */
-body.m002-style-sketch .br-tr::before{top:0;right:0;width:8px;height:2px;}
-body.m002-style-sketch .br-tr::after {top:0;right:0;width:2px;height:8px;}
-/* br-bl: horizontal stroke at bottom + vertical stroke at left */
-body.m002-style-sketch .br-bl::before{bottom:0;left:0;width:8px;height:2px;}
-body.m002-style-sketch .br-bl::after {bottom:0;left:0;width:2px;height:8px;}
-/* br-br: horizontal stroke at bottom + vertical stroke at right */
-body.m002-style-sketch .br-br::before{bottom:0;right:0;width:8px;height:2px;}
-body.m002-style-sketch .br-br::after {bottom:0;right:0;width:2px;height:8px;}
+   ROOT CAUSE NOTE: the global `.cursor` rule sets `mix-blend-mode:plus-lighter`
+   (an "additive" blend) which works great over the dark canvas but eats black
+   on a cream background — adding 0 to ~250 leaves the background untouched, so
+   black brackets render invisible. Switching the blend mode back to `normal`
+   for sketch is the actual fix; the rest of the cascade just sets --red so
+   the existing border-based brackets pick up the right pencil tone per tool. */
+body.m002-style-sketch{--red:#000000;--red-glow:#000000;}
+body.m002-style-sketch.m002-tool-link{--red:#3a5a3a;--red-glow:#3a5a3a;}
+body.m002-style-sketch.m002-tool-delete{--red:#8a1f12;--red-glow:#8a1f12;}
+body.m002-style-sketch .cursor{mix-blend-mode:normal !important;}
+/* Bump bracket strokes to 1.5px so the L-shapes read crisply on HiDPI screens
+   without antialiasing them out to grey. */
+body.m002-style-sketch .br-tl{border-top-width:1.5px !important;border-left-width:1.5px !important;}
+body.m002-style-sketch .br-tr{border-top-width:1.5px !important;border-right-width:1.5px !important;}
+body.m002-style-sketch .br-bl{border-bottom-width:1.5px !important;border-left-width:1.5px !important;}
+body.m002-style-sketch .br-br{border-bottom-width:1.5px !important;border-right-width:1.5px !important;}
 body.m002-style-sketch .cursor-dot{
   background:var(--red) !important;
   box-shadow:none !important;
-  width:6px !important;
-  height:6px !important;
-  forced-color-adjust:none !important;
+  mix-blend-mode:normal !important;
 }
 /* Hover state in MOD_002: instead of growing (the global default), the
    cursor stands on its tip — the whole bracket frame pivots 45° around
@@ -1020,41 +990,9 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 @keyframes m002-rad-fade-final{from{opacity:0;}to{opacity:1;}}
 
 /* =============================================================================
-   SKETCH OVERRIDES (FINAL) — placed at file end so source-order also favours
-   these rules in addition to their already-higher specificity. Belt-and-braces
-   against the global tool-recolour rules above that hard-code #ffffff brackets.
+   SKETCH OVERRIDES (FINAL) — canvas elements only. Cursor overrides live in the
+   single block above; the cascade picks up --red per tool from there.
    ============================================================================= */
-
-/* --- Cursor: target the SPECIFIC border sides each .br-* uses, with the
-   exact tool-class in the selector so specificity reads (0,3,1) and beats
-   `body.m002-tool-select .cur-bracket` (0,2,1). Each tool gets its own tone. */
-body[data-m002-style="sketch"].m002-tool-select .br-tl{border-top-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
-body[data-m002-style="sketch"].m002-tool-select .br-tr{border-top-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
-body[data-m002-style="sketch"].m002-tool-select .br-bl{border-bottom-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
-body[data-m002-style="sketch"].m002-tool-select .br-br{border-bottom-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
-body[data-m002-style="sketch"].m002-tool-select .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
-
-body[data-m002-style="sketch"].m002-tool-link .br-tl{border-top-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}
-body[data-m002-style="sketch"].m002-tool-link .br-tr{border-top-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}
-body[data-m002-style="sketch"].m002-tool-link .br-bl{border-bottom-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}
-body[data-m002-style="sketch"].m002-tool-link .br-br{border-bottom-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}
-body[data-m002-style="sketch"].m002-tool-link .cursor-dot{background:#6b8a6b !important;box-shadow:none !important;}
-
-body[data-m002-style="sketch"].m002-tool-delete .br-tl{border-top-color:#c44b3c !important;border-left-color:#c44b3c !important;}
-body[data-m002-style="sketch"].m002-tool-delete .br-tr{border-top-color:#c44b3c !important;border-right-color:#c44b3c !important;}
-body[data-m002-style="sketch"].m002-tool-delete .br-bl{border-bottom-color:#c44b3c !important;border-left-color:#c44b3c !important;}
-body[data-m002-style="sketch"].m002-tool-delete .br-br{border-bottom-color:#c44b3c !important;border-right-color:#c44b3c !important;}
-body[data-m002-style="sketch"].m002-tool-delete .cursor::before,
-body[data-m002-style="sketch"].m002-tool-delete .cursor::after{background:#c44b3c !important;box-shadow:none !important;}
-
-/* Fallback when Plexus isn't mounted but data-m002-style still set, or no tool
-   class is present (e.g. radial menu just opened) — keep brackets graphite. */
-body[data-m002-style="sketch"] .br-tl{border-top-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
-body[data-m002-style="sketch"] .br-tr{border-top-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
-body[data-m002-style="sketch"] .br-bl{border-bottom-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
-body[data-m002-style="sketch"] .br-br{border-bottom-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
-body[data-m002-style="sketch"] .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
-body[data-m002-style="sketch"] .cursor{filter:none !important;}
 
 /* --- Stack-member separators: the thin neon outline disappears on cream paper
    so members blend together. Bump stroke + use graphite + tighten dasharray
@@ -1072,10 +1010,15 @@ body[data-m002-style="sketch"] .cursor{filter:none !important;}
    every label class that lives on the canvas: regular link "Nx" port count,
    VLAN count badge, LAG/stack badges, stack-envelope title. */
 .m002-host[data-grid-style="sketch"] .m002-link-label,
-.m002-host[data-grid-style="sketch"] .m002-link-vlan-count{stroke:#faf6ed !important;stroke-width:2px !important;fill:#3a3a35 !important;}
-.m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-vlan-count{fill:#2a2a30 !important;}
+.m002-host[data-grid-style="sketch"] .m002-link-vlan-count,
+.m002-host[data-grid-style="sketch"] .m002-link-bundle-label,
+.m002-host[data-grid-style="sketch"] .m002-stack-cable-label{stroke:#faf6ed !important;stroke-width:2px !important;fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-vlan-count,
+.m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-bundle-label,
+.m002-host[data-grid-style="sketch"] .m002-stacklink:hover .m002-stack-cable-label{fill:#2a2a30 !important;}
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-label,
-.m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-vlan-count{fill:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-vlan-count,
+.m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-bundle-label{fill:#c44b3c !important;}
 .m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-label{filter:none !important;}
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-label.m002-link-stripe-label{filter:none !important;}
 /* Stack envelope title (// STACK · STACK-XX · ×N) — graphite muted. */
