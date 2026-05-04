@@ -871,16 +871,35 @@ body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45de
 /* Sketch + delete: pencil-red X without neon glow (still needs the content/positioning above) */
 body.m002-tool-delete.m002-style-sketch .cursor::before,
 body.m002-tool-delete.m002-style-sketch .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#c44b3c;box-shadow:none;}
-/* Sketch cursor tones — applied via the body.m002-style-sketch class. The
-   --red CSS variable is rebound below for any rule that still uses it (the
-   .br-* border colour, .cursor-dot bg, etc.) so the brackets/dot pick up
-   pencil tones automatically. JS-injected inline styles (m002_netmap.js
-   applyStyle painter) provide a parallel guarantee for older browsers. */
-body.m002-style-sketch{--red:#2a2a30;--red-glow:#c44b3c;}
-body.m002-style-sketch.m002-tool-link{--red:#6b8a6b;}
-body.m002-style-sketch.m002-tool-delete{--red:#c44b3c;}
-body.m002-style-sketch .cur-bracket{border-color:var(--red) !important;}
-body.m002-style-sketch .cursor-dot{background:var(--red) !important;box-shadow:none !important;}
+/* Sketch cursor tones — applied via the body.m002-style-sketch class.
+   1px graphite was reportedly rendering as "white" in some browsers — likely
+   anti-aliasing on HiDPI (a 1px line on a 2x display becomes a half-pixel
+   smoothed to nothing) or a Chrome extension (Dark Reader, Video Speed
+   Controller etc.) overriding pixel render. We bump the bracket border to
+   2px solid pure black with `forced-color-adjust:none` to opt out of OS
+   forced-colours mode, and add `print-color-adjust:exact` so colour-managed
+   environments leave the tone alone. */
+body.m002-style-sketch{--red:#000000;--red-glow:#c44b3c;}
+body.m002-style-sketch.m002-tool-link{--red:#3a5a3a;}
+body.m002-style-sketch.m002-tool-delete{--red:#8a1f12;}
+body.m002-style-sketch .cur-bracket{
+  border-color:var(--red) !important;
+  border-width:2px !important;
+  forced-color-adjust:none !important;
+  print-color-adjust:exact !important;
+  -webkit-print-color-adjust:exact !important;
+}
+body.m002-style-sketch .br-tl{border-top:2px solid var(--red) !important;border-left:2px solid var(--red) !important;}
+body.m002-style-sketch .br-tr{border-top:2px solid var(--red) !important;border-right:2px solid var(--red) !important;}
+body.m002-style-sketch .br-bl{border-bottom:2px solid var(--red) !important;border-left:2px solid var(--red) !important;}
+body.m002-style-sketch .br-br{border-bottom:2px solid var(--red) !important;border-right:2px solid var(--red) !important;}
+body.m002-style-sketch .cursor-dot{
+  background:var(--red) !important;
+  box-shadow:none !important;
+  width:6px !important;
+  height:6px !important;
+  forced-color-adjust:none !important;
+}
 /* Hover state in MOD_002: instead of growing (the global default), the
    cursor stands on its tip — the whole bracket frame pivots 45° around
    the cursor centre, brackets travel as one unit. */

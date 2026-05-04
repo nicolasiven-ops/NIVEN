@@ -1425,9 +1425,9 @@ let _m002StyleEnforcerInt = null;
 function _m002SketchCursorTone() {
   if (typeof document === 'undefined' || !document.body) return null;
   const cls = document.body.classList;
-  if (cls.contains('m002-tool-link'))   return '#6b8a6b';
-  if (cls.contains('m002-tool-delete')) return '#c44b3c';
-  return '#2a2a30';
+  if (cls.contains('m002-tool-link'))   return '#3a5a3a';
+  if (cls.contains('m002-tool-delete')) return '#8a1f12';
+  return '#000000';
 }
 
 function _m002PaintSketchCursor() {
