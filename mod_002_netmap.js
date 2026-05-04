@@ -6990,6 +6990,16 @@ function openInspector(s) {
     const a = s.devices.find((d) => d.id === link.from);
     const b = s.devices.find((d) => d.id === link.to);
     const aRef = isReference(a), bRef = isReference(b);
+    // Mirror grid layout in the header: whichever endpoint sits further left on
+    // the canvas is rendered on the left of the inspector. Purely cosmetic —
+    // link.from / link.to (and their port bindings) are untouched.
+    const posA = effectivePos(s, a?.id) || { x: a?.x ?? 0 };
+    const posB = effectivePos(s, b?.id) || { x: b?.x ?? 0 };
+    const flip = posB.x < posA.x;
+    const left = flip ? b : a;
+    const right = flip ? a : b;
+    const leftSide = flip ? 'TO' : 'FROM';
+    const rightSide = flip ? 'FROM' : 'TO';
     idEl.textContent = `// LINK`;
     const portCell = (dev, side) => {
       if (isReference(dev)) {
@@ -7026,13 +7036,13 @@ function openInspector(s) {
     const isHubLeg = aRef || bRef;
     body.innerHTML = `
       <div class="m002-link-summary">
-        <span class="m002-link-end">${escSvg(a?.name || '?')}</span>
+        <span class="m002-link-end">${escSvg(left?.name || '?')}</span>
         <span class="m002-link-arrow">⇄</span>
-        <span class="m002-link-end">${escSvg(b?.name || '?')}</span>
+        <span class="m002-link-end">${escSvg(right?.name || '?')}</span>
       </div>
       <div class="m002-row2">
-        ${portCell(a, 'FROM')}
-        ${portCell(b, 'TO')}
+        ${portCell(left, leftSide)}
+        ${portCell(right, rightSide)}
       </div>
       <div class="m002-field">
         <span>VLANS${isHubLeg ? '' : ' (port-pair)'}</span>
