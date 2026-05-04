@@ -1398,7 +1398,7 @@ const STYLES = [
 ];
 const DEFAULT_STYLE = 'futuristic';
 
-const DEFAULT_PREFS = { style: DEFAULT_STYLE, autoRecenter: false, freeMove: false, snapOnDrop: true };
+const DEFAULT_PREFS = { style: DEFAULT_STYLE, autoRecenter: false, freeMove: false, snapOnDrop: true, shortPortLabels: true };
 const PREFS_KEY = 'm002.preferences';
 function loadPrefs() {
   try {
@@ -4646,8 +4646,10 @@ function drawStackEnvelope(s, stack) {
     // Port labels on stacking cables only in Physical — VLAN/Routing layers
     // already speak via colour, the textual port stencil is just clutter there.
     if (s.activeLayer === 'physical') {
-      const fromLbl = sl.fromPort ? portLabel(a, sl.fromPort) : '';
-      const toLbl   = sl.toPort   ? portLabel(b, sl.toPort)   : '';
+      const shortMode = s.prefs?.shortPortLabels !== false;
+      const fmt = (lbl) => shortMode ? shortPortLabel(lbl) : lbl;
+      const fromLbl = sl.fromPort ? fmt(portLabel(a, sl.fromPort)) : '';
+      const toLbl   = sl.toPort   ? fmt(portLabel(b, sl.toPort))   : '';
       if (fromLbl || toLbl) {
         const lbl = (fromLbl || '?') + ' ⇄ ' + (toLbl || '?');
         inner += `<text class="m002-stack-cable-label" x="${path.lx}" y="${path.ly - 4}" text-anchor="middle">${escSvg(lbl)}</text>`;
@@ -5247,6 +5249,16 @@ function portLabel(dev, portN) {
   return p.name || String(p.n);
 }
 
+// Strip everything before the last digit run so a long port name like
+// "eth1/1/12" collapses to just "12" on the canvas — keeps endpoint
+// stencils tight and prevents adjacent labels from colliding. Falls back
+// to the original string if there are no trailing digits at all.
+function shortPortLabel(full) {
+  if (!full) return full;
+  const m = String(full).match(/(\d+)$/);
+  return m ? m[1] : full;
+}
+
 // Natural compare for LAG names so "Po2" sorts between "Po1" and "Po10"
 // instead of lexicographic Po1/Po10/Po2/Po5. Splits each name into runs of
 // digits vs non-digits and compares run-by-run.
@@ -5475,8 +5487,10 @@ function drawLink(s, link) {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
     const lagA = findPortLag(s, a.id, link.fromPort)?.lag;
     const lagB = findPortLag(s, b.id, link.toPort)?.lag;
-    const fromTxt = link.fromPort ? portLabel(a, link.fromPort) + (lagA ? ` (${lagA.name})` : '') : '';
-    const toTxt   = link.toPort   ? portLabel(b, link.toPort)   + (lagB ? ` (${lagB.name})` : '') : '';
+    const shortMode = s.prefs?.shortPortLabels !== false;
+    const fmt = (lbl) => shortMode ? shortPortLabel(lbl) : lbl;
+    const fromTxt = link.fromPort ? fmt(portLabel(a, link.fromPort)) + (lagA ? ` (${lagA.name})` : '') : '';
+    const toTxt   = link.toPort   ? fmt(portLabel(b, link.toPort))   + (lagB ? ` (${lagB.name})` : '') : '';
     if (fromTxt || toTxt) {
       const lbl = (fromTxt || '?') + ' ⇄ ' + (toTxt || '?');
       inner += `<text class="m002-link-label" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${escSvg(lbl)}</text>`;
@@ -6346,6 +6360,13 @@ function renderPrefsInspector(s, body, idEl) {
         </span>
         <input type="checkbox" data-pref="snapOnDrop" ${prefs.snapOnDrop ? 'checked' : ''}/>
       </label>
+      <label class="m002-prefs-row">
+        <span>
+          <span class="m002-prefs-label">Port-Beschriftungen kürzen</span>
+          <span class="m002-prefs-sublabel">Zeigt am Kabelende nur die letzte Zahl des Portnamens (z. B. „eth1/1/12" → „12"). Spart Platz und vermeidet Überlappungen bei dichten Verbindungen.</span>
+        </span>
+        <input type="checkbox" data-pref="shortPortLabels" ${prefs.shortPortLabels !== false ? 'checked' : ''}/>
+      </label>
     </div>
   `;
   body.querySelectorAll('[data-pref]').forEach((el) => {
@@ -6354,6 +6375,7 @@ function renderPrefsInspector(s, body, idEl) {
       const val = el.type === 'checkbox' ? el.checked : el.value;
       s.prefs[key] = val;
       savePrefs(s.prefs);
+      if (key === 'shortPortLabels') render(s);
     });
   });
   body.querySelectorAll('[data-style]').forEach((el) => {
