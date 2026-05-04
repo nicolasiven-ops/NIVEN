@@ -2286,7 +2286,7 @@ function cancelRopeDrag(s) {
 // =============================================================================
 const AUTOLINK_MIN_DIST = 95;       // a hair above the stack-merge threshold so
                                     // they don't both fight for the same hover
-const AUTOLINK_MAX_DIST = 432;      // suggestion starts pre-fading from here so
+const AUTOLINK_MAX_DIST = 346;      // suggestion starts pre-fading from here so
                                     // approaching a device feels magnetic well
                                     // before the link actually arms
 const AUTOLINK_CONNECT_T  = 0.50;   // mid-band: stubs snap into one solid line
