@@ -283,10 +283,10 @@
 /* Routing layer: a stack's envelope only glows when the stack itself is an
    L3 entity (data-l3="true" iff stackHasVip). Non-VIP envelopes recede so
    the eye lands on the actual IP-bearing members instead. */
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{filter:none;opacity:.45;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{opacity:.18;filter:saturate(0) brightness(.55);}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;fill:transparent;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-label{fill:#5a5f6e;}
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.7;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.45;}
 /* Stack-member devices: dimmed white in physical/vlan, but in routing the
    IP-bearing members glow in their own accent (override below). */
 .m002-device.m002-stack-member{filter:none;}
@@ -645,9 +645,9 @@
    same fade rule as plain devices so a switch-only stack doesn't suddenly
    look L3-active just because it's collapsed. */
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"],
-.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.32;filter:saturate(.4);}
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.18;filter:saturate(0) brightness(.55);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
-.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.6;}
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.45;}
 /* VLAN solo dim — two diagnostic tiers:
    - unmatched (isolated OR adjacent): no VLAN configured here → fade to grey
    - configured-only: VLAN at device level but no port carries it → amber
