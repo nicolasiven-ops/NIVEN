@@ -4652,6 +4652,9 @@ function drawLagLink(s, p) {
   const filter = effectiveVlanSolo(s);
   const isFiltered = filter.length > 0;
   const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : [];
+  if (s.activeLayer === 'vlan' && isFiltered && drawnVlans.length === 0) {
+    g.classList.add('m002-link-vsolo-dim');
+  }
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   if (s.activeLayer === 'routing') {
     // Routing layer: LAG-pairs are L2 plumbing — paint them as the same dim
@@ -4931,6 +4934,7 @@ function drawLink(s, link) {
         const filter = effectiveVlanSolo(s);
         const isFiltered = filter.length > 0;
         const drawn = isFiltered ? vlans.filter((v) => filter.includes(v)) : [];
+        if (isFiltered && drawn.length === 0) g.classList.add('m002-link-vsolo-dim');
         if (drawn.length > 0) {
           const gap = 6;
           drawn.forEach((v, i) => {
@@ -4978,6 +4982,7 @@ function drawLink(s, link) {
     // parallel lines stop scaling past ~7 VLANs and lose meaning when many
     // VLANs share similar hues.
     const drawn = isFiltered ? vlans.filter((v) => filter.includes(String(v))) : [];
+    if (isFiltered && drawn.length === 0) g.classList.add('m002-link-vsolo-dim');
     if (vlans.length === 0) {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
     } else if (isFiltered && drawn.length === 0) {

@@ -621,10 +621,22 @@
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope{transition:opacity .6s ease-out, filter .6s ease-out;}
 /* Links get redrawn on solo change (stripes/count badges depend on the filter,
    so we can't just toggle attributes). The applyVlanSoloVisuals path tags the
-   freshly drawn <g>s with .m002-vsolo-fade so they ease in instead of snapping. */
-@keyframes m002-vsolo-link-fade { from { opacity: 0; } to { opacity: 1; } }
+   freshly drawn <g>s with .m002-vsolo-fade so they ease in from 0 toward
+   their resting opacity (1 for matching links, .2 for dimmed ones). Leaving
+   the `to` keyframe out lets the animation interpolate to whatever the rule
+   below specifies, so dimmed links don't pop to full opacity then snap back. */
+@keyframes m002-vsolo-link-fade { from { opacity: 0; } }
 .m002-link.m002-vsolo-fade,
 .m002-laglink.m002-vsolo-fade{animation:m002-vsolo-link-fade .55s ease-out;}
+/* Links that don't carry any of the soloed VLANs fade to the background so
+   the matching ones stand out. Transition smooths toggle on/off without
+   needing a wholesale link rebuild. */
+.m002-host[data-active-layer="vlan"] .m002-link,
+.m002-host[data-active-layer="vlan"] .m002-laglink{transition:opacity .6s ease-out;}
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-dim,
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim{opacity:.2;}
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-dim:hover,
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim:hover{opacity:.55;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
