@@ -4500,7 +4500,7 @@ function drawStackEnvelope(s, stack) {
     cab.setAttribute('class', 'm002-stacklink');
     cab.setAttribute('data-stack-id', stack.id);
     cab.setAttribute('data-stacklink-id', sl.id);
-    const path = orthPath(a, b, off);
+    const path = orthPath(a, b, off, s, [a.id, b.id]);
     let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
     // Port labels on stacking cables only in Physical — VLAN/Routing layers
     // already speak via colour, the textual port stencil is just clutter there.
@@ -4517,35 +4517,145 @@ function drawStackEnvelope(s, stack) {
   });
 }
 
-function orthPath(a, b, off = 0) {
+// Bounding rects of every visible device + collapsed-stack icon. Link routes
+// score themselves against this list and pick the orientation that punches
+// through fewest boxes. Endpoints are excluded so a link doesn't count its
+// own anchor devices as obstacles.
+function routingObstacles(s, excludeIds) {
+  if (!s) return [];
+  const ex = excludeIds instanceof Set ? excludeIds : new Set(excludeIds || []);
+  const out = [];
+  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+  (s.devices || []).forEach((d) => {
+    if (ex.has(d.id)) return;
+    const stack = findStack(s, d.id);
+    if (stack && isStackCollapsed(s, stack)) return; // hidden inside icon
+    if (s.activeZone && d.zone && d.zone !== s.activeZone) return;
+    out.push({ x: d.x - halfW, y: d.y - halfH, w: DEVICE_W, h: DEVICE_H });
+  });
+  (s.stacks || []).forEach((st) => {
+    if (ex.has(st.id)) return;
+    if (!isStackCollapsed(s, st)) return;
+    if (s.activeZone && st.zone && st.zone !== s.activeZone) return;
+    out.push({ x: st.x - halfW, y: st.y - halfH, w: DEVICE_W, h: DEVICE_H });
+  });
+  return out;
+}
+
+// Endpoint exclusion set for a port-link — both anchored devices AND the
+// stack icons they collapse into (the visible obstacle is the icon, not the
+// hidden member). Used by every drawLink/drawLag* call so the route doesn't
+// score its own anchor as an obstacle.
+function linkExcludeIds(s, link) {
+  const out = [link.from, link.to];
+  const sa = findStack(s, link.from);
+  const sb = findStack(s, link.to);
+  if (sa) out.push(sa.id);
+  if (sb) out.push(sb.id);
+  return out;
+}
+
+function hSegmentHitsRect(y, x1, x2, r, pad = 4) {
+  if (y <= r.y - pad || y >= r.y + r.h + pad) return false;
+  const lo = Math.min(x1, x2), hi = Math.max(x1, x2);
+  return hi > r.x - pad && lo < r.x + r.w + pad;
+}
+function vSegmentHitsRect(x, y1, y2, r, pad = 4) {
+  if (x <= r.x - pad || x >= r.x + r.w + pad) return false;
+  const lo = Math.min(y1, y2), hi = Math.max(y1, y2);
+  return hi > r.y - pad && lo < r.y + r.h + pad;
+}
+
+// Single-bend L-shape route from a→b. Two candidate orientations:
+//   horizFirst → corner at (b.x, a.y)  (go horizontal first, then vertical)
+//   vertFirst  → corner at (a.x, b.y)  (go vertical first, then horizontal)
+// Pick whichever clears the obstacle rects (visible device boxes) — both
+// orientations only ever turn ONCE in one direction, so there's no zigzag
+// regardless of which we pick. Tie-breaker: bend closer to the destination
+// so the line lands on B straight-on instead of bursting out of A's edge
+// at 90°. Score is computed with off=0 so parallel-lane variants always
+// agree on orientation and stay parallel instead of crossing.
+function orthPath(a, b, off = 0, s = null, excludeIds = null) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    const sx = Math.sign(dx) || 1;
-    const ex1 = a.x + sx * halfW;
-    const ex2 = b.x - sx * halfW;
-    // Geometric midpoint, no grid snap. With grid-aligned endpoints the kink
-    // lands on a half-grid line; snapping it to a full grid step would shift
-    // the bend by ±GRID/2 and make the line look asymmetric ("imprecise").
-    const mid = (ex1 + ex2) / 2 + off;
-    const ay = a.y + off, by = b.y + off;
+  const sx = Math.sign(dx) || 1;
+  const sy = Math.sign(dy) || 1;
+
+  // Same row → straight horizontal at the shared midline. Same column →
+  // straight vertical. Skip the L entirely; the bend would be cosmetic and
+  // the corner would land INSIDE B, then burst out of one of B's other
+  // edges for no reason.
+  if (Math.abs(dy) <= halfH && Math.abs(dx) > halfW) {
+    const y = (a.y + b.y) / 2 + off;
+    const x0 = a.x + sx * halfW;
+    const x1 = b.x - sx * halfW;
     return {
-      d: `M ${ex1} ${ay} L ${mid} ${ay} L ${mid} ${by} L ${ex2} ${by}`,
-      lx: mid, ly: (ay + by) / 2,
-      from: { x: ex1 + sx * 6, y: ay - 6, anchor: sx > 0 ? 'start' : 'end' },
-      to:   { x: ex2 - sx * 6, y: by - 6, anchor: sx > 0 ? 'end'   : 'start' },
+      d: `M ${x0} ${y} L ${x1} ${y}`,
+      lx: (x0 + x1) / 2, ly: y,
+      from: { x: x0 + sx * 6, y: y - 6, anchor: sx > 0 ? 'start' : 'end' },
+      to:   { x: x1 - sx * 6, y: y - 6, anchor: sx > 0 ? 'end'   : 'start' },
     };
   }
-  const sy = Math.sign(dy) || 1;
-  const ey1 = a.y + sy * halfH;
-  const ey2 = b.y - sy * halfH;
-  const mid = (ey1 + ey2) / 2 + off;
-  const ax = a.x + off, bx = b.x + off;
+  if (Math.abs(dx) <= halfW && Math.abs(dy) > halfH) {
+    const x = (a.x + b.x) / 2 + off;
+    const y0 = a.y + sy * halfH;
+    const y1 = b.y - sy * halfH;
+    return {
+      d: `M ${x} ${y0} L ${x} ${y1}`,
+      lx: x, ly: (y0 + y1) / 2,
+      from: { x: x + 8, y: y0 + sy * 14, anchor: 'start' },
+      to:   { x: x + 8, y: y1 - sy * 10, anchor: 'start' },
+    };
+  }
+
+  const obstacles = routingObstacles(s, excludeIds);
+  let horizScore = 0, vertScore = 0;
+  if (obstacles.length) {
+    for (const r of obstacles) {
+      if (hSegmentHitsRect(a.y, a.x + sx * halfW, b.x, r) ||
+          vSegmentHitsRect(b.x, a.y, b.y - sy * halfH, r)) horizScore++;
+      if (vSegmentHitsRect(a.x, a.y + sy * halfH, b.y, r) ||
+          hSegmentHitsRect(b.y, a.x, b.x - sx * halfW, r)) vertScore++;
+    }
+  }
+  // Default heuristic: bend closer to B → longer first leg.
+  const defaultHorizFirst = Math.abs(dx) >= Math.abs(dy);
+  let horizFirst;
+  if (horizScore < vertScore) horizFirst = true;
+  else if (vertScore < horizScore) horizFirst = false;
+  else horizFirst = defaultHorizFirst;
+
+  if (horizFirst) {
+    // a.edge → corner(b.x, a.y) → b.edge — single bend.
+    // Lane offset shifts the corner along both axes so parallel variants run
+    // truly parallel instead of converging at the corner.
+    const x0 = a.x + sx * halfW;
+    const y0 = a.y + off;
+    const cx = b.x + off;
+    const cy = a.y + off;
+    const x1 = b.x + off;
+    const y1 = b.y - sy * halfH;
+    return {
+      d: `M ${x0} ${y0} L ${cx} ${cy} L ${x1} ${y1}`,
+      lx: (x0 + cx) / 2,
+      ly: cy,
+      from: { x: x0 + sx * 6, y: y0 - 6, anchor: sx > 0 ? 'start' : 'end' },
+      to:   { x: x1 + 6, y: y1 - sy * 6, anchor: 'start' },
+    };
+  }
+  // V-first: a.edge → corner(a.x, b.y) → b.edge
+  const x0 = a.x + off;
+  const y0 = a.y + sy * halfH;
+  const cx = a.x + off;
+  const cy = b.y + off;
+  const x1 = b.x - sx * halfW;
+  const y1 = b.y + off;
   return {
-    d: `M ${ax} ${ey1} L ${ax} ${mid} L ${bx} ${mid} L ${bx} ${ey2}`,
-    lx: (ax + bx) / 2, ly: mid,
-    from: { x: ax + 8, y: ey1 + sy * 14, anchor: 'start' },
-    to:   { x: bx + 8, y: ey2 - sy * 10, anchor: 'start' },
+    d: `M ${x0} ${y0} L ${cx} ${cy} L ${x1} ${y1}`,
+    lx: cx,
+    ly: (y0 + cy) / 2,
+    from: { x: x0 + 8, y: y0 + sy * 14, anchor: 'start' },
+    to:   { x: x1 - sx * 6, y: y1 - 6, anchor: sx > 0 ? 'end' : 'start' },
   };
 }
 
@@ -4593,8 +4703,8 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
   const width  = opts.width  || 1.8;
   const gap    = opts.gap    || 3;
   const lane   = opts.lane   || 0;
-  const a = orthPath(aPos, bPos, lane + gap);
-  const b = orthPath(aPos, bPos, lane - gap);
+  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds);
+  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds);
   return `
     <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
     <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
@@ -4611,7 +4721,8 @@ function drawLagLink(s, p) {
   const aPos = { x: p.stackA.x, y: p.stackA.y };
   const bPos = { x: p.stackB.x, y: p.stackB.y };
   const lane = laneForLag(s, p.stackA.id, p.lagA.id);
-  const path = orthPath(aPos, bPos, lane);
+  const excl = [p.stackA.id, p.stackB.id];
+  const path = orthPath(aPos, bPos, lane, s, excl);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
   g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
@@ -4634,13 +4745,13 @@ function drawLagLink(s, p) {
     const gap = 6;
     drawnVlans.forEach((v, i) => {
       const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
-      const op = orthPath(aPos, bPos, off);
+      const op = orthPath(aPos, bPos, off, s, excl);
       const c = vlanColor(s, v);
       inner += `<path class="m002-link-line m002-link-stripe" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
       inner += `<text class="m002-link-label m002-link-stripe-label" x="${op.lx}" y="${op.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane });
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl });
     if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
@@ -4686,7 +4797,7 @@ function refreshAggregates(s) {
 // the aggregation key so a future LAG-config flow can resolve the linkIds.
 function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   const lane = laneForAgg(s, key);
-  const path = orthPath(aPos, bPos, lane);
+  const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide]);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-agg');
   g.setAttribute('data-agg-key', key);
@@ -4877,7 +4988,8 @@ function drawLink(s, link) {
   const bPos = effectivePos(s, b.id);
   const layer = s.activeLayer;
   const lane = laneForLink(s, link.id);
-  const base = orthPath(aPos, bPos, lane);
+  const excl = linkExcludeIds(s, link);
+  const base = orthPath(aPos, bPos, lane, s, excl);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
@@ -4907,7 +5019,7 @@ function drawLink(s, link) {
           const gap = 6;
           drawn.forEach((v, i) => {
             const off = lane + (i - (drawn.length - 1) / 2) * gap;
-            const p = orthPath(aPos, bPos, off);
+            const p = orthPath(aPos, bPos, off, s, excl);
             const c = vlanColor(s, v);
             inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
@@ -4921,11 +5033,11 @@ function drawLink(s, link) {
             inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
           }
         }
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl });
       } else if (layer === 'routing') {
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl });
       }
       // Physical layer carries the LAG-name pair label; VLAN already speaks
       // through its own stripes / count badge, and routing stays unlabelled
@@ -4962,7 +5074,7 @@ function drawLink(s, link) {
       const gap = 6;
       drawn.forEach((v, i) => {
         const off = lane + (i - (drawn.length - 1) / 2) * gap;
-        const p = orthPath(aPos, bPos, off);
+        const p = orthPath(aPos, bPos, off, s, excl);
         const c = vlanColor(s, v);
         const w = bundleInfo?.members ? 2.4 : 1.4;
         // Inline style on stripes — beats the .m002-selected white-stroke rule
@@ -4984,7 +5096,7 @@ function drawLink(s, link) {
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
       // LAG accent — parallel double-line on top of the VLAN stripes
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl });
     }
   } else if (layer === 'routing') {
     // L3 view. Every wire (regular link OR LAG-bundle rep) draws as a single
