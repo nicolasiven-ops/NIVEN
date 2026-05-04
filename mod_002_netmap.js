@@ -4786,9 +4786,18 @@ function applyVlanSoloVisuals(s) {
     });
   }
   // Links carry VLAN stripes / count badges that depend on the filter — bare
-  // attribute swaps can't transition those, so a redraw is fine.
+  // attribute swaps can't transition those, so a redraw is fine. The
+  // .m002-vsolo-fade class triggers a one-shot opacity ease-in so the swap
+  // doesn't snap; we strip the class on animationend to keep future redraws
+  // (drag, layer toggle, …) from inheriting the fade.
   s.links.forEach((l) => redrawLink(s, l));
   redrawAllLagPairs(s);
+  if (s.gLinks) {
+    s.gLinks.querySelectorAll('.m002-link, .m002-laglink').forEach((g) => {
+      g.classList.add('m002-vsolo-fade');
+      g.addEventListener('animationend', () => g.classList.remove('m002-vsolo-fade'), { once: true });
+    });
+  }
   renderLegend(s);
 }
 

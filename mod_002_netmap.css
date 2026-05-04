@@ -510,14 +510,20 @@
    - configured-only: VLAN at device level but no port carries it → amber
      ("declared but not wired"), softly pulsing so it stands out */
 @keyframes m002-vsolo-amber-pulse {
-  0%, 100% { filter: drop-shadow(0 0 3px #ffbf3c) drop-shadow(0 0 9px #ffbf3c); }
-  50%      { filter: drop-shadow(0 0 8px #ffbf3c) drop-shadow(0 0 26px #ffbf3c); }
+  0%, 100% { filter: drop-shadow(0 0 4px #ffbf3c) drop-shadow(0 0 11px #ffbf3c); }
+  50%      { filter: drop-shadow(0 0 9px #ffbf3c) drop-shadow(0 0 28px #ffbf3c); }
 }
 /* Smooth in/out for solo dimming. Targets every canvas element that can carry
    a data-vlan-solo attribute so a toggle/clear interpolates instead of snapping. */
 .m002-host[data-active-layer="vlan"] .m002-device,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed,
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope{transition:opacity .35s ease-out, filter .35s ease-out;}
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope{transition:opacity .6s ease-out, filter .6s ease-out;}
+/* Links get redrawn on solo change (stripes/count badges depend on the filter,
+   so we can't just toggle attributes). The applyVlanSoloVisuals path tags the
+   freshly drawn <g>s with .m002-vsolo-fade so they ease in instead of snapping. */
+@keyframes m002-vsolo-link-fade { from { opacity: 0; } to { opacity: 1; } }
+.m002-link.m002-vsolo-fade,
+.m002-laglink.m002-vsolo-fade{animation:m002-vsolo-link-fade .55s ease-out;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
@@ -532,7 +538,7 @@
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{animation:m002-vsolo-amber-pulse 1.8s ease-in-out infinite;}
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{animation:m002-vsolo-amber-pulse 2.4s ease-in-out infinite;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ffbf3c;}
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"] .m002-stack-env-bg{stroke:#ffbf3c;}
