@@ -1043,3 +1043,38 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-line.m002-link-stripe{filter:none !important;}
 .m002-host[data-grid-style="sketch"] .m002-link.m002-link-bundle:hover .m002-lag-line{stroke:#2a2a30 !important;}
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-lag-line{stroke:#c44b3c !important;filter:none !important;}
+
+/* --- Radial action menu: re-skin the dark-glass / neon-red default into the
+   ink-on-paper palette. Cream paper bg, graphite ink, pencil-red intent on
+   hover. Keep the device-picker --accent tinting (it's already per-type) but
+   soften it onto the cream substrate. */
+.m002-host[data-grid-style="sketch"] .m002-radial{filter:drop-shadow(0 4px 14px rgba(0,0,0,0.18)) !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-bg{fill:rgba(254,252,246,0.96) !important;stroke:#c8c2b0 !important;stroke-width:1 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-core{fill:#fefcf6 !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-core-label{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-path{fill:rgba(254,252,246,0.92) !important;stroke:#c8c2b0 !important;stroke-width:1 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg:hover .m002-rad-seg-path{fill:rgba(196,75,60,0.10) !important;stroke:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-glyph{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-label{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-hint{fill:#7a7568 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg:hover .m002-rad-seg-glyph,
+.m002-host[data-grid-style="sketch"] .m002-rad-seg:hover .m002-rad-seg-label{fill:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg:hover .m002-rad-seg-hint{fill:#3a3a35 !important;}
+/* Device-picker segments — keep per-type --accent for the dot + label hover,
+   but desaturate the hover bg so it sits on cream (was rgba(14,14,22,0.92)
+   blended). Drop the dot drop-shadow glow — no neon on paper. */
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-dev .m002-rad-seg-dot{filter:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-dev:hover .m002-rad-seg-path{fill:color-mix(in srgb,var(--accent) 12%,#fefcf6) !important;stroke:var(--accent) !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-dev:hover .m002-rad-seg-label{fill:var(--accent) !important;}
+/* Center back / cancel tile — pencil-red on hover instead of neon */
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-back:hover .m002-rad-core,
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-cancel:hover .m002-rad-core{stroke:#c44b3c !important;fill:rgba(196,75,60,0.06) !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-back:hover .m002-rad-core-label,
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-cancel:hover .m002-rad-core-label{fill:#c44b3c !important;}
+/* Active-zone tile (already-current zone in zone picker) — pencil-red hint */
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-zone-active .m002-rad-seg-path{fill:rgba(196,75,60,0.08) !important;stroke:rgba(196,75,60,0.55) !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-zone-active .m002-rad-seg-label{fill:#c44b3c !important;}
+/* Build-in animation primitives (centre dot, vlines, arcs) — graphite */
+.m002-host[data-grid-style="sketch"] .m002-rad-dot{fill:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-vline,
+.m002-host[data-grid-style="sketch"] .m002-rad-arc{stroke:#3a3a35 !important;}
