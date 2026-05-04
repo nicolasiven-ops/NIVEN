@@ -856,6 +856,38 @@
 .m002-detail-port-peer{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-port-name{font-family:'Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-stub{pointer-events:none;}
+
+/* Hop transition — Streetview-style navigation between switches.
+   When the user clicks a port whose peer is navigable (non-endpoint), the
+   overlay enters .m002-detail-hop. Everything except the clicked port
+   (.m002-detail-hopper) fades + scales out; the survivor flies to the
+   centre via WAAPI on its inner group, then the body re-renders rooted on
+   the peer and the standard entry choreography replays.
+   The fade rules need higher specificity than .m002-detail-overlay-show's
+   animation rules, hence the doubled .m002-detail-overlay.m002-detail-hop. */
+.m002-detail-overlay.m002-detail-hop .m002-detail-device-inner,
+.m002-detail-overlay.m002-detail-hop .m002-detail-port:not(.m002-detail-hopper) .m002-detail-port-inner,
+.m002-detail-overlay.m002-detail-hop .m002-detail-port:not(.m002-detail-hopper) .m002-detail-stub,
+.m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-stub{
+  animation:none!important;
+  transition:transform 240ms cubic-bezier(0.4,0,1,1),opacity 240ms cubic-bezier(0.4,0,1,1);
+  transform:scale(0.35);
+  opacity:0;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-hopper{pointer-events:none;}
+.m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-port-inner{
+  /* WAAPI drives the morph — disable the show-class entry animation
+     so the inline keyframe transform isn't fighting a CSS animation. */
+  animation:none!important;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-port-box{
+  /* Survivor lights up its own accent so the user can track it through the
+     fly-in (avoids the slate-grey unselected box look mid-air). */
+  stroke:var(--accent);
+  stroke-width:2;
+}
+
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
   .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:none!important;}

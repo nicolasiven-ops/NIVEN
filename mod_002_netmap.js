@@ -1811,6 +1811,21 @@ function buildDOM(s) {
     if (portEl && s.detailDeviceId) {
       const portN = Number(portEl.dataset.detailPort);
       if (!Number.isFinite(portN)) return;
+      // Streetview-style hop: clicking a port whose peer is itself a
+      // navigable element (switch / router / firewall / cloud / JUMP — i.e.
+      // anything that isn't an endpoint) flies the camera over and re-roots
+      // the detail view on that peer. Endpoint peers and empty ports keep
+      // the existing behaviour (open port modal in the inspector).
+      const dev = s.devices.find((d) => d.id === s.detailDeviceId);
+      const info = dev ? classifyDetailPort(s, dev, portN) : null;
+      const peer = info?.peer;
+      if (peer && peer.type !== 'endpoint') {
+        detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
+        detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
+        portEl.classList.add('is-selected');
+        hopToPeer(s, peer.id, portEl);
+        return;
+      }
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
       detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
       portEl.classList.add('is-selected');
@@ -9396,6 +9411,131 @@ function animateView(s, target, durationMs) {
     else { s._viewAnimRaf = null; }
   };
   s._viewAnimRaf = requestAnimationFrame(step);
+}
+
+// =============================================================================
+// HOP — Streetview-style navigation between switches inside Detail View.
+// Click an uplink port (peer is a switch / router / firewall / cloud / JUMP)
+// and the view "hops" to that peer:
+//   Phase 1 (HOP_FADE_MS) — every port + the central device fade away; the
+//     clicked port stays visible.
+//   Phase 2 (HOP_FLY_MS) — the surviving port flies to the centre and scales
+//     up to ~switch-card size, "becoming" the new central element.
+//   Phase 3 — detailDeviceId swaps to the peer, the body re-renders, and the
+//     standard entry choreography replays automatically (the new device tile
+//     emerges at the centre, ports cascade in around it).
+// The camera tween runs in parallel so when the user exits later, exit still
+// returns them to the original pre-detail viewport (s._viewBeforeDetail is
+// NOT overwritten on hop).
+// =============================================================================
+const HOP_FADE_MS = 240;
+const HOP_FLY_MS  = 460;
+
+function hopToPeer(s, peerId, fromPortEl) {
+  if (!peerId || peerId === s.detailDeviceId) return;
+  if (s._detailHopActive) return;
+  const peer = s.devices.find((d) => d.id === peerId);
+  if (!peer) return;
+  const overlay = s.host.querySelector('.m002-detail-overlay');
+  if (!overlay) return;
+  const portEl = fromPortEl || overlay.querySelector('.m002-detail-port.is-selected');
+  if (!portEl) return;
+  const deviceEl = overlay.querySelector('.m002-detail-device');
+  if (!deviceEl) return;
+
+  s._detailHopActive = true;
+  if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
+
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  // Drop the settled override so transitions in .m002-detail-hop can take
+  // hold (settled forces transform:none / opacity:1 with !important).
+  overlay.classList.remove('m002-detail-overlay-settled');
+
+  // Geometry — convert the port → device translation into the SVG's user
+  // coordinate system using the bounding rects in screen space, then divide
+  // by the SVG's actual screen scale. CSS transforms on SVG elements use the
+  // SVG user-coordinate system, so we need the translation in user units.
+  const portRect = portEl.getBoundingClientRect();
+  const deviceRect = deviceEl.getBoundingClientRect();
+  const portCx = portRect.left + portRect.width / 2;
+  const portCy = portRect.top  + portRect.height / 2;
+  const deviceCx = deviceRect.left + deviceRect.width / 2;
+  const deviceCy = deviceRect.top  + deviceRect.height / 2;
+  // Screen→user scale: the SVG is rendered at width/height set on the element,
+  // but CSS may scale it via max-width:100%. Use the ratio of screen width to
+  // the port's intrinsic width (DETAIL.port.w = 44).
+  const screenScale = portRect.width / DETAIL.port.w;
+  const dxUser = (deviceCx - portCx) / screenScale;
+  const dyUser = (deviceCy - portCy) / screenScale;
+  // Target scale: grow the port to ~85% of the device's vertical height.
+  // Uniform — distorting a 44×52 box into 720×180 would mangle the label.
+  const targetScale = (DETAIL.device.h / DETAIL.port.h) * 0.85;
+
+  // Phase 1+2: classes + WAAPI morph on the surviving port.
+  overlay.classList.add('m002-detail-hop');
+  portEl.classList.add('m002-detail-hopper');
+  // Boost the survivor's z-order so the morph happens over (not under) the
+  // fading device tile. SVG paints in document order, so move the element
+  // to the end of its parent.
+  const portParent = portEl.parentNode;
+  if (portParent && portEl.nextSibling) portParent.appendChild(portEl);
+
+  const inner = portEl.querySelector('.m002-detail-port-inner');
+
+  const launchHop = () => {
+    if (reduceMotion || !inner || typeof inner.animate !== 'function') {
+      // No morph — still complete the hop after a token delay.
+      finishHop();
+      return;
+    }
+    const anim = inner.animate(
+      [
+        { transform: 'translate(0px, 0px) scale(1)' },
+        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScale})` },
+      ],
+      { duration: HOP_FLY_MS, easing: 'cubic-bezier(0.4,0,0.2,1)', fill: 'forwards' }
+    );
+    if (anim.finished && typeof anim.finished.then === 'function') {
+      anim.finished.then(finishHop, finishHop);
+    } else {
+      anim.onfinish = finishHop;
+      setTimeout(finishHop, HOP_FLY_MS + 80); // safety net
+    }
+  };
+
+  let finishedOnce = false;
+  function finishHop() {
+    if (finishedOnce) return;
+    finishedOnce = true;
+
+    // Swap focused device + camera (camera runs in parallel, doesn't gate UI).
+    s.detailDeviceId = peerId;
+    if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
+      select(s, 'device', peerId);
+    }
+    const rect = s.svg.getBoundingClientRect();
+    const targetZoom = DETAIL_TARGET_ZOOM;
+    const tx = rect.width  / 2 - peer.x * targetZoom;
+    const ty = rect.height / 2 - peer.y * targetZoom;
+    animateView(s, { x: tx, y: ty, zoom: targetZoom }, DETAIL_ANIM_MS);
+
+    // Re-render body — new DOM nodes match the .m002-detail-overlay-show
+    // animation rules, so the entry choreography replays automatically.
+    const t = typeOf(peer.type);
+    const titleEl = overlay.querySelector('.m002-detail-title');
+    if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
+    overlay.classList.remove('m002-detail-hop');
+    renderDetailView(s);
+
+    s._detailSettleTimer = setTimeout(() => {
+      if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
+    }, 1100);
+    s._detailHopActive = false;
+  }
+
+  // Wait HOP_FADE_MS for the surroundings to fade, then launch the morph.
+  setTimeout(launchHop, reduceMotion ? 0 : HOP_FADE_MS);
 }
 
 // =============================================================================
