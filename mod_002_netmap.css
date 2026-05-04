@@ -882,17 +882,40 @@ body.m002-tool-delete.m002-style-sketch .cursor::after{content:'';position:absol
 body.m002-style-sketch{--red:#000000;--red-glow:#c44b3c;}
 body.m002-style-sketch.m002-tool-link{--red:#3a5a3a;}
 body.m002-style-sketch.m002-tool-delete{--red:#8a1f12;}
+/* Sketch brackets: ditch the border-only L-shape (which renders unreliably
+   under colour-modifying extensions / HiDPI subpixel anti-aliasing) and
+   replace each corner with two solid-coloured boxes via ::before/::after
+   pseudo-elements. Solid background blocks survive most browser pixel
+   manipulation; even Dark Reader doesn't typically wipe filled rects. */
 body.m002-style-sketch .cur-bracket{
-  border-color:var(--red) !important;
-  border-width:2px !important;
+  border:none !important;
+  width:8px !important;
+  height:8px !important;
   forced-color-adjust:none !important;
   print-color-adjust:exact !important;
   -webkit-print-color-adjust:exact !important;
+  position:absolute !important;
 }
-body.m002-style-sketch .br-tl{border-top:2px solid var(--red) !important;border-left:2px solid var(--red) !important;}
-body.m002-style-sketch .br-tr{border-top:2px solid var(--red) !important;border-right:2px solid var(--red) !important;}
-body.m002-style-sketch .br-bl{border-bottom:2px solid var(--red) !important;border-left:2px solid var(--red) !important;}
-body.m002-style-sketch .br-br{border-bottom:2px solid var(--red) !important;border-right:2px solid var(--red) !important;}
+body.m002-style-sketch .cur-bracket::before,
+body.m002-style-sketch .cur-bracket::after{
+  content:'';
+  position:absolute;
+  background:var(--red) !important;
+  forced-color-adjust:none !important;
+  print-color-adjust:exact !important;
+}
+/* br-tl: horizontal stroke at top + vertical stroke at left */
+body.m002-style-sketch .br-tl::before{top:0;left:0;width:8px;height:2px;}
+body.m002-style-sketch .br-tl::after {top:0;left:0;width:2px;height:8px;}
+/* br-tr: horizontal stroke at top + vertical stroke at right */
+body.m002-style-sketch .br-tr::before{top:0;right:0;width:8px;height:2px;}
+body.m002-style-sketch .br-tr::after {top:0;right:0;width:2px;height:8px;}
+/* br-bl: horizontal stroke at bottom + vertical stroke at left */
+body.m002-style-sketch .br-bl::before{bottom:0;left:0;width:8px;height:2px;}
+body.m002-style-sketch .br-bl::after {bottom:0;left:0;width:2px;height:8px;}
+/* br-br: horizontal stroke at bottom + vertical stroke at right */
+body.m002-style-sketch .br-br::before{bottom:0;right:0;width:8px;height:2px;}
+body.m002-style-sketch .br-br::after {bottom:0;right:0;width:2px;height:8px;}
 body.m002-style-sketch .cursor-dot{
   background:var(--red) !important;
   box-shadow:none !important;
