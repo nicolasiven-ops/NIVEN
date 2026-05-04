@@ -4732,7 +4732,9 @@ function drawLagLink(s, p) {
   const isFiltered = filter.length > 0;
   const drawnVlans = isFiltered ? sharedVlans.filter((v) => filter.includes(v)) : [];
   if (s.activeLayer === 'vlan' && isFiltered && drawnVlans.length === 0) {
-    g.classList.add('m002-link-vsolo-dim');
+    const lagUnion = [...new Set([...(p.lagA.vlans || []), ...(p.lagB.vlans || [])].map(String))];
+    const asym = lagUnion.some((v) => filter.includes(v));
+    g.classList.add(asym ? 'm002-link-vsolo-asym' : 'm002-link-vsolo-dim');
   }
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   if (s.activeLayer === 'routing') {
@@ -4839,6 +4841,14 @@ function linkVlans(s, link) {
   const va = new Set(portVlans(s, link.from, link.fromPort));
   const vb = new Set(portVlans(s, link.to,   link.toPort));
   return [...va].filter((v) => vb.has(v));
+}
+// Union of VLANs across both endpoint ports. VLAN solo uses this to flag
+// "asymmetric" links: one side carries the soloed VLAN, the other doesn't,
+// so the intersection (linkVlans) is empty but the union still matches.
+function linkVlansUnion(s, link) {
+  const va = portVlans(s, link.from, link.fromPort).map(String);
+  const vb = portVlans(s, link.to,   link.toPort).map(String);
+  return [...new Set([...va, ...vb])];
 }
 
 // Effective VLAN solo set = persisted filter + transient hover preview from
@@ -5014,7 +5024,11 @@ function drawLink(s, link) {
         const filter = effectiveVlanSolo(s);
         const isFiltered = filter.length > 0;
         const drawn = isFiltered ? vlans.filter((v) => filter.includes(v)) : [];
-        if (isFiltered && drawn.length === 0) g.classList.add('m002-link-vsolo-dim');
+        if (isFiltered && drawn.length === 0) {
+          const tunUnion = [...new Set([...(tp.localLag.vlans || []), ...(tp.peerLag.vlans || [])].map(String))];
+          const asym = tunUnion.some((v) => filter.includes(v));
+          g.classList.add(asym ? 'm002-link-vsolo-asym' : 'm002-link-vsolo-dim');
+        }
         if (drawn.length > 0) {
           const gap = 6;
           drawn.forEach((v, i) => {
@@ -5062,7 +5076,11 @@ function drawLink(s, link) {
     // parallel lines stop scaling past ~7 VLANs and lose meaning when many
     // VLANs share similar hues.
     const drawn = isFiltered ? vlans.filter((v) => filter.includes(String(v))) : [];
-    if (isFiltered && drawn.length === 0) g.classList.add('m002-link-vsolo-dim');
+    if (isFiltered && drawn.length === 0) {
+      const union = linkVlansUnion(s, link);
+      const asym = union.some((v) => filter.includes(String(v)));
+      g.classList.add(asym ? 'm002-link-vsolo-asym' : 'm002-link-vsolo-dim');
+    }
     if (vlans.length === 0) {
       inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
     } else if (isFiltered && drawn.length === 0) {

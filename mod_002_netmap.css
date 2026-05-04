@@ -634,9 +634,22 @@
 .m002-host[data-active-layer="vlan"] .m002-link,
 .m002-host[data-active-layer="vlan"] .m002-laglink{transition:opacity .6s ease-out;}
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-dim,
-.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim{opacity:.2;}
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim{opacity:.07;}
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-dim:hover,
-.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim:hover{opacity:.55;}
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim:hover{opacity:.4;}
+/* Asymmetric link — VLAN configured on one endpoint only, the other side
+   isn't tagged. Mirrors the configured-only amber pulse on devices/stacks
+   ("declared but not wired through"). */
+@keyframes m002-link-vsolo-asym-pulse {
+  0%, 100% { filter: drop-shadow(0 0 2px #ffbf3c) drop-shadow(0 0 7px #ffbf3c); }
+  50%      { filter: drop-shadow(0 0 5px #ffbf3c) drop-shadow(0 0 18px #ffbf3c); }
+}
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym,
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym{animation:m002-link-vsolo-asym-pulse 2.4s ease-in-out infinite;}
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym .m002-link-line,
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym .m002-lag-line,
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym .m002-link-line,
+.m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym .m002-lag-line{stroke:#ffbf3c !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-isolated"],
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="unmatched-adjacent"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"],
