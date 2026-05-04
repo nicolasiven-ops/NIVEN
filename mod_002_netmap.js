@@ -40,13 +40,24 @@
 //     mount when the server table is empty.
 //
 // Companion files:
-//   - mod_002_utils.js  — pure helpers (parseCidr, rid, …) imported below
-//   - mod_002_netmap.css — module styles, loaded once via <link> in index.html
+//   - mod_002_utils.js       — pure helpers (parseCidr, rid, …) imported below
+//   - mod_002_persistence.js — Supabase save/load/migration for m002_maps
+//   - mod_002_netmap.css     — module styles, loaded once via <link> in index.html
 
 import { parseCidr, prefixToMask, numToIp, cidrNormalize, ipInCidr, normalizeIpInput, rid } from './mod_002_utils.js';
+import {
+  configurePersistence,
+  schedSave, saveNow, snapshotMapData,
+  loadFromServer, loadMapData, hydrateMapData,
+  rememberActiveMap,
+} from './mod_002_persistence.js';
+
+// Wire migrate + toast into the persistence module. Function declarations
+// below are hoisted, so the references resolve correctly at this top-level
+// call even though the definitions appear later in the file.
+configurePersistence({ migrate, toast });
 
 const MODULE_CODE = 'MOD_002';
-const SAVE_DEBOUNCE_MS = 800;
 const SVG_NS = 'http://www.w3.org/2000/svg';
 
 const DEFAULT_PORTS = 2;
@@ -9153,187 +9164,6 @@ function animateView(s, target, durationMs) {
     else { s._viewAnimRaf = null; }
   };
   s._viewAnimRaf = requestAnimationFrame(step);
-}
-
-// =============================================================================
-// Persistence (Supabase: m002_maps, RLS-scoped to auth.uid())
-// =============================================================================
-const ACTIVE_KEY    = (s) => `niven:m002:active:${s.project?.id || s.code}`;
-const LEGACY_META   = (s) => `niven:m002:meta:${s.project?.id || s.code}`;
-const LEGACY_MAP    = (mapId) => `niven:m002:map:${mapId}`;
-const LEGACY_SINGLE = (s) => `niven:m002:${s.project?.id || s.code}`;
-
-function schedSave(s) {
-  if (!s.activeMapId || s.suspendSaves) return;
-  s.dirty = true;
-  clearTimeout(s.saveTimer);
-  s.saveTimer = setTimeout(() => saveNow(s), SAVE_DEBOUNCE_MS);
-}
-
-function snapshotMapData(s) {
-  return {
-    v: 4,
-    devices: s.devices, links: s.links, stacks: s.stacks,
-    vlanRegistry: s.vlanRegistry,
-    subnetRegistry: s.subnetRegistry,
-    zones: s.zones, activeZone: s.activeZone,
-    view: s.view,
-  };
-}
-
-async function saveNow(s) {
-  if (!s.activeMapId || s.suspendSaves) return;
-  // Local-only maps (offline mode) — nothing to push.
-  if (!s.sb || String(s.activeMapId).startsWith('local_')) { s.dirty = false; return; }
-  const data = snapshotMapData(s);
-  s.dirty = false;
-  try {
-    const { error } = await s.sb.from('m002_maps')
-      .update({ data })
-      .eq('id', s.activeMapId);
-    if (error) throw error;
-  } catch (e) {
-    console.warn('[m002] save failed', e);
-    s.dirty = true; // keep flag so a later edit still triggers a retry
-    toast(s, 'SYNC FAILED — changes pending');
-  }
-}
-
-async function loadFromServer(s) {
-  if (!s.sb) { initFreshMapLocal(s); toast(s, 'SYNC OFFLINE — local only'); return; }
-  s.suspendSaves = true;
-  try {
-    const { data: rows, error } = await s.sb.from('m002_maps')
-      .select('id,name,data')
-      .order('created_at', { ascending: true });
-    if (error) throw error;
-
-    if (!rows || rows.length === 0) {
-      const migrated = await migrateFromLocalStorage(s);
-      if (!migrated) await createInitialMap(s);
-      return;
-    }
-
-    s.maps = rows.map((r) => ({ id: r.id, name: r.name }));
-    const remembered = (() => { try { return localStorage.getItem(ACTIVE_KEY(s)); } catch { return null; } })();
-    const activeRow = (remembered && rows.find((r) => r.id === remembered)) || rows[0];
-    s.activeMapId = activeRow.id;
-    hydrateMapData(s, activeRow.data || {});
-    rememberActiveMap(s);
-  } catch (e) {
-    console.warn('[m002] load failed', e);
-    toast(s, 'SYNC OFFLINE — local only');
-    initFreshMapLocal(s);
-  } finally {
-    s.suspendSaves = false;
-  }
-}
-
-async function loadMapData(s, mapId) {
-  if (!s.sb || String(mapId).startsWith('local_')) { hydrateMapData(s, {}); return; }
-  s.suspendSaves = true;
-  try {
-    const { data: row, error } = await s.sb.from('m002_maps')
-      .select('data').eq('id', mapId).single();
-    if (error) throw error;
-    hydrateMapData(s, row?.data || {});
-  } catch (e) {
-    console.warn('[m002] map load failed', e);
-    hydrateMapData(s, {});
-  } finally {
-    s.suspendSaves = false;
-  }
-}
-
-function hydrateMapData(s, data) {
-  s.devices = Array.isArray(data.devices) ? data.devices : [];
-  s.links = Array.isArray(data.links) ? data.links : [];
-  s.stacks = Array.isArray(data.stacks) ? data.stacks : [];
-  s.vlanRegistry = Array.isArray(data.vlanRegistry) ? data.vlanRegistry : [];
-  s.subnetRegistry = Array.isArray(data.subnetRegistry) ? data.subnetRegistry : [];
-  s.zones = Array.isArray(data.zones) && data.zones.length ? data.zones : [{ id: 'z_main', name: 'Main' }];
-  s.activeZone = data.activeZone && s.zones.find((z) => z.id === data.activeZone) ? data.activeZone : s.zones[0].id;
-  s.view = { ...DEFAULT_VIEW, ...(data.view || {}) };
-  if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
-  if (!Array.isArray(s.view.subnetFilter)) s.view.subnetFilter = [];
-  if (!s.view.zoneViews || typeof s.view.zoneViews !== 'object') s.view.zoneViews = {};
-  migrate(s);
-}
-
-// One-time migration: scoop pre-cloud localStorage maps and push them up.
-async function migrateFromLocalStorage(s) {
-  let legacyMaps = [];
-  let legacyActive = null;
-  try {
-    const metaRaw = localStorage.getItem(LEGACY_META(s));
-    if (metaRaw) {
-      const meta = JSON.parse(metaRaw);
-      if (Array.isArray(meta?.maps)) {
-        legacyMaps = meta.maps;
-        legacyActive = meta.activeMap || null;
-      }
-    }
-    // Even older shape: a single-blob key from before the multi-map era.
-    if (!legacyMaps.length) {
-      const blob = localStorage.getItem(LEGACY_SINGLE(s));
-      if (blob) {
-        legacyMaps = [{ id: '__single__', name: 'Main', __blob: blob }];
-      }
-    }
-  } catch (e) { console.warn('[m002] legacy read failed', e); }
-
-  if (!legacyMaps.length) return false;
-
-  const inserted = [];
-  for (const m of legacyMaps) {
-    let data = {};
-    try {
-      const raw = m.__blob ?? localStorage.getItem(LEGACY_MAP(m.id));
-      if (raw) data = JSON.parse(raw);
-    } catch {}
-    const { data: row, error } = await s.sb.from('m002_maps')
-      .insert({ name: m.name || 'Main', data }).select('id,name,data').single();
-    if (error) { console.warn('[m002] migrate row failed', error); continue; }
-    inserted.push({ row, legacyId: m.id });
-  }
-  if (!inserted.length) return false;
-
-  s.maps = inserted.map((it) => ({ id: it.row.id, name: it.row.name }));
-  const matchIdx = inserted.findIndex((it) => it.legacyId === legacyActive);
-  const activeIt = inserted[matchIdx >= 0 ? matchIdx : 0];
-  s.activeMapId = activeIt.row.id;
-  hydrateMapData(s, activeIt.row.data || {});
-  rememberActiveMap(s);
-  toast(s, `Synced ${inserted.length} map${inserted.length === 1 ? '' : 's'} to cloud`);
-  return true;
-}
-
-async function createInitialMap(s) {
-  const { data: row, error } = await s.sb.from('m002_maps')
-    .insert({ name: 'Main', data: {} }).select('id,name').single();
-  if (error) {
-    console.warn('[m002] create initial failed', error);
-    initFreshMapLocal(s);
-    toast(s, 'SYNC OFFLINE — local only');
-    return;
-  }
-  s.maps = [{ id: row.id, name: row.name }];
-  s.activeMapId = row.id;
-  hydrateMapData(s, {});
-  rememberActiveMap(s);
-}
-
-// Fallback for unauthed / network-down boots — strictly in-memory.
-function initFreshMapLocal(s) {
-  const id = 'local_' + rid();
-  s.maps = [{ id, name: 'Main (offline)' }];
-  s.activeMapId = id;
-  hydrateMapData(s, {});
-}
-
-function rememberActiveMap(s) {
-  if (!s.activeMapId) return;
-  try { localStorage.setItem(ACTIVE_KEY(s), s.activeMapId); } catch {}
 }
 
 // =============================================================================
