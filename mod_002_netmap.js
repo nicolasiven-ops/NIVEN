@@ -8246,7 +8246,7 @@ const VFX_GROUPS = [
 
 function vfxEaseInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
 
-function vfxSnapshot(s) {
+function vfxSnapshot(s, freeze) {
   const map = new Map();
   for (const grp of VFX_GROUPS) {
     const root = s[grp.container];
@@ -8268,12 +8268,45 @@ function vfxSnapshot(s) {
       //     skipped them entirely.
       const cs = window.getComputedStyle(el);
       const frozen = `${cs.opacity}|${cs.filter}|${el.innerHTML}`;
+      // BEFORE snapshot only: stamp the BRIGHT computed visuals as inline
+      // styles on the live element so the look survives a layer flip when
+      // a clone is later attached into a host with the new data-active-
+      // layer attribute (whose dim CSS would otherwise override). doRender
+      // detaches these elements via innerHTML wipe so the inline-style
+      // pollution doesn't affect anything still on screen.
+      if (freeze) vfxFreezeOldLook(el);
       // Key includes the container so a stack envelope and a stack icon —
       // both keyed by data-stack-id but in different groups — don't collide.
       map.set(grp.container + '|' + grp.idAttr + '|' + id, { el, center, frozen });
     });
   }
   return map;
+}
+
+// Snapshot the BRIGHT layer's computed visual properties as inline styles
+// on the wrapper + every Element descendant. Without this, a clone made
+// after a layer flip (e.g. routing → vlan) and attached into a host whose
+// data-active-layer matches a dim CSS rule would render in the dim
+// treatment — invisible-against-the-background drain instead of the
+// "drain plays in colour over the dim background" the user wants.
+//
+// Wrapper opacity + filter use !important because VLAN-solo unmatched-
+// isolated / unmatched-adjacent dim rules use !important. Descendants'
+// fill + stroke don't need !important because none of the dim child-rules
+// use it; plain inline wins via inline-vs-external specificity. Skip
+// stamping fill/stroke on elements that already have an inline value
+// (e.g. paths with inline fill="none") to avoid overwriting load-bearing
+// presentation attributes.
+function vfxFreezeOldLook(wrapperEl) {
+  const wcs = window.getComputedStyle(wrapperEl);
+  wrapperEl.style.setProperty('opacity', wcs.opacity, 'important');
+  wrapperEl.style.setProperty('filter', wcs.filter, 'important');
+  wrapperEl.querySelectorAll('*').forEach((el) => {
+    if (!(el instanceof Element)) return;
+    const cs = window.getComputedStyle(el);
+    if (!el.style.fill) el.style.fill = cs.fill;
+    if (!el.style.stroke) el.style.stroke = cs.stroke;
+  });
 }
 
 function vfxBBoxCenterWorld(el) {
@@ -8858,9 +8891,16 @@ function vfxAnimateView(s, doRender, anchor) {
   if (s._vfxFinish) s._vfxFinish();
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
-  const before = vfxSnapshot(s);
+  // BEFORE: freeze=true stamps the BRIGHT layer's look as inline styles on
+  // the live elements so the about-to-be-cloned drain shapes survive the
+  // layer flip without picking up the new layer's dim CSS treatment.
+  // AFTER: freeze=false leaves the freshly-rendered new look CSS-driven so
+  // the build animation grows IN the new dim treatment (e.g. .45 opacity
+  // for routing-dimmed envelopes) — exactly what the user sees behind the
+  // colour-drain overlay.
+  const before = vfxSnapshot(s, true);
   doRender();
-  const after = vfxSnapshot(s);
+  const after = vfxSnapshot(s, false);
 
   // Anchor for directional drain. Explicit point wins (e.g. clicked Jump's
   // world position). Otherwise the centroid of persisting elements; if none
