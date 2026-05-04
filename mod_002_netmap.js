@@ -2988,7 +2988,7 @@ function bindBoard(s) {
         ny = snapY;
         clearSnapPreview(s);
       } else if (s.prefs?.snapOnDrop) {
-        scheduleSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'stack', st.id));
+        scheduleSnapPreview(s, snapX, snapY, dragSnapAccent(s, 'stack', st.id), stackSnapPreviewOpts(s, st));
       } else {
         clearSnapPreview(s);
       }
@@ -8137,15 +8137,17 @@ function vfxResetInlineParts(parts) {
 // and the ghost is invisible exactly when it matters most. One reusable
 // rect per state, updated in place so dragging is allocation-free.
 
-function showSnapPreview(s, snapX, snapY, accent) {
+function showSnapPreview(s, snapX, snapY, accent, opts) {
   const layer = s.gOverlay;
   if (!layer) return;
+  const w = opts?.width ?? DEVICE_W;
+  const h = opts?.height ?? DEVICE_H;
+  const offX = opts?.offsetX ?? -w / 2;
+  const offY = opts?.offsetY ?? -h / 2;
   let el = s.snapPreviewEl;
   if (!el || !el.isConnected) {
     el = document.createElementNS(SVG_NS, 'rect');
     el.setAttribute('class', 'm002-snap-preview');
-    el.setAttribute('width', String(DEVICE_W));
-    el.setAttribute('height', String(DEVICE_H));
     el.setAttribute('rx', '3');
     el.setAttribute('fill', 'none');
     el.setAttribute('stroke-width', '1');
@@ -8154,8 +8156,10 @@ function showSnapPreview(s, snapX, snapY, accent) {
     layer.appendChild(el);
     s.snapPreviewEl = el;
   }
-  el.setAttribute('x', String(snapX - DEVICE_W / 2));
-  el.setAttribute('y', String(snapY - DEVICE_H / 2));
+  el.setAttribute('width', String(w));
+  el.setAttribute('height', String(h));
+  el.setAttribute('x', String(snapX + offX));
+  el.setAttribute('y', String(snapY + offY));
   el.setAttribute('stroke', accent || '#5a5f6e');
   el.style.display = '';
 }
@@ -8169,22 +8173,31 @@ function hideSnapPreview(s) {
 // the user pauses near a candidate cell. We arm a short timer per snap
 // cell; reaching a different cell resets it and re-hides the preview.
 const SNAP_PREVIEW_DWELL_MS = 180;
-function scheduleSnapPreview(s, snapX, snapY, accent) {
+function scheduleSnapPreview(s, snapX, snapY, accent, opts) {
   const cellKey = `${snapX}|${snapY}`;
   if (s._snapPreviewKey === cellKey) {
     // Same cell as last frame — leave any pending timer / shown ghost alone.
-    if (s._snapPreviewPending) s._snapPreviewPending.accent = accent;
+    if (s._snapPreviewPending) {
+      s._snapPreviewPending.accent = accent;
+      s._snapPreviewPending.opts = opts;
+    }
+    // If the ghost is already on screen, refresh accent + size live so a
+    // stack that grew/shrank mid-drag (member added etc.) updates without
+    // having to leave + re-enter the cell.
+    if (s.snapPreviewEl && s.snapPreviewEl.style.display !== 'none') {
+      showSnapPreview(s, snapX, snapY, accent, opts);
+    }
     return;
   }
   s._snapPreviewKey = cellKey;
-  s._snapPreviewPending = { snapX, snapY, accent };
+  s._snapPreviewPending = { snapX, snapY, accent, opts };
   hideSnapPreview(s);
   if (s._snapPreviewTimer) clearTimeout(s._snapPreviewTimer);
   s._snapPreviewTimer = setTimeout(() => {
     s._snapPreviewTimer = null;
     const p = s._snapPreviewPending;
     if (!p) return;
-    showSnapPreview(s, p.snapX, p.snapY, p.accent);
+    showSnapPreview(s, p.snapX, p.snapY, p.accent, p.opts);
   }, SNAP_PREVIEW_DWELL_MS);
 }
 
@@ -8205,6 +8218,30 @@ function dragSnapAccent(s, kind, id) {
     return st ? typeOf(stackTypeOf(s, st)).accent : null;
   }
   return null;
+}
+
+// Size + offset for the snap-preview ghost when dragging a stack. A collapsed
+// stack still occupies one device cell, so the default DEVICE_W × DEVICE_H box
+// is correct. An expanded stack visually spans every member + envelope padding,
+// and a single-cell ghost there underplays "this is where the whole group will
+// land" — we project the current member bounding-box around the snap anchor so
+// the ghost matches the shape the user is actually moving.
+function stackSnapPreviewOpts(s, st) {
+  if (!st || isStackCollapsed(s, st)) return undefined;
+  const members = st.members.map((mid) => s.devices.find((d) => d.id === mid)).filter(Boolean);
+  if (members.length < 1) return undefined;
+  const padding = 18;
+  const topPadExtra = 8; // matches drawStackEnvelope — label sits on the top edge
+  const minRX = Math.min(...members.map((m) => m.x - st.x - DEVICE_W / 2)) - padding;
+  const minRY = Math.min(...members.map((m) => m.y - st.y - DEVICE_H / 2)) - padding - topPadExtra;
+  const maxRX = Math.max(...members.map((m) => m.x - st.x + DEVICE_W / 2)) + padding;
+  const maxRY = Math.max(...members.map((m) => m.y - st.y + DEVICE_H / 2)) + padding;
+  return {
+    width: maxRX - minRX,
+    height: maxRY - minRY,
+    offsetX: minRX,
+    offsetY: minRY,
+  };
 }
 
 // =============================================================================
