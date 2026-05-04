@@ -182,11 +182,21 @@
 .m002-host[data-grid-style="sketch"] *{text-shadow:none;}
 
 /* === Body-level overrides for sketch (hub cursor + chrome) === */
-/* Replace red neon brackets with graphite ones so they pop on cream paper */
+/* Tool-aware cursor recolours below (#ffffff for select, #35ff7a for link)
+   are loaded LATER in this file and use !important — to win on specificity
+   we combine the style attr with the tool class in a single selector
+   (specificity 0,3,1 beats their 0,2,1). Each tool gets a sketch-friendly
+   tone: select = graphite, link = sage pencil, delete = pencil red. */
+body[data-m002-style="sketch"].m002-tool-select .cur-bracket,
 body[data-m002-style="sketch"] .cur-bracket{border-color:#2a2a30 !important;}
+body[data-m002-style="sketch"].m002-tool-select .cursor-dot,
 body[data-m002-style="sketch"] .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
+body[data-m002-style="sketch"].m002-tool-link .cur-bracket{border-color:#6b8a6b !important;}
+body[data-m002-style="sketch"].m002-tool-link .cursor-dot{background:#6b8a6b !important;box-shadow:none !important;}
+body[data-m002-style="sketch"].m002-tool-delete .cur-bracket{border-color:#c44b3c !important;}
+body[data-m002-style="sketch"].m002-tool-delete .cursor::before,
+body[data-m002-style="sketch"].m002-tool-delete .cursor::after{background:#c44b3c !important;box-shadow:none !important;}
 body[data-m002-style="sketch"] .cursor.active .cur-bracket{border-color:#c44b3c !important;}
-/* Tool-mode overrides keep their hue (cyan/red) but lose the harsh glow */
 body[data-m002-style="sketch"] .cursor{filter:none !important;}
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
