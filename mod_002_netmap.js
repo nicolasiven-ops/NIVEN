@@ -3946,27 +3946,25 @@ function visualEndpointKey(s, devIdA, devIdB) {
 
 function invalidateEdgeSlots(s) {
   s._edgeSlots = null;
-  s._hubAxes = null;
+  s._hubSides = null;
 }
 
-// Hub axes — when ≥2 distinct peers link to the same endpoint, that endpoint
-// is a "hub". Force every hub-bound link into a single L-orientation so all
-// approach lines collapse onto the same trunk axis (vertical or horizontal),
-// instead of each fanning into its own column. Result: per hubKey, the
-// preferred per-source orientation ('horizFirst' or 'vertFirst' from the
-// SOURCE side — orthPath flips that for the link direction in which the hub
-// is endpoint A).
+// Hub sides — when ≥2 distinct peers approach a hub from the SAME side
+// (north / south / east / west), those peers share that hub's side as their
+// merged approach anchor. Result: every link in such a peer-group lands on
+// one fixed midpoint anchor on the hub, and the trunk segment leading into
+// that anchor is visually shared instead of fanning into N parallel
+// corridors.
 //
-// Trunk axis pick: sum |dx| vs sum |dy| across peers. dy-dominant peer set →
-// vertical trunk → sources use horizFirst (corner at hub.x, source.y, then
-// vertical descent on x=hub.x is shared). dx-dominant → horizontal trunk →
-// vertFirst.
-function ensureHubAxes(s) {
-  if (s._hubAxes) return s._hubAxes;
-  const m = new Map();
+// Per-side bucketing (instead of one trunk-axis per hub) means a hub with
+// peers above AND below merges them into TWO separate trunks — one entering
+// from the north, one from the south — rather than crushing all approaches
+// onto a single axis that doesn't fit half of them.
+function ensureHubSides(s) {
+  if (s._hubSides) return s._hubSides;
+  const m = new Map(); // hubKey → Map<peerKey, side>
   const epPos = (id) => effectivePos(s, id);
   const epKey = (id) => {
-    // Handle direct stack id (LAG-pair endpoints) as well as device id.
     if ((s.stacks || []).some((st) => st.id === id)) return `stack:${id}`;
     const stack = findStack(s, id);
     return stack && isStackCollapsed(s, stack) ? `stack:${stack.id}` : `device:${id}`;
@@ -4000,38 +3998,43 @@ function ensureHubAxes(s) {
       return st ? { x: st.x, y: st.y } : null;
     })();
     if (!hubPos) continue;
-    let sumDx = 0, sumDy = 0;
-    for (const [, p] of peers) {
-      sumDx += Math.abs(p.x - hubPos.x);
-      sumDy += Math.abs(p.y - hubPos.y);
+    // Bucket peers by which side of the hub they sit on (dominant axis decides).
+    const sideBuckets = { N: [], S: [], E: [], W: [] };
+    for (const [peerKey, peerPos] of peers) {
+      const dx = peerPos.x - hubPos.x;
+      const dy = peerPos.y - hubPos.y;
+      let side;
+      if (Math.abs(dx) >= Math.abs(dy)) side = dx > 0 ? 'E' : 'W';
+      else                                side = dy > 0 ? 'S' : 'N';
+      sideBuckets[side].push(peerKey);
     }
-    // dy-dominant → vertical trunk → source-side orientation = horizFirst.
-    m.set(hubKey, sumDy > sumDx ? 'horizFirst' : 'vertFirst');
+    const peerToSide = new Map();
+    for (const [side, list] of Object.entries(sideBuckets)) {
+      if (list.length < 2) continue;
+      for (const pk of list) peerToSide.set(pk, side);
+    }
+    if (peerToSide.size) m.set(hubKey, peerToSide);
   }
-  s._hubAxes = m;
+  s._hubSides = m;
   return m;
 }
 
-// What orientation should the renderer force on this link's L? Returns
-// 'horizFirst' / 'vertFirst' / null. Only fires when one end of the link is a
-// hub (≥2 peers). Direction matters: if the hub sits at endpoint A (link.from
-// resolves to the hub), the from-A path needs the OPPOSITE orientation of the
-// from-source path so the trunk-axis still falls on hub.x / hub.y rather than
-// on source.x / source.y.
-function hubForcedOrientation(s, link) {
-  const axes = ensureHubAxes(s);
-  if (!axes.size) return null;
+// Which hub side, if any, should this link's hub anchor be locked to?
+// Returns { hubIsB: bool, hubSide: 'N'|'E'|'S'|'W' } or null. Used by orthPath
+// to force the L corner onto the hub's midline so peer links converge.
+function hubMergeInfo(s, link) {
+  const sides = ensureHubSides(s);
+  if (!sides.size) return null;
   const epKey = (id) => {
     if ((s.stacks || []).some((st) => st.id === id)) return `stack:${id}`;
     const stack = findStack(s, id);
     return stack && isStackCollapsed(s, stack) ? `stack:${stack.id}` : `device:${id}`;
   };
   const fromKey = epKey(link.from), toKey = epKey(link.to);
-  if (axes.has(toKey)) return axes.get(toKey); // a=source, b=hub: use source-side orientation directly.
-  if (axes.has(fromKey)) {
-    const o = axes.get(fromKey);
-    return o === 'horizFirst' ? 'vertFirst' : 'horizFirst';
-  }
+  const toMap = sides.get(toKey);
+  if (toMap && toMap.has(fromKey)) return { hubIsB: true,  hubSide: toMap.get(fromKey) };
+  const fromMap = sides.get(fromKey);
+  if (fromMap && fromMap.has(toKey)) return { hubIsB: false, hubSide: fromMap.get(toKey) };
   return null;
 }
 
@@ -4689,105 +4692,212 @@ function vSegmentHitsRect(x, y1, y2, r, pad = 4) {
   return hi > r.y - pad && lo < r.y + r.h + pad;
 }
 
-// Single-bend L-shape route from a→b. Two candidate orientations:
-//   horizFirst → corner at (b.x, a.y)  (go horizontal first, then vertical)
-//   vertFirst  → corner at (a.x, b.y)  (go vertical first, then horizontal)
-// Pick whichever clears the obstacle rects (visible device boxes) — both
-// orientations only ever turn ONCE in one direction, so there's no zigzag
-// regardless of which we pick. Tie-breaker: bend closer to the destination
-// so the line lands on B straight-on instead of bursting out of A's edge
-// at 90°. Score is computed with off=0 so parallel-lane variants always
-// agree on orientation and stay parallel instead of crossing.
-function orthPath(a, b, off = 0, s = null, excludeIds = null, forceOrientation = null) {
+// Anchor at the midpoint of one of a device's four sides. `off` shifts the
+// anchor along that side (perpendicular to its outward direction) — used by
+// parallel lanes so multiple links to the same side don't all stack on top
+// of each other.
+function anchorAt(devPos, side, off = 0) {
+  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+  switch (side) {
+    case 'N': return { x: devPos.x + off, y: devPos.y - halfH };
+    case 'S': return { x: devPos.x + off, y: devPos.y + halfH };
+    case 'E': return { x: devPos.x + halfW, y: devPos.y + off };
+    case 'W': return { x: devPos.x - halfW, y: devPos.y + off };
+  }
+}
+
+// Default anchor pair when no hub is involved. Same row/column → opposite
+// sides aligned for a straight line. Diagonal → perpendicular pair so the
+// route is a single L (rather than the H-V-H zigzag that would otherwise
+// come out of two co-axial anchors).
+function pickAnchorSides(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
-  const sx = Math.sign(dx) || 1;
-  const sy = Math.sign(dy) || 1;
-
-  // Same row → straight horizontal at the shared midline. Same column →
-  // straight vertical. Skip the L entirely; the bend would be cosmetic and
-  // the corner would land INSIDE B, then burst out of one of B's other
-  // edges for no reason.
-  if (Math.abs(dy) <= halfH && Math.abs(dx) > halfW) {
-    const y = (a.y + b.y) / 2 + off;
-    const x0 = a.x + sx * halfW;
-    const x1 = b.x - sx * halfW;
-    return {
-      d: `M ${x0} ${y} L ${x1} ${y}`,
-      lx: (x0 + x1) / 2, ly: y,
-      from: { x: x0 + sx * 6, y: y - 6, anchor: sx > 0 ? 'start' : 'end' },
-      to:   { x: x1 - sx * 6, y: y - 6, anchor: sx > 0 ? 'end'   : 'start' },
-    };
+  if (Math.abs(dy) <= halfH) {
+    return { aSide: dx > 0 ? 'E' : 'W', bSide: dx > 0 ? 'W' : 'E' };
   }
-  if (Math.abs(dx) <= halfW && Math.abs(dy) > halfH) {
-    const x = (a.x + b.x) / 2 + off;
-    const y0 = a.y + sy * halfH;
-    const y1 = b.y - sy * halfH;
-    return {
-      d: `M ${x} ${y0} L ${x} ${y1}`,
-      lx: x, ly: (y0 + y1) / 2,
-      from: { x: x + 8, y: y0 + sy * 14, anchor: 'start' },
-      to:   { x: x + 8, y: y1 - sy * 10, anchor: 'start' },
-    };
+  if (Math.abs(dx) <= halfW) {
+    return { aSide: dy > 0 ? 'S' : 'N', bSide: dy > 0 ? 'N' : 'S' };
   }
+  // Diagonal — longer leg first (bend closer to B).
+  if (Math.abs(dx) >= Math.abs(dy)) {
+    return { aSide: dx > 0 ? 'E' : 'W', bSide: dy > 0 ? 'N' : 'S' };
+  }
+  return { aSide: dy > 0 ? 'S' : 'N', bSide: dx > 0 ? 'W' : 'E' };
+}
 
-  let horizFirst;
-  if (forceOrientation === 'horizFirst') {
-    // Hub-merge override — every link bound for the same hub picks the same
-    // orientation so their long legs all settle on hub.x (or hub.y) and the
-    // approach trunk is visually shared instead of fanning into N columns.
-    horizFirst = true;
-  } else if (forceOrientation === 'vertFirst') {
-    horizFirst = false;
-  } else {
-    const obstacles = routingObstacles(s, excludeIds);
-    let horizScore = 0, vertScore = 0;
-    if (obstacles.length) {
-      for (const r of obstacles) {
-        if (hSegmentHitsRect(a.y, a.x + sx * halfW, b.x, r) ||
-            vSegmentHitsRect(b.x, a.y, b.y - sy * halfH, r)) horizScore++;
-        if (vSegmentHitsRect(a.x, a.y + sy * halfH, b.y, r) ||
-            hSegmentHitsRect(b.y, a.x, b.x - sx * halfW, r)) vertScore++;
+// When the hub's anchor is locked to a specific side (because ≥2 peers merge
+// on that side), the source picks the side that lets a single L into the
+// hub anchor without backtracking.
+function sourceSideForHub(srcPos, hubPos, hubSide) {
+  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+  const dx = hubPos.x - srcPos.x, dy = hubPos.y - srcPos.y;
+  if (hubSide === 'N' || hubSide === 'S') {
+    if (Math.abs(dx) <= halfW) return hubSide === 'N' ? 'S' : 'N';
+    return dx > 0 ? 'E' : 'W';
+  }
+  if (Math.abs(dy) <= halfH) return hubSide === 'W' ? 'E' : 'W';
+  return dy > 0 ? 'S' : 'N';
+}
+
+// Build orthogonal waypoints between two anchors honouring each anchor's
+// outward exit direction. Returns [{x,y}, ...] of length 2 (straight),
+// 3 (single L), or 4 (Z / U). Both sides perpendicular → single L. Both
+// sides on the same axis pointing AT each other (E↔W or N↔S) → straight
+// when aligned, Z otherwise. Both sides identical → U-bypass.
+function pointsForAnchors(aP, aSide, bP, bSide) {
+  const aH = aSide === 'E' || aSide === 'W';
+  const bH = bSide === 'E' || bSide === 'W';
+  const oppHoriz = (aSide === 'E' && bSide === 'W') || (aSide === 'W' && bSide === 'E');
+  const oppVert  = (aSide === 'N' && bSide === 'S') || (aSide === 'S' && bSide === 'N');
+  if (oppHoriz) {
+    if (aP.y === bP.y) return [aP, bP];
+    const mx = (aP.x + bP.x) / 2;
+    return [aP, { x: mx, y: aP.y }, { x: mx, y: bP.y }, bP];
+  }
+  if (oppVert) {
+    if (aP.x === bP.x) return [aP, bP];
+    const my = (aP.y + bP.y) / 2;
+    return [aP, { x: aP.x, y: my }, { x: bP.x, y: my }, bP];
+  }
+  if (aSide === bSide) {
+    if (aH) {
+      const sgn = aSide === 'W' ? -1 : 1;
+      const xByp = (sgn === -1 ? Math.min(aP.x, bP.x) : Math.max(aP.x, bP.x)) + sgn * GRID;
+      return [aP, { x: xByp, y: aP.y }, { x: xByp, y: bP.y }, bP];
+    }
+    const sgn = aSide === 'N' ? -1 : 1;
+    const yByp = (sgn === -1 ? Math.min(aP.y, bP.y) : Math.max(aP.y, bP.y)) + sgn * GRID;
+    return [aP, { x: aP.x, y: yByp }, { x: bP.x, y: yByp }, bP];
+  }
+  // Perpendicular pair → single L. Corner at (V-side x, H-side y).
+  const cx = aH ? bP.x : aP.x;
+  const cy = aH ? aP.y : bP.y;
+  return [aP, { x: cx, y: cy }, bP];
+}
+
+function pointsToPath(pts) {
+  let d = `M ${pts[0].x} ${pts[0].y}`;
+  for (let i = 1; i < pts.length; i++) d += ` L ${pts[i].x} ${pts[i].y}`;
+  return d;
+}
+
+function pointsLabel(pts) {
+  // Midpoint of the longest segment so the badge sits on a clean run, not
+  // a corner.
+  let best = 0, bx = pts[0].x, by = pts[0].y;
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i-1], b = pts[i];
+    const len = Math.abs(a.x - b.x) + Math.abs(a.y - b.y);
+    if (len > best) { best = len; bx = (a.x + b.x) / 2; by = (a.y + b.y) / 2; }
+  }
+  return { lx: bx, ly: by };
+}
+
+function pointsHitAny(pts, obstacles, pad = 4) {
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i-1], b = pts[i];
+    for (const r of obstacles) {
+      if (a.y === b.y) {
+        if (hSegmentHitsRect(a.y, a.x, b.x, r, pad)) return true;
+      } else if (a.x === b.x) {
+        if (vSegmentHitsRect(a.x, a.y, b.y, r, pad)) return true;
       }
     }
-    // Default heuristic: bend closer to B → longer first leg.
-    const defaultHorizFirst = Math.abs(dx) >= Math.abs(dy);
-    if (horizScore < vertScore) horizFirst = true;
-    else if (vertScore < horizScore) horizFirst = false;
-    else horizFirst = defaultHorizFirst;
   }
+  return false;
+}
 
-  if (horizFirst) {
-    // a.edge → corner(b.x, a.y) → b.edge — single bend.
-    // Lane offset shifts the corner along both axes so parallel variants run
-    // truly parallel instead of converging at the corner.
-    const x0 = a.x + sx * halfW;
-    const y0 = a.y + off;
-    const cx = b.x + off;
-    const cy = a.y + off;
-    const x1 = b.x + off;
-    const y1 = b.y - sy * halfH;
-    return {
-      d: `M ${x0} ${y0} L ${cx} ${cy} L ${x1} ${y1}`,
-      lx: (x0 + cx) / 2,
-      ly: cy,
-      from: { x: x0 + sx * 6, y: y0 - 6, anchor: sx > 0 ? 'start' : 'end' },
-      to:   { x: x1 + 6, y: y1 - sy * 6, anchor: 'start' },
-    };
+// When the simple route (straight or single L) is blocked, build a Z-detour
+// past the offending obstacle. Tries 4 detour positions (left/right of the
+// obstacle for vertical bypass; above/below for horizontal bypass) and picks
+// the first that clears every obstacle. Returns the detoured pts or null.
+function detourAroundObstacles(pts, obstacles, pad = 8) {
+  if (pts.length < 2) return null;
+  const a = pts[0], b = pts[pts.length - 1];
+  // Find the first obstacle hit by any segment.
+  let hit = null;
+  for (let i = 1; i < pts.length; i++) {
+    const p = pts[i-1], q = pts[i];
+    for (const r of obstacles) {
+      if (p.y === q.y && hSegmentHitsRect(p.y, p.x, q.x, r, pad)) { hit = r; break; }
+      if (p.x === q.x && vSegmentHitsRect(p.x, p.y, q.y, r, pad)) { hit = r; break; }
+    }
+    if (hit) break;
   }
-  // V-first: a.edge → corner(a.x, b.y) → b.edge
-  const x0 = a.x + off;
-  const y0 = a.y + sy * halfH;
-  const cx = a.x + off;
-  const cy = b.y + off;
-  const x1 = b.x - sx * halfW;
-  const y1 = b.y + off;
+  if (!hit) return null;
+  const tryShifts = [
+    { axis: 'x', val: hit.x - pad - 1 },
+    { axis: 'x', val: hit.x + hit.w + pad + 1 },
+    { axis: 'y', val: hit.y - pad - 1 },
+    { axis: 'y', val: hit.y + hit.h + pad + 1 },
+  ];
+  for (const sh of tryShifts) {
+    const cand = sh.axis === 'x'
+      ? [a, { x: sh.val, y: a.y }, { x: sh.val, y: b.y }, b]
+      : [a, { x: a.x, y: sh.val }, { x: b.x, y: sh.val }, b];
+    if (!pointsHitAny(cand, obstacles, pad)) return cand;
+  }
+  return null;
+}
+
+// Orthogonal route from a→b. Anchors live exclusively on side midpoints; the
+// path is built from the anchor pair (perpendicular → single L; opposite →
+// straight or Z; same-side → U). Hub-merge locks the hub's side so peer
+// links converge on a shared trunk anchor.
+//
+// Selection: try every (aSide, bSide) combination, score each by (a) does
+// it hit any obstacle, (b) bend count, (c) does it match the natural
+// preferred sides. Lowest-score clean candidate wins. If every candidate
+// is blocked, fall back to a Z-detour off the preferred candidate so the
+// route at least bypasses the first offender instead of disappearing
+// behind it.
+const _ORTH_SIDES = ['N', 'E', 'S', 'W'];
+function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
+  const obstacles = routingObstacles(s, excludeIds);
+  let prefA, prefB;
+  if (hubInfo) {
+    if (hubInfo.hubIsB) { prefB = hubInfo.hubSide; prefA = sourceSideForHub(a, b, prefB); }
+    else                { prefA = hubInfo.hubSide; prefB = sourceSideForHub(b, a, prefA); }
+  } else {
+    const sd = pickAnchorSides(a, b);
+    prefA = sd.aSide; prefB = sd.bSide;
+  }
+  // Hub-merge locks one end's side; the other end is free to pick whichever
+  // approach lands the cleanest path.
+  const aChoices = hubInfo && !hubInfo.hubIsB ? [hubInfo.hubSide] : _ORTH_SIDES;
+  const bChoices = hubInfo &&  hubInfo.hubIsB ? [hubInfo.hubSide] : _ORTH_SIDES;
+  let best = null;
+  for (const aS of aChoices) {
+    for (const bS of bChoices) {
+      const aP = anchorAt(a, aS, off);
+      const bP = anchorAt(b, bS, off);
+      const pts = pointsForAnchors(aP, aS, bP, bS);
+      if (pointsHitAny(pts, obstacles)) continue;
+      const bends = pts.length - 2;
+      const matchesPref = (aS === prefA && bS === prefB) ? 0 : 1;
+      const score = bends * 10 + matchesPref; // fewer bends > matches preferred
+      if (best === null || score < best.score) best = { score, pts };
+    }
+  }
+  let chosen;
+  if (best) {
+    chosen = best.pts;
+  } else {
+    // All anchor combinations are blocked — build a Z-detour off the
+    // preferred sides so the line at least curves around the offending
+    // obstacle instead of vanishing through it.
+    const aP = anchorAt(a, prefA, off);
+    const bP = anchorAt(b, prefB, off);
+    const pts = pointsForAnchors(aP, prefA, bP, prefB);
+    chosen = detourAroundObstacles(pts, obstacles) || pts;
+  }
+  const lbl = pointsLabel(chosen);
   return {
-    d: `M ${x0} ${y0} L ${cx} ${cy} L ${x1} ${y1}`,
-    lx: cx,
-    ly: (y0 + cy) / 2,
-    from: { x: x0 + 8, y: y0 + sy * 14, anchor: 'start' },
-    to:   { x: x1 - sx * 6, y: y1 - 6, anchor: sx > 0 ? 'end' : 'start' },
+    d: pointsToPath(chosen),
+    lx: lbl.lx, ly: lbl.ly,
+    from: { x: chosen[0].x, y: chosen[0].y, anchor: 'start' },
+    to:   { x: chosen[chosen.length - 1].x, y: chosen[chosen.length - 1].y, anchor: 'end' },
   };
 }
 
@@ -4835,8 +4945,8 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
   const width  = opts.width  || 1.8;
   const gap    = opts.gap    || 3;
   const lane   = opts.lane   || 0;
-  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds, opts.forceOrientation);
-  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds, opts.forceOrientation);
+  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds, opts.hubInfo);
+  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds, opts.hubInfo);
   return `
     <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
     <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
@@ -4854,7 +4964,7 @@ function drawLagLink(s, p) {
   const bPos = { x: p.stackB.x, y: p.stackB.y };
   const lane = laneForLag(s, p.stackA.id, p.lagA.id);
   const excl = [p.stackA.id, p.stackB.id];
-  const forced = hubForcedOrientation(s, { from: p.stackA.id, to: p.stackB.id });
+  const forced = hubMergeInfo(s, { from: p.stackA.id, to: p.stackB.id });
   const path = orthPath(aPos, bPos, lane, s, excl, forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
@@ -4886,7 +4996,7 @@ function drawLagLink(s, p) {
       inner += `<text class="m002-link-label m002-link-stripe-label" x="${op.lx}" y="${op.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl, forceOrientation: forced });
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl, hubInfo: forced });
     if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
@@ -4932,7 +5042,7 @@ function refreshAggregates(s) {
 // the aggregation key so a future LAG-config flow can resolve the linkIds.
 function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   const lane = laneForAgg(s, key);
-  const forced = hubForcedOrientation(s, { from: agg.aSide, to: agg.bSide });
+  const forced = hubMergeInfo(s, { from: agg.aSide, to: agg.bSide });
   const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide], forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-agg');
@@ -5223,7 +5333,7 @@ function drawLink(s, link) {
   const layer = s.activeLayer;
   const lane = laneForLink(s, link.id);
   const excl = linkExcludeIds(s, link);
-  const forced = hubForcedOrientation(s, link);
+  const forced = hubMergeInfo(s, link);
   const base = orthPath(aPos, bPos, lane, s, excl, forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
@@ -5272,11 +5382,11 @@ function drawLink(s, link) {
             inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
           }
         }
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
       } else if (layer === 'routing') {
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
       }
       // Physical layer carries the LAG-name pair label; VLAN already speaks
       // through its own stripes / count badge, and routing stays unlabelled
@@ -5339,7 +5449,7 @@ function drawLink(s, link) {
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
       // LAG accent — parallel double-line on top of the VLAN stripes
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
     }
   } else if (layer === 'routing') {
     // L3 view. Every wire (regular link OR LAG-bundle rep) draws as a single
