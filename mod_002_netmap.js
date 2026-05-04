@@ -2243,10 +2243,10 @@ function commitRopeLink(s, fromId, toId) {
   const link = { id: rid(), from: fromId, to: toId, fromPort: '', toPort: '' };
   s.links.push(link);
   invalidateEdgeSlots(s);
-  const newKey = visualEndpointKey(s, link.from, link.to);
   s.links.forEach((l) => {
     if (l.id === link.id) return;
-    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+    if (l.from === link.from || l.from === link.to ||
+        l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
   drawLink(s, link);
   if (s.activeLayer === 'routing') drawL3Paths(s);
@@ -2635,10 +2635,10 @@ function commitAutoLink(s, fromId, toId) {
   const link = { id: rid(), from: fromId, to: toId, fromPort: '', toPort: '' };
   s.links.push(link);
   invalidateEdgeSlots(s);
-  const newKey = visualEndpointKey(s, link.from, link.to);
   s.links.forEach((l) => {
     if (l.id === link.id) return;
-    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+    if (l.from === link.from || l.from === link.to ||
+        l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
   drawLink(s, link);
   if (s.activeLayer === 'routing') drawL3Paths(s);
@@ -3851,13 +3851,15 @@ function handleLinkClick(s, deviceId) {
   };
   s.links.push(link);
   // Adding a link may shift sibling links between the same visual endpoints
-  // into new lanes — invalidate the slot cache and redraw every link that
-  // shares this pair so existing edges fan out to make room for the new one.
+  // into new lanes AND may turn either endpoint into a hub (≥2 distinct peers)
+  // which forces every incident link to re-orient onto the shared trunk axis.
+  // Invalidate the slot cache and redraw every link that touches either of
+  // this link's endpoints so existing edges fan out and re-align as needed.
   invalidateEdgeSlots(s);
-  const newKey = visualEndpointKey(s, link.from, link.to);
   s.links.forEach((l) => {
     if (l.id === link.id) return;
-    if (visualEndpointKey(s, l.from, l.to) === newKey) redrawLink(s, l);
+    if (l.from === link.from || l.from === link.to ||
+        l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
   drawLink(s, link);
   // A new edge can extend or split L3 paths (e.g. now-connected router and
@@ -3933,6 +3935,93 @@ function visualEndpointKey(s, devIdA, devIdB) {
 
 function invalidateEdgeSlots(s) {
   s._edgeSlots = null;
+  s._hubAxes = null;
+}
+
+// Hub axes — when ≥2 distinct peers link to the same endpoint, that endpoint
+// is a "hub". Force every hub-bound link into a single L-orientation so all
+// approach lines collapse onto the same trunk axis (vertical or horizontal),
+// instead of each fanning into its own column. Result: per hubKey, the
+// preferred per-source orientation ('horizFirst' or 'vertFirst' from the
+// SOURCE side — orthPath flips that for the link direction in which the hub
+// is endpoint A).
+//
+// Trunk axis pick: sum |dx| vs sum |dy| across peers. dy-dominant peer set →
+// vertical trunk → sources use horizFirst (corner at hub.x, source.y, then
+// vertical descent on x=hub.x is shared). dx-dominant → horizontal trunk →
+// vertFirst.
+function ensureHubAxes(s) {
+  if (s._hubAxes) return s._hubAxes;
+  const m = new Map();
+  const epPos = (id) => effectivePos(s, id);
+  const epKey = (id) => {
+    // Handle direct stack id (LAG-pair endpoints) as well as device id.
+    if ((s.stacks || []).some((st) => st.id === id)) return `stack:${id}`;
+    const stack = findStack(s, id);
+    return stack && isStackCollapsed(s, stack) ? `stack:${stack.id}` : `device:${id}`;
+  };
+  const inZone = (entId) => {
+    if (!s.activeZone) return true;
+    const dev = s.devices.find((d) => d.id === entId);
+    if (dev) return !dev.zone || dev.zone === s.activeZone;
+    const st = (s.stacks || []).find((x) => x.id === entId);
+    if (st) return !st.zone || st.zone === s.activeZone;
+    return true;
+  };
+  const peerMap = new Map();
+  for (const link of (s.links || [])) {
+    if (!link.from || !link.to || link.from === link.to) continue;
+    if (!inZone(link.from) || !inZone(link.to)) continue;
+    const fromKey = epKey(link.from), toKey = epKey(link.to);
+    if (fromKey === toKey) continue;
+    const fromPos = epPos(link.from), toPos = epPos(link.to);
+    if (!fromPos || !toPos) continue;
+    if (!peerMap.has(fromKey)) peerMap.set(fromKey, new Map());
+    if (!peerMap.has(toKey)) peerMap.set(toKey, new Map());
+    if (!peerMap.get(fromKey).has(toKey)) peerMap.get(fromKey).set(toKey, toPos);
+    if (!peerMap.get(toKey).has(fromKey)) peerMap.get(toKey).set(fromKey, fromPos);
+  }
+  for (const [hubKey, peers] of peerMap) {
+    if (peers.size < 2) continue;
+    const hubId = hubKey.split(':')[1];
+    const hubPos = epPos(hubId) || (() => {
+      const st = (s.stacks || []).find((x) => x.id === hubId);
+      return st ? { x: st.x, y: st.y } : null;
+    })();
+    if (!hubPos) continue;
+    let sumDx = 0, sumDy = 0;
+    for (const [, p] of peers) {
+      sumDx += Math.abs(p.x - hubPos.x);
+      sumDy += Math.abs(p.y - hubPos.y);
+    }
+    // dy-dominant → vertical trunk → source-side orientation = horizFirst.
+    m.set(hubKey, sumDy > sumDx ? 'horizFirst' : 'vertFirst');
+  }
+  s._hubAxes = m;
+  return m;
+}
+
+// What orientation should the renderer force on this link's L? Returns
+// 'horizFirst' / 'vertFirst' / null. Only fires when one end of the link is a
+// hub (≥2 peers). Direction matters: if the hub sits at endpoint A (link.from
+// resolves to the hub), the from-A path needs the OPPOSITE orientation of the
+// from-source path so the trunk-axis still falls on hub.x / hub.y rather than
+// on source.x / source.y.
+function hubForcedOrientation(s, link) {
+  const axes = ensureHubAxes(s);
+  if (!axes.size) return null;
+  const epKey = (id) => {
+    if ((s.stacks || []).some((st) => st.id === id)) return `stack:${id}`;
+    const stack = findStack(s, id);
+    return stack && isStackCollapsed(s, stack) ? `stack:${stack.id}` : `device:${id}`;
+  };
+  const fromKey = epKey(link.from), toKey = epKey(link.to);
+  if (axes.has(toKey)) return axes.get(toKey); // a=source, b=hub: use source-side orientation directly.
+  if (axes.has(fromKey)) {
+    const o = axes.get(fromKey);
+    return o === 'horizFirst' ? 'vertFirst' : 'horizFirst';
+  }
+  return null;
 }
 
 // Aggregate every non-paired-LAG link between two collapsed stacks (or a
@@ -4598,7 +4687,7 @@ function vSegmentHitsRect(x, y1, y2, r, pad = 4) {
 // so the line lands on B straight-on instead of bursting out of A's edge
 // at 90°. Score is computed with off=0 so parallel-lane variants always
 // agree on orientation and stay parallel instead of crossing.
-function orthPath(a, b, off = 0, s = null, excludeIds = null) {
+function orthPath(a, b, off = 0, s = null, excludeIds = null, forceOrientation = null) {
   const dx = b.x - a.x, dy = b.y - a.y;
   const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
   const sx = Math.sign(dx) || 1;
@@ -4631,22 +4720,31 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null) {
     };
   }
 
-  const obstacles = routingObstacles(s, excludeIds);
-  let horizScore = 0, vertScore = 0;
-  if (obstacles.length) {
-    for (const r of obstacles) {
-      if (hSegmentHitsRect(a.y, a.x + sx * halfW, b.x, r) ||
-          vSegmentHitsRect(b.x, a.y, b.y - sy * halfH, r)) horizScore++;
-      if (vSegmentHitsRect(a.x, a.y + sy * halfH, b.y, r) ||
-          hSegmentHitsRect(b.y, a.x, b.x - sx * halfW, r)) vertScore++;
-    }
-  }
-  // Default heuristic: bend closer to B → longer first leg.
-  const defaultHorizFirst = Math.abs(dx) >= Math.abs(dy);
   let horizFirst;
-  if (horizScore < vertScore) horizFirst = true;
-  else if (vertScore < horizScore) horizFirst = false;
-  else horizFirst = defaultHorizFirst;
+  if (forceOrientation === 'horizFirst') {
+    // Hub-merge override — every link bound for the same hub picks the same
+    // orientation so their long legs all settle on hub.x (or hub.y) and the
+    // approach trunk is visually shared instead of fanning into N columns.
+    horizFirst = true;
+  } else if (forceOrientation === 'vertFirst') {
+    horizFirst = false;
+  } else {
+    const obstacles = routingObstacles(s, excludeIds);
+    let horizScore = 0, vertScore = 0;
+    if (obstacles.length) {
+      for (const r of obstacles) {
+        if (hSegmentHitsRect(a.y, a.x + sx * halfW, b.x, r) ||
+            vSegmentHitsRect(b.x, a.y, b.y - sy * halfH, r)) horizScore++;
+        if (vSegmentHitsRect(a.x, a.y + sy * halfH, b.y, r) ||
+            hSegmentHitsRect(b.y, a.x, b.x - sx * halfW, r)) vertScore++;
+      }
+    }
+    // Default heuristic: bend closer to B → longer first leg.
+    const defaultHorizFirst = Math.abs(dx) >= Math.abs(dy);
+    if (horizScore < vertScore) horizFirst = true;
+    else if (vertScore < horizScore) horizFirst = false;
+    else horizFirst = defaultHorizFirst;
+  }
 
   if (horizFirst) {
     // a.edge → corner(b.x, a.y) → b.edge — single bend.
@@ -4726,8 +4824,8 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
   const width  = opts.width  || 1.8;
   const gap    = opts.gap    || 3;
   const lane   = opts.lane   || 0;
-  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds);
-  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds);
+  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds, opts.forceOrientation);
+  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds, opts.forceOrientation);
   return `
     <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
     <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
@@ -4745,7 +4843,8 @@ function drawLagLink(s, p) {
   const bPos = { x: p.stackB.x, y: p.stackB.y };
   const lane = laneForLag(s, p.stackA.id, p.lagA.id);
   const excl = [p.stackA.id, p.stackB.id];
-  const path = orthPath(aPos, bPos, lane, s, excl);
+  const forced = hubForcedOrientation(s, { from: p.stackA.id, to: p.stackB.id });
+  const path = orthPath(aPos, bPos, lane, s, excl, forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
   g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
@@ -4770,13 +4869,13 @@ function drawLagLink(s, p) {
     const gap = 6;
     drawnVlans.forEach((v, i) => {
       const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
-      const op = orthPath(aPos, bPos, off, s, excl);
+      const op = orthPath(aPos, bPos, off, s, excl, forced);
       const c = vlanColor(s, v);
       inner += `<path class="m002-link-line m002-link-stripe" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
       inner += `<text class="m002-link-label m002-link-stripe-label" x="${op.lx}" y="${op.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl });
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl, forceOrientation: forced });
     if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
@@ -4822,7 +4921,8 @@ function refreshAggregates(s) {
 // the aggregation key so a future LAG-config flow can resolve the linkIds.
 function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   const lane = laneForAgg(s, key);
-  const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide]);
+  const forced = hubForcedOrientation(s, { from: agg.aSide, to: agg.bSide });
+  const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide], forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-agg');
   g.setAttribute('data-agg-key', key);
@@ -5030,7 +5130,8 @@ function drawLink(s, link) {
   const layer = s.activeLayer;
   const lane = laneForLink(s, link.id);
   const excl = linkExcludeIds(s, link);
-  const base = orthPath(aPos, bPos, lane, s, excl);
+  const forced = hubForcedOrientation(s, link);
+  const base = orthPath(aPos, bPos, lane, s, excl, forced);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
@@ -5064,7 +5165,7 @@ function drawLink(s, link) {
           const gap = 6;
           drawn.forEach((v, i) => {
             const off = lane + (i - (drawn.length - 1) / 2) * gap;
-            const p = orthPath(aPos, bPos, off, s, excl);
+            const p = orthPath(aPos, bPos, off, s, excl, forced);
             const c = vlanColor(s, v);
             inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
@@ -5078,11 +5179,11 @@ function drawLink(s, link) {
             inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
           }
         }
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
       } else if (layer === 'routing') {
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
       }
       // Physical layer carries the LAG-name pair label; VLAN already speaks
       // through its own stripes / count badge, and routing stays unlabelled
@@ -5123,7 +5224,7 @@ function drawLink(s, link) {
       const gap = 6;
       drawn.forEach((v, i) => {
         const off = lane + (i - (drawn.length - 1) / 2) * gap;
-        const p = orthPath(aPos, bPos, off, s, excl);
+        const p = orthPath(aPos, bPos, off, s, excl, forced);
         const c = vlanColor(s, v);
         const w = bundleInfo?.members ? 2.4 : 1.4;
         // Inline style on stripes — beats the .m002-selected white-stroke rule
@@ -5145,7 +5246,7 @@ function drawLink(s, link) {
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
       // LAG accent — parallel double-line on top of the VLAN stripes
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, forceOrientation: forced });
     }
   } else if (layer === 'routing') {
     // L3 view. Every wire (regular link OR LAG-bundle rep) draws as a single
