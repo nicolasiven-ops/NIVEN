@@ -1434,25 +1434,39 @@ function _m002PaintSketchCursor() {
   const tone = _m002SketchCursorTone();
   if (!tone) return;
   document.querySelectorAll('.cur-bracket').forEach((el) => {
-    el.style.setProperty('border-top-color', tone, 'important');
-    el.style.setProperty('border-right-color', tone, 'important');
-    el.style.setProperty('border-bottom-color', tone, 'important');
-    el.style.setProperty('border-left-color', tone, 'important');
+    // Build the inline style as a single setAttribute("style", ...) call so
+    // every border-color longhand gets !important explicitly. setProperty()
+    // calls collapse into a shorthand under some browsers, which then loses
+    // to a CSS `border-X-color !important` longhand on the same element.
+    // Writing the longhands directly in the style attribute prevents collapse.
+    el.setAttribute('style',
+      'border-top-color:' + tone + ' !important;' +
+      'border-right-color:' + tone + ' !important;' +
+      'border-bottom-color:' + tone + ' !important;' +
+      'border-left-color:' + tone + ' !important;'
+    );
   });
   document.querySelectorAll('.cursor-dot').forEach((el) => {
-    el.style.setProperty('background', tone, 'important');
-    el.style.setProperty('box-shadow', 'none', 'important');
+    // Preserve transform/opacity (set every mousemove by the global cursor JS)
+    // by appending only colour-related properties; rebuild the style string
+    // each call so no stale colour entries linger.
+    const trans = el.style.transform || '';
+    const opac  = el.style.opacity || '';
+    el.setAttribute('style',
+      (trans ? 'transform:' + trans + ';' : '') +
+      (opac  ? 'opacity:' + opac + ';'  : '') +
+      'background:' + tone + ' !important;' +
+      'box-shadow:none !important;'
+    );
   });
 }
 
 function _m002ClearSketchCursor() {
   document.querySelectorAll('.cur-bracket').forEach((el) => {
-    el.style.removeProperty('border-top-color');
-    el.style.removeProperty('border-right-color');
-    el.style.removeProperty('border-bottom-color');
-    el.style.removeProperty('border-left-color');
+    el.removeAttribute('style');
   });
   document.querySelectorAll('.cursor-dot').forEach((el) => {
+    // Don't strip the transform/opacity that the global cursor JS depends on.
     el.style.removeProperty('background');
     el.style.removeProperty('box-shadow');
   });
@@ -1479,8 +1493,29 @@ function applyStyle(s, styleId) {
 
     if (valid === 'sketch') {
       // 1. Paint immediately
-      try { console.info('[m002] sketch cursor enforcer engaged'); } catch (_) {}
-      _m002PaintSketchCursor();
+      try {
+        console.info('[m002] sketch cursor enforcer engaged');
+        _m002PaintSketchCursor();
+        // Debug: dump the actual state after painting so we can see what's
+        // happening in the user's browser if brackets still look wrong.
+        setTimeout(() => {
+          const b = document.querySelector('.br-tl');
+          if (b) {
+            const cs = getComputedStyle(b);
+            console.info('[m002] cursor debug:', {
+              bodyClasses: document.body.className,
+              bodyAttr: document.body.dataset.m002Style,
+              brTlInlineStyle: b.getAttribute('style'),
+              brTlComputedTopColor: cs.borderTopColor,
+              brTlComputedLeftColor: cs.borderLeftColor,
+              brTlComputedTopWidth: cs.borderTopWidth,
+              brTlBorderTopStyle: cs.borderTopStyle,
+              cursorElExists: !!document.querySelector('.cursor'),
+              bracketsCount: document.querySelectorAll('.cur-bracket').length,
+            });
+          }
+        }, 200);
+      } catch (_) {}
       // 2. Hook a MutationObserver — repaints on .cursor / body class flips
       const obs = new MutationObserver(_m002PaintSketchCursor);
       const cursor = document.querySelector('.cursor');
