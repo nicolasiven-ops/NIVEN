@@ -1334,6 +1334,10 @@ function unmount() {
     try { _m002StyleEnforcer.disconnect(); } catch (_) {}
     _m002StyleEnforcer = null;
   }
+  if (_m002StyleEnforcerInt) {
+    clearInterval(_m002StyleEnforcerInt);
+    _m002StyleEnforcerInt = null;
+  }
   _m002ClearSketchCursor();
   state = null;
 }
@@ -1416,6 +1420,7 @@ function savePrefs(prefs) {
 // tool-recolour rules kept failing in production — inline + setProperty
 // 'important' is the only thing that wins for sure).
 let _m002StyleEnforcer = null;
+let _m002StyleEnforcerInt = null;
 
 function _m002SketchCursorTone() {
   if (typeof document === 'undefined' || !document.body) return null;
@@ -1467,18 +1472,25 @@ function applyStyle(s, styleId) {
       try { _m002StyleEnforcer.disconnect(); } catch (_) {}
       _m002StyleEnforcer = null;
     }
+    if (_m002StyleEnforcerInt) {
+      clearInterval(_m002StyleEnforcerInt);
+      _m002StyleEnforcerInt = null;
+    }
 
     if (valid === 'sketch') {
-      // Paint immediately + hook a MutationObserver that re-paints whenever the
-      // cursor wrapper's class changes (.cursor.active toggling on hover) or
-      // the body's tool class flips. This survives every cascade trick the
-      // global cursor styles can pull.
+      // 1. Paint immediately
+      try { console.info('[m002] sketch cursor enforcer engaged'); } catch (_) {}
       _m002PaintSketchCursor();
+      // 2. Hook a MutationObserver — repaints on .cursor / body class flips
       const obs = new MutationObserver(_m002PaintSketchCursor);
       const cursor = document.querySelector('.cursor');
       if (cursor) obs.observe(cursor, { attributes: true, attributeFilter: ['class'] });
       obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
       _m002StyleEnforcer = obs;
+      // 3. Belt-and-braces interval — re-paint every 300 ms regardless. Cheap
+      //    (just sets inline style on 4 spans + 1 dot). Catches anything the
+      //    observer misses (childList swaps, async re-renders, etc.).
+      _m002StyleEnforcerInt = setInterval(_m002PaintSketchCursor, 300);
     } else {
       _m002ClearSketchCursor();
     }
