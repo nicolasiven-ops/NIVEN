@@ -1329,8 +1329,12 @@ function unmount() {
   // Drop the per-style body attr / classes so the hub cursor/chrome reverts.
   delete document.body.dataset.m002Style;
   STYLES.forEach((x) => document.body.classList.remove('m002-style-' + x.id));
-  const inj = document.getElementById('m002-cursor-override');
-  if (inj) inj.textContent = '';
+  // Tear down the cursor-enforcer + restore native bracket colours.
+  if (_m002StyleEnforcer) {
+    try { _m002StyleEnforcer.disconnect(); } catch (_) {}
+    _m002StyleEnforcer = null;
+  }
+  _m002ClearSketchCursor();
   state = null;
 }
 
@@ -1407,45 +1411,76 @@ function savePrefs(prefs) {
 // Applies a visual style to the live host. Stamps the data-grid-style attr
 // the CSS keys off, and persists the choice. Safe to call before the host
 // exists (e.g. during early prefs hydration) — it just becomes a no-op then.
+// Tracks the MutationObserver that enforces sketch cursor colours via direct
+// inline-style on the bracket spans (CSS specificity battles with the global
+// tool-recolour rules kept failing in production — inline + setProperty
+// 'important' is the only thing that wins for sure).
+let _m002StyleEnforcer = null;
+
+function _m002SketchCursorTone() {
+  if (typeof document === 'undefined' || !document.body) return null;
+  const cls = document.body.classList;
+  if (cls.contains('m002-tool-link'))   return '#6b8a6b';
+  if (cls.contains('m002-tool-delete')) return '#c44b3c';
+  return '#2a2a30';
+}
+
+function _m002PaintSketchCursor() {
+  const tone = _m002SketchCursorTone();
+  if (!tone) return;
+  document.querySelectorAll('.cur-bracket').forEach((el) => {
+    el.style.setProperty('border-top-color', tone, 'important');
+    el.style.setProperty('border-right-color', tone, 'important');
+    el.style.setProperty('border-bottom-color', tone, 'important');
+    el.style.setProperty('border-left-color', tone, 'important');
+  });
+  document.querySelectorAll('.cursor-dot').forEach((el) => {
+    el.style.setProperty('background', tone, 'important');
+    el.style.setProperty('box-shadow', 'none', 'important');
+  });
+}
+
+function _m002ClearSketchCursor() {
+  document.querySelectorAll('.cur-bracket').forEach((el) => {
+    el.style.removeProperty('border-top-color');
+    el.style.removeProperty('border-right-color');
+    el.style.removeProperty('border-bottom-color');
+    el.style.removeProperty('border-left-color');
+  });
+  document.querySelectorAll('.cursor-dot').forEach((el) => {
+    el.style.removeProperty('background');
+    el.style.removeProperty('box-shadow');
+  });
+}
+
 function applyStyle(s, styleId) {
   const valid = STYLES.find((x) => x.id === styleId) ? styleId : DEFAULT_STYLE;
   if (s.prefs) { s.prefs.style = valid; savePrefs(s.prefs); }
   if (s.host) s.host.dataset.gridStyle = valid;
-  // Mirror onto <body> so we can tweak the global N.IVEN cursor (and any
-  // other body-level chrome) per active Plexus style. Cleared on unmount.
   if (typeof document !== 'undefined' && document.body) {
     document.body.dataset.m002Style = valid;
-    // Also stamp a body class — easier to debug + extra route for the cursor
-    // override CSS to key off if the dataset attr loses to a cascade quirk.
     STYLES.forEach((x) => document.body.classList.remove('m002-style-' + x.id));
     document.body.classList.add('m002-style-' + valid);
-    // Belt-and-braces: inject a late <style> block at the end of <head> with
-    // the cursor-bracket overrides, guaranteed to win source-order ties.
-    let inj = document.getElementById('m002-cursor-override');
-    if (!inj) {
-      inj = document.createElement('style');
-      inj.id = 'm002-cursor-override';
-      document.head.appendChild(inj);
+
+    // Tear down any previous enforcer
+    if (_m002StyleEnforcer) {
+      try { _m002StyleEnforcer.disconnect(); } catch (_) {}
+      _m002StyleEnforcer = null;
     }
+
     if (valid === 'sketch') {
-      inj.textContent = ''
-        + 'body .cur-bracket{border-color:#2a2a30 !important;}'
-        + 'body .br-tl{border-top-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}'
-        + 'body .br-tr{border-top-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}'
-        + 'body .br-bl{border-bottom-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}'
-        + 'body .br-br{border-bottom-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}'
-        + 'body .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}'
-        + 'body.m002-tool-link .br-tl{border-top-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}'
-        + 'body.m002-tool-link .br-tr{border-top-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}'
-        + 'body.m002-tool-link .br-bl{border-bottom-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}'
-        + 'body.m002-tool-link .br-br{border-bottom-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}'
-        + 'body.m002-tool-link .cursor-dot{background:#6b8a6b !important;}'
-        + 'body.m002-tool-delete .br-tl{border-top-color:#c44b3c !important;border-left-color:#c44b3c !important;}'
-        + 'body.m002-tool-delete .br-tr{border-top-color:#c44b3c !important;border-right-color:#c44b3c !important;}'
-        + 'body.m002-tool-delete .br-bl{border-bottom-color:#c44b3c !important;border-left-color:#c44b3c !important;}'
-        + 'body.m002-tool-delete .br-br{border-bottom-color:#c44b3c !important;border-right-color:#c44b3c !important;}';
+      // Paint immediately + hook a MutationObserver that re-paints whenever the
+      // cursor wrapper's class changes (.cursor.active toggling on hover) or
+      // the body's tool class flips. This survives every cascade trick the
+      // global cursor styles can pull.
+      _m002PaintSketchCursor();
+      const obs = new MutationObserver(_m002PaintSketchCursor);
+      const cursor = document.querySelector('.cursor');
+      if (cursor) obs.observe(cursor, { attributes: true, attributeFilter: ['class'] });
+      obs.observe(document.body, { attributes: true, attributeFilter: ['class'] });
+      _m002StyleEnforcer = obs;
     } else {
-      inj.textContent = '';
+      _m002ClearSketchCursor();
     }
   }
 }
