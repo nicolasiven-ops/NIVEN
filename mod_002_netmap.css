@@ -1199,3 +1199,75 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member-type{color:#7a7568 !important;}
 .m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member button{color:#7a7568 !important;}
 .m002-host[data-grid-style="sketch"] .m002-stack-members .m002-stack-member button:hover{color:#c44b3c !important;}
+
+/* =============================================================================
+   GLOW HALOS — neutralised at user request (v2.33.26)
+   =============================================================================
+   Drop-shadow on canvas elements (devices, stacks, envelopes, links, ports,
+   rope/autolink interaction tools, drag-target / VLAN-solo pulse keyframes)
+   produced bright auras around every wall + label visible in the screenshot.
+   User wants them gone — steady-state AND interactive (hover/selected/lifted)
+   AND animation pulses.
+
+   Kept (intentionally NOT overridden):
+   - .m002-radial drop-shadow: UI separation shadow for the floating menu, not
+     a glow halo. Without it the menu would visually merge with the canvas.
+   - saturate / brightness filters used by routing- and vlan-layer dimming:
+     those are colour treatments, not glows.
+   - .m002-vsolo-link-fade animation: opacity-only fade, no drop-shadow.
+
+   Single block + !important keeps the override surgical and trivial to
+   revert: delete this block and every drop-shadow halo comes back. */
+.m002-device,
+.m002-device:hover,
+.m002-device.m002-selected,
+.m002-device.m002-lifted,
+.m002-device.m002-rope-target .m002-dev-bg,
+.m002-device.m002-autolink-target .m002-dev-bg,
+.m002-device-ref.m002-device-coupled .m002-dev-bg,
+.m002-device.m002-stack-member:hover,
+.m002-device.m002-stack-member.m002-selected,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"],
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"]:hover,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member[data-l3="true"].m002-selected,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip:hover,
+.m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"]:hover,
+.m002-stack-collapsed,
+.m002-stack-collapsed:hover,
+.m002-stack-collapsed.m002-selected,
+.m002-stack-collapsed.m002-lifted,
+.m002-stack-envelope,
+.m002-stack-envelope:hover,
+.m002-stack-envelope.m002-selected,
+.m002-link-flow,
+.m002-link:hover .m002-link-line,
+.m002-link:hover .m002-link-label,
+.m002-link.m002-selected .m002-link-line,
+.m002-link.m002-selected .m002-link-line.m002-link-stripe,
+.m002-link.m002-selected .m002-link-label.m002-link-stripe-label,
+.m002-link.m002-selected .m002-lag-line,
+.m002-rope .m002-rope-line,
+.m002-rope .m002-rope-tip,
+.m002-autolink .m002-autolink-stub,
+.m002-autolink .m002-autolink-tip,
+.m002-autolink .m002-autolink-full,
+.m002-l3-path-flow,
+.m002-detail-device.is-selected .m002-detail-dev-bg,
+.m002-detail-port:hover .m002-detail-port-box,
+.m002-detail-port.is-selected .m002-detail-port-box,
+.m002-rad-seg-dev .m002-rad-seg-dot{
+  filter: none !important;
+}
+/* Drag-target merge-pulse + VLAN-solo amber-pulse animations bake drop-shadow
+   into their keyframes; killing the filter alone isn't enough because the
+   animation drives it on every frame. Disable the animations outright. The
+   visible state-stroke (e.g. amber stroke on configured-only stacks) still
+   remains via the static rule that paints the stroke. */
+.m002-drag-stack-target.m002-merge-ok,
+.m002-drag-stack-target.m002-merge-bad,
+.m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"],
+.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym{
+  animation: none !important;
+  filter: none !important;
+}
