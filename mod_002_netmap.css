@@ -1012,7 +1012,8 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-link-label,
 .m002-host[data-grid-style="sketch"] .m002-link-vlan-count,
 .m002-host[data-grid-style="sketch"] .m002-link-bundle-label,
-.m002-host[data-grid-style="sketch"] .m002-stack-cable-label{stroke:#faf6ed !important;stroke-width:2px !important;fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-cable-label,
+.m002-host[data-grid-style="sketch"] .m002-stack-env-label{stroke:#faf6ed !important;stroke-width:2px !important;fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;paint-order:stroke fill !important;}
 .m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-vlan-count,
 .m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-bundle-label,
 .m002-host[data-grid-style="sketch"] .m002-stacklink:hover .m002-stack-cable-label{fill:#2a2a30 !important;}
@@ -1021,8 +1022,10 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-bundle-label{fill:#c44b3c !important;}
 .m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-label{filter:none !important;}
 .m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-label.m002-link-stripe-label{filter:none !important;}
-/* Stack envelope title (// STACK · STACK-XX · ×N) — graphite muted. */
-.m002-host[data-grid-style="sketch"] .m002-stack-env-label{fill:#7a7568 !important;opacity:1 !important;}
+/* Stack envelope title (// STACK · STACK-XX · ×N) — opacity bump only; the
+   stroke + fill are unified with the other canvas labels above so they all
+   read as crisp graphite Share Tech Mono with a cream paper halo. */
+.m002-host[data-grid-style="sketch"] .m002-stack-env-label{opacity:1 !important;}
 .m002-host[data-grid-style="sketch"] .m002-stack-envelope.m002-selected .m002-stack-env-label{fill:#c44b3c !important;}
 /* Stack badge (×N count on collapsed stacks) — graphite. */
 .m002-host[data-grid-style="sketch"] .m002-stack-badge{fill:#3a3a35 !important;}
