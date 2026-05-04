@@ -8292,13 +8292,30 @@ function vfxApplyDrain(parts, p, phase) {
   // the dasharray drain so the wall and its label disappear AS the perimeter
   // is consumed — not via a parallel wrapper-opacity cross-fade that
   // visually competed with the drain and made elements feel like they
-  // "popped" out at the end. Drop-shadow on the wrapper naturally shrinks
-  // along with the visible content (less stroke + less fill = less shadow
-  // source = less halo) so no separate halo handling is needed.
+  // "popped" out at the end. Drop-shadow halo is killed separately on drain
+  // clones (see vfxSuppressFilters) — the filter blur radius is a fixed
+  // pixel value that does NOT scale with content size, so even a tiny
+  // remaining bright stroke segment casts a full-size aura that lingers
+  // visually on top of the otherwise nearly-empty wall and reads as a
+  // "glow effect" the user does not want.
   const fadeP = 1 - p;
   for (const f of parts.fades) {
     f.el.style[f.prop] = String(fadeP);
   }
+}
+
+// Strip every drop-shadow / blur filter on a drain clone — wrapper + every
+// SVG descendant. The CSS .m002-device / .m002-stack-collapsed / etc. rules
+// declare drop-shadow filters with fixed-pixel blur radii; those radii do
+// not scale with the source content's alpha or size, so a half-drained wall
+// still casts a full-radius halo. Without this, the drain looks like the
+// wall vanishes leaving a bright glowing aura behind. Builds keep their
+// filters because the filter naturally renders nothing while the dasharray
+// + fades are at p=1 (nothing to project a shadow from), then ramps in
+// alongside the content.
+function vfxSuppressFilters(el) {
+  el.style.filter = 'none';
+  el.querySelectorAll('*').forEach((n) => { if (n instanceof SVGElement) n.style.filter = 'none'; });
 }
 
 // Setting individual style properties to '' empties them, but Firefox keeps
@@ -8729,6 +8746,7 @@ function vfxAnimateView(s, doRender, anchor) {
     const parts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (parts.shapes.length === 0 && parts.fades.length === 0) { clone.remove(); continue; }
     clone.style.opacity = String(vfxFrozenOpacity(entry));
+    vfxSuppressFilters(clone);
     drains.push({ clone, parts });
   }
 
@@ -8764,6 +8782,7 @@ function vfxAnimateView(s, doRender, anchor) {
     s.gExits.appendChild(clone);
     const drainParts = vfxCollectAnimatables(clone, drainAnchor, 'drain');
     if (drainParts.shapes.length > 0 || drainParts.fades.length > 0) {
+      vfxSuppressFilters(clone);
       drains.push({ clone, parts: drainParts });
     } else {
       clone.remove();
