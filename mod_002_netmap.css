@@ -1054,15 +1054,16 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
    hover. Keep the device-picker --accent tinting (it's already per-type) but
    soften it onto the cream substrate. */
 .m002-host[data-grid-style="sketch"] .m002-radial{filter:drop-shadow(0 4px 14px rgba(0,0,0,0.18)) !important;}
-/* The bg circle is hard-coded to r=129 in mod_002_radial.js, while segment
-   paths extend to r=130 — so a stroke on the bg sits INSIDE the segments and
-   gets visually covered. Push r out to 132 (3px past the segment edge) so the
-   graphite outline reads as a clean ring at the actual outer edge of the
-   menu. .m002-rad-svg already has overflow:visible, so r=132 doesn't clip. */
-.m002-host[data-grid-style="sketch"] .m002-rad-bg{fill:rgba(254,252,246,0.96) !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;r:132 !important;}
+/* The bg circle's stroke is dropped — the segment-path strokes themselves
+   form the outline ring at r=130 (each donut-wedge's outer arc stroke butts
+   against its neighbour's, drawing one continuous circle). A separate bg
+   stroke either floated outside (gap moat between outline and segments) or
+   sat inside (covered by the segments painted on top), so let the segments
+   BE the silhouette and bump THEIR stroke to graphite 1.2px. */
+.m002-host[data-grid-style="sketch"] .m002-rad-bg{fill:rgba(254,252,246,0.96) !important;stroke:none !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-core{fill:#fefcf6 !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-core-label{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
-.m002-host[data-grid-style="sketch"] .m002-rad-seg-path{fill:rgba(254,252,246,0.92) !important;stroke:#c8c2b0 !important;stroke-width:1 !important;}
+.m002-host[data-grid-style="sketch"] .m002-rad-seg-path{fill:rgba(254,252,246,0.92) !important;stroke:#3a3a35 !important;stroke-width:1.2 !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-seg:hover .m002-rad-seg-path{fill:rgba(196,75,60,0.10) !important;stroke:#c44b3c !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-seg-glyph{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
 .m002-host[data-grid-style="sketch"] .m002-rad-seg-label{fill:#3a3a35 !important;font-family:'Share Tech Mono',monospace !important;}
