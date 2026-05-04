@@ -4721,38 +4721,30 @@ function anchorAt(devPos, side, off = 0) {
   }
 }
 
-// Default anchor pair when no hub is involved. Same row/column → opposite
-// sides aligned for a straight line. Diagonal → perpendicular pair so the
-// route is a single L (rather than the H-V-H zigzag that would otherwise
-// come out of two co-axial anchors).
+// Default anchor pair: each endpoint picks the side that most directly faces
+// the other (dominant-axis projection of the centre-to-centre vector). Pairs
+// always come out OPPOSITE (E↔W or N↔S) — when the link exits the top of
+// source, it enters the bottom of the target, mirroring how a real cable
+// would naturally route between facing edges. Same-row pairs collapse to a
+// single straight segment; diagonals become a Z (≤2 bends) instead of an L
+// whose corner would clip into one box's interior side.
 function pickAnchorSides(a, b) {
   const dx = b.x - a.x, dy = b.y - a.y;
-  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
-  if (Math.abs(dy) <= halfH) {
+  if (Math.abs(dx) >= Math.abs(dy)) {
     return { aSide: dx > 0 ? 'E' : 'W', bSide: dx > 0 ? 'W' : 'E' };
   }
-  if (Math.abs(dx) <= halfW) {
-    return { aSide: dy > 0 ? 'S' : 'N', bSide: dy > 0 ? 'N' : 'S' };
-  }
-  // Diagonal — longer leg first (bend closer to B).
-  if (Math.abs(dx) >= Math.abs(dy)) {
-    return { aSide: dx > 0 ? 'E' : 'W', bSide: dy > 0 ? 'N' : 'S' };
-  }
-  return { aSide: dy > 0 ? 'S' : 'N', bSide: dx > 0 ? 'W' : 'E' };
+  return { aSide: dy > 0 ? 'S' : 'N', bSide: dy > 0 ? 'N' : 'S' };
 }
 
 // When the hub's anchor is locked to a specific side (because ≥2 peers merge
-// on that side), the source picks the side that lets a single L into the
-// hub anchor without backtracking.
-function sourceSideForHub(srcPos, hubPos, hubSide) {
-  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+// on that side), the source still picks its FACING side — the dominant-axis
+// projection of source→hub. With facing-side exits the link enters/leaves
+// each box on the visually correct edge (top exit → bottom entry, etc.)
+// instead of bursting out of a side that points away from the other end.
+function sourceSideForHub(srcPos, hubPos, _hubSide) {
   const dx = hubPos.x - srcPos.x, dy = hubPos.y - srcPos.y;
-  if (hubSide === 'N' || hubSide === 'S') {
-    if (Math.abs(dx) <= halfW) return hubSide === 'N' ? 'S' : 'N';
-    return dx > 0 ? 'E' : 'W';
-  }
-  if (Math.abs(dy) <= halfH) return hubSide === 'W' ? 'E' : 'W';
-  return dy > 0 ? 'S' : 'N';
+  if (Math.abs(dy) >= Math.abs(dx)) return dy > 0 ? 'S' : 'N';
+  return dx > 0 ? 'E' : 'W';
 }
 
 // Build orthogonal waypoints between two anchors honouring each anchor's
@@ -4857,15 +4849,17 @@ function detourAroundObstacles(pts, obstacles, pad = 8) {
 }
 
 // Orthogonal route from a→b. Anchors live exclusively on side midpoints; the
-// path is built from the anchor pair (perpendicular → single L; opposite →
-// straight or Z; same-side → U). Hub-merge locks the hub's side so peer
-// links converge on a shared trunk anchor.
+// path is built from the anchor pair (opposite-facing → straight or Z;
+// perpendicular → single L; same-side → U). Hub-merge locks the hub's side
+// so peer links converge on a shared trunk anchor.
 //
-// Selection: try every (aSide, bSide) combination, score each by (a) does
-// it hit any obstacle, (b) bend count, (c) does it match the natural
-// preferred sides. Lowest-score clean candidate wins. If every candidate
-// is blocked, fall back to a Z-detour off the preferred candidate so the
-// route at least bypasses the first offender instead of disappearing
+// Selection: try the PREFERRED pair first (each endpoint's facing side, so
+// "exit top → enter bottom" reads naturally). If that path is clean, use
+// it — even if some other anchor pair would have one fewer bend. Only
+// when the preferred pair is blocked by an obstacle do we search the rest
+// of the (aSide, bSide) grid for the lowest-bend clean alternative. If
+// EVERY combination is blocked, fall back to a Z-detour off the preferred
+// pair so the line still bypasses the offender instead of vanishing
 // behind it.
 const _ORTH_SIDES = ['N', 'E', 'S', 'W'];
 function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
@@ -4878,35 +4872,39 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
     const sd = pickAnchorSides(a, b);
     prefA = sd.aSide; prefB = sd.bSide;
   }
-  // Hub-merge locks one end's side; the other end is free to pick whichever
-  // approach lands the cleanest path.
+  // 1) Preferred pair first. Wins outright when clean — the facing-side
+  // exit/entry rule beats a slightly cheaper bend count from a side that
+  // doesn't visually face the other end.
+  const prefAP = anchorAt(a, prefA, off);
+  const prefBP = anchorAt(b, prefB, off);
+  const prefPts = pointsForAnchors(prefAP, prefA, prefBP, prefB);
+  if (!pointsHitAny(prefPts, obstacles)) {
+    const lbl = pointsLabel(prefPts);
+    return {
+      d: pointsToPath(prefPts),
+      lx: lbl.lx, ly: lbl.ly,
+      from: { x: prefPts[0].x, y: prefPts[0].y, anchor: 'start' },
+      to:   { x: prefPts[prefPts.length - 1].x, y: prefPts[prefPts.length - 1].y, anchor: 'end' },
+    };
+  }
+  // 2) Preferred is blocked — search alternatives, locking whichever side
+  // the hub merge fixed. Lowest-bend clean candidate wins.
   const aChoices = hubInfo && !hubInfo.hubIsB ? [hubInfo.hubSide] : _ORTH_SIDES;
   const bChoices = hubInfo &&  hubInfo.hubIsB ? [hubInfo.hubSide] : _ORTH_SIDES;
   let best = null;
   for (const aS of aChoices) {
     for (const bS of bChoices) {
+      if (aS === prefA && bS === prefB) continue; // already tested
       const aP = anchorAt(a, aS, off);
       const bP = anchorAt(b, bS, off);
       const pts = pointsForAnchors(aP, aS, bP, bS);
       if (pointsHitAny(pts, obstacles)) continue;
       const bends = pts.length - 2;
-      const matchesPref = (aS === prefA && bS === prefB) ? 0 : 1;
-      const score = bends * 10 + matchesPref; // fewer bends > matches preferred
-      if (best === null || score < best.score) best = { score, pts };
+      if (best === null || bends < best.bends) best = { bends, pts };
     }
   }
-  let chosen;
-  if (best) {
-    chosen = best.pts;
-  } else {
-    // All anchor combinations are blocked — build a Z-detour off the
-    // preferred sides so the line at least curves around the offending
-    // obstacle instead of vanishing through it.
-    const aP = anchorAt(a, prefA, off);
-    const bP = anchorAt(b, prefB, off);
-    const pts = pointsForAnchors(aP, prefA, bP, prefB);
-    chosen = detourAroundObstacles(pts, obstacles) || pts;
-  }
+  // 3) Still nothing — Z-detour off the preferred pair.
+  const chosen = best ? best.pts : (detourAroundObstacles(prefPts, obstacles) || prefPts);
   const lbl = pointsLabel(chosen);
   return {
     d: pointsToPath(chosen),
