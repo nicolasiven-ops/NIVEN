@@ -1299,6 +1299,9 @@ async function mount(stage, ctx) {
   }
   state = createState(stage, ctx);
   buildDOM(state);
+  // Stamp the body-level style attr after host exists so cursor/global chrome
+  // overrides can key off it the moment the user enters Plexus.
+  applyStyle(state, state.prefs?.style);
   bindBoard(state);
   bindKeyboard(state);
   await loadFromServer(state);
@@ -1323,6 +1326,8 @@ function unmount() {
   // Drop the tool-cursor classes we stamped on body — other modules
   // shouldn't inherit them.
   document.body.classList.remove('m002-tool-select', 'm002-tool-link', 'm002-tool-delete');
+  // Drop the per-style body attr so the hub cursor/chrome reverts to default.
+  delete document.body.dataset.m002Style;
   state = null;
 }
 
@@ -1403,6 +1408,11 @@ function applyStyle(s, styleId) {
   const valid = STYLES.find((x) => x.id === styleId) ? styleId : DEFAULT_STYLE;
   if (s.prefs) { s.prefs.style = valid; savePrefs(s.prefs); }
   if (s.host) s.host.dataset.gridStyle = valid;
+  // Mirror onto <body> so we can tweak the global N.IVEN cursor (and any
+  // other body-level chrome) per active Plexus style. Cleared on unmount.
+  if (typeof document !== 'undefined' && document.body) {
+    document.body.dataset.m002Style = valid;
+  }
 }
 
 function createState(stage, ctx) {

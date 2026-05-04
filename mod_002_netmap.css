@@ -150,8 +150,44 @@
 .m002-host[data-grid-style="sketch"] .m002-kbd{background:#fefcf6;border-color:#c8c2b0;color:#2a2a30;box-shadow:none;}
 .m002-host[data-grid-style="sketch"] .m002-pal-sep{background:#d6d0c0;}
 .m002-host[data-grid-style="sketch"] .m002-field-static{background:#fefcf6;border-color:#c8c2b0;color:#7a7568;}
+/* Stack envelope — the dashed-rect "//STACK · NAME" wrapper around grouped devices */
+.m002-host[data-grid-style="sketch"] .m002-stack-env-bg{fill:rgba(254,252,246,0.88) !important;stroke-width:1.4;}
+.m002-host[data-grid-style="sketch"] .m002-stack-envelope{filter:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-envelope:hover,
+.m002-host[data-grid-style="sketch"] .m002-stack-envelope.m002-selected{filter:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-stack-collapsed .m002-dev-bg{fill:#fefcf6;stroke-width:1.4;}
+.m002-host[data-grid-style="sketch"] .m002-stack-ghost{fill:rgba(254,252,246,0.6);}
+/* VLAN + subnet legend — rows, inputs, add-button on cream paper */
+.m002-host[data-grid-style="sketch"] .m002-vlan-row{background:#fefcf6;border-color:#c8c2b0;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row:hover{border-color:#2a2a30;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row.is-solo{background:rgba(196,75,60,0.06);box-shadow:none;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row.is-solo .m002-vlan-row-dot{box-shadow:none;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-row-dot{box-shadow:none;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-input{background:#fefcf6;border-color:#c8c2b0;color:#2a2a30;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-input:focus{border-color:#c44b3c;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-add-btn{border-color:#c44b3c;color:#c44b3c;background:#fefcf6;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-add-btn:hover{background:rgba(196,75,60,0.08);}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-rm{opacity:.5;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-legend-rm:hover{opacity:1;}
+/* Same treatment for VLAN chip-buttons (port-modal etc.) */
+.m002-host[data-grid-style="sketch"] .m002-vlan-chip-btn{background:#fefcf6;border-color:#c8c2b0;color:#2a2a30;}
+.m002-host[data-grid-style="sketch"] .m002-vlan-chip-btn.on{background:rgba(196,75,60,0.08);box-shadow:none;}
+/* Minimap (bottom-right) */
+.m002-host[data-grid-style="sketch"] .m002-minimap{background:rgba(254,252,246,0.94);border-color:#c8c2b0;backdrop-filter:none;}
+.m002-host[data-grid-style="sketch"] .m002-minimap-title{color:#7a7568;}
+.m002-host[data-grid-style="sketch"] .m002-minimap-toggle{color:#7a7568;}
+.m002-host[data-grid-style="sketch"] .m002-minimap-toggle:hover{color:#c44b3c;}
+.m002-host[data-grid-style="sketch"] .m002-minimap-svg{background:#faf6ed;}
 /* Catch-all neutralizer for stray text-shadows in sketch mode */
 .m002-host[data-grid-style="sketch"] *{text-shadow:none;}
+
+/* === Body-level overrides for sketch (hub cursor + chrome) === */
+/* Replace red neon brackets with graphite ones so they pop on cream paper */
+body[data-m002-style="sketch"] .cur-bracket{border-color:#2a2a30 !important;}
+body[data-m002-style="sketch"] .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
+body[data-m002-style="sketch"] .cursor.active .cur-bracket{border-color:#c44b3c !important;}
+/* Tool-mode overrides keep their hue (cyan/red) but lose the harsh glow */
+body[data-m002-style="sketch"] .cursor{filter:none !important;}
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
 .m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
