@@ -854,17 +854,33 @@
 
 /* Tool-aware cursor recolour. The N.IVEN custom cursor (red brackets +
    red dot) keeps its shape but shifts hue to match the active MOD_002
-   tool. Body classes set in refreshToolHighlights drive this. */
-body.m002-tool-select .cur-bracket{border-color:#ffffff !important;}
-body.m002-tool-select .cursor-dot{background:#ffffff !important;box-shadow:0 0 10px #ffffff,0 0 3px #fff !important;}
-body.m002-tool-link .cur-bracket{border-color:#35ff7a !important;}
-body.m002-tool-link .cursor-dot{background:#35ff7a !important;box-shadow:0 0 10px #35ff7a,0 0 3px #fff !important;}
+   tool. Body classes set in refreshToolHighlights drive this.
+   :not(.m002-style-sketch) — sketch theme paints its own pencil tones; we
+   exclude these futuristic-only neon recolours when sketch is active so the
+   brackets/dot don't get forced back to neon-white/neon-green. */
+body.m002-tool-select:not(.m002-style-sketch) .cur-bracket{border-color:#ffffff !important;}
+body.m002-tool-select:not(.m002-style-sketch) .cursor-dot{background:#ffffff !important;box-shadow:0 0 10px #ffffff,0 0 3px #fff !important;}
+body.m002-tool-link:not(.m002-style-sketch) .cur-bracket{border-color:#35ff7a !important;}
+body.m002-tool-link:not(.m002-style-sketch) .cursor-dot{background:#35ff7a !important;box-shadow:0 0 10px #35ff7a,0 0 3px #fff !important;}
 /* Delete tool: keeps the red brackets but swaps the centre dot for an X. */
 body.m002-tool-delete .cursor-dot{display:none;}
-body.m002-tool-delete .cursor::before,
-body.m002-tool-delete .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#ff003c;box-shadow:0 0 6px #ff003c;}
+body.m002-tool-delete:not(.m002-style-sketch) .cursor::before,
+body.m002-tool-delete:not(.m002-style-sketch) .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#ff003c;box-shadow:0 0 6px #ff003c;}
 body.m002-tool-delete .cursor::before{transform:translate(-50%,-50%) rotate(45deg);}
 body.m002-tool-delete .cursor::after{transform:translate(-50%,-50%) rotate(-45deg);}
+/* Sketch + delete: pencil-red X without neon glow (still needs the content/positioning above) */
+body.m002-tool-delete.m002-style-sketch .cursor::before,
+body.m002-tool-delete.m002-style-sketch .cursor::after{content:'';position:absolute;left:50%;top:50%;width:14px;height:1.5px;background:#c44b3c;box-shadow:none;}
+/* Sketch cursor tones — applied via the body.m002-style-sketch class. The
+   --red CSS variable is rebound below for any rule that still uses it (the
+   .br-* border colour, .cursor-dot bg, etc.) so the brackets/dot pick up
+   pencil tones automatically. JS-injected inline styles (m002_netmap.js
+   applyStyle painter) provide a parallel guarantee for older browsers. */
+body.m002-style-sketch{--red:#2a2a30;--red-glow:#c44b3c;}
+body.m002-style-sketch.m002-tool-link{--red:#6b8a6b;}
+body.m002-style-sketch.m002-tool-delete{--red:#c44b3c;}
+body.m002-style-sketch .cur-bracket{border-color:var(--red) !important;}
+body.m002-style-sketch .cursor-dot{background:var(--red) !important;box-shadow:none !important;}
 /* Hover state in MOD_002: instead of growing (the global default), the
    cursor stands on its tip — the whole bracket frame pivots 45° around
    the cursor centre, brackets travel as one unit. */
