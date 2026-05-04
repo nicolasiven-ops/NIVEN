@@ -181,23 +181,8 @@
 /* Catch-all neutralizer for stray text-shadows in sketch mode */
 .m002-host[data-grid-style="sketch"] *{text-shadow:none;}
 
-/* === Body-level overrides for sketch (hub cursor + chrome) === */
-/* Tool-aware cursor recolours below (#ffffff for select, #35ff7a for link)
-   are loaded LATER in this file and use !important — to win on specificity
-   we combine the style attr with the tool class in a single selector
-   (specificity 0,3,1 beats their 0,2,1). Each tool gets a sketch-friendly
-   tone: select = graphite, link = sage pencil, delete = pencil red. */
-body[data-m002-style="sketch"].m002-tool-select .cur-bracket,
-body[data-m002-style="sketch"] .cur-bracket{border-color:#2a2a30 !important;}
-body[data-m002-style="sketch"].m002-tool-select .cursor-dot,
-body[data-m002-style="sketch"] .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
-body[data-m002-style="sketch"].m002-tool-link .cur-bracket{border-color:#6b8a6b !important;}
-body[data-m002-style="sketch"].m002-tool-link .cursor-dot{background:#6b8a6b !important;box-shadow:none !important;}
-body[data-m002-style="sketch"].m002-tool-delete .cur-bracket{border-color:#c44b3c !important;}
-body[data-m002-style="sketch"].m002-tool-delete .cursor::before,
-body[data-m002-style="sketch"].m002-tool-delete .cursor::after{background:#c44b3c !important;box-shadow:none !important;}
-body[data-m002-style="sketch"] .cursor.active .cur-bracket{border-color:#c44b3c !important;}
-body[data-m002-style="sketch"] .cursor{filter:none !important;}
+/* Sketch cursor + bracket overrides moved to the end of the file so source
+   order also favours them — see "SKETCH OVERRIDES (FINAL)" block. */
 .m002-insp-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;flex:1;min-height:240px;text-align:center;color:#5a5f6e;}
 .m002-insp-empty-title{font-family:'Share Tech Mono',monospace;font-size:11px;letter-spacing:2px;color:#7a7f8e;margin-bottom:14px;}
 .m002-insp-empty-hints{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:4px;font-family:'Share Tech Mono',monospace;font-size:9px;letter-spacing:1.4px;}
@@ -975,3 +960,58 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-seg-label,
 .m002-radial.m002-radial-in[data-level="primary"][data-fresh] .m002-rad-core-label{animation-delay:475ms;}
 @keyframes m002-rad-fade-final{from{opacity:0;}to{opacity:1;}}
+
+/* =============================================================================
+   SKETCH OVERRIDES (FINAL) — placed at file end so source-order also favours
+   these rules in addition to their already-higher specificity. Belt-and-braces
+   against the global tool-recolour rules above that hard-code #ffffff brackets.
+   ============================================================================= */
+
+/* --- Cursor: target the SPECIFIC border sides each .br-* uses, with the
+   exact tool-class in the selector so specificity reads (0,3,1) and beats
+   `body.m002-tool-select .cur-bracket` (0,2,1). Each tool gets its own tone. */
+body[data-m002-style="sketch"].m002-tool-select .br-tl{border-top-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
+body[data-m002-style="sketch"].m002-tool-select .br-tr{border-top-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
+body[data-m002-style="sketch"].m002-tool-select .br-bl{border-bottom-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
+body[data-m002-style="sketch"].m002-tool-select .br-br{border-bottom-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
+body[data-m002-style="sketch"].m002-tool-select .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
+
+body[data-m002-style="sketch"].m002-tool-link .br-tl{border-top-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}
+body[data-m002-style="sketch"].m002-tool-link .br-tr{border-top-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}
+body[data-m002-style="sketch"].m002-tool-link .br-bl{border-bottom-color:#6b8a6b !important;border-left-color:#6b8a6b !important;}
+body[data-m002-style="sketch"].m002-tool-link .br-br{border-bottom-color:#6b8a6b !important;border-right-color:#6b8a6b !important;}
+body[data-m002-style="sketch"].m002-tool-link .cursor-dot{background:#6b8a6b !important;box-shadow:none !important;}
+
+body[data-m002-style="sketch"].m002-tool-delete .br-tl{border-top-color:#c44b3c !important;border-left-color:#c44b3c !important;}
+body[data-m002-style="sketch"].m002-tool-delete .br-tr{border-top-color:#c44b3c !important;border-right-color:#c44b3c !important;}
+body[data-m002-style="sketch"].m002-tool-delete .br-bl{border-bottom-color:#c44b3c !important;border-left-color:#c44b3c !important;}
+body[data-m002-style="sketch"].m002-tool-delete .br-br{border-bottom-color:#c44b3c !important;border-right-color:#c44b3c !important;}
+body[data-m002-style="sketch"].m002-tool-delete .cursor::before,
+body[data-m002-style="sketch"].m002-tool-delete .cursor::after{background:#c44b3c !important;box-shadow:none !important;}
+
+/* Fallback when Plexus isn't mounted but data-m002-style still set, or no tool
+   class is present (e.g. radial menu just opened) — keep brackets graphite. */
+body[data-m002-style="sketch"] .br-tl{border-top-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
+body[data-m002-style="sketch"] .br-tr{border-top-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
+body[data-m002-style="sketch"] .br-bl{border-bottom-color:#2a2a30 !important;border-left-color:#2a2a30 !important;}
+body[data-m002-style="sketch"] .br-br{border-bottom-color:#2a2a30 !important;border-right-color:#2a2a30 !important;}
+body[data-m002-style="sketch"] .cursor-dot{background:#2a2a30 !important;box-shadow:none !important;}
+body[data-m002-style="sketch"] .cursor{filter:none !important;}
+
+/* --- Stack-member separators: the thin neon outline disappears on cream paper
+   so members blend together. Bump stroke + use graphite + tighten dasharray
+   subtly so the divider reads as a clear pencil line. */
+.m002-host[data-grid-style="sketch"] .m002-device.m002-stack-member .m002-dev-bg{stroke:#3a3a35 !important;stroke-width:1.6 !important;}
+.m002-host[data-grid-style="sketch"] .m002-device.m002-stack-member:hover .m002-dev-bg{stroke:#2a2a30 !important;stroke-width:1.8 !important;filter:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-device.m002-stack-member.m002-selected .m002-dev-bg{stroke:#c44b3c !important;stroke-width:2 !important;stroke-dasharray:4 3;filter:none !important;}
+/* Type tag inside member tiles — graphite muted (was washed-out lavender) */
+.m002-host[data-grid-style="sketch"] .m002-device.m002-stack-member .m002-dev-type{fill:#7a7568 !important;opacity:1 !important;}
+
+/* --- Link / port labels (".m002-link-label"): the original 3px black stroke
+   used as a halo against dark canvas reads as a fat black outline against
+   cream paper, making numbers look cartoonishly bold. Match the stroke to
+   the paper so the halo disappears and the glyph reads as plain monospace. */
+.m002-host[data-grid-style="sketch"] .m002-link-label{stroke:#faf6ed !important;stroke-width:2px !important;fill:#3a3a35 !important;}
+.m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-label{fill:#c44b3c !important;}
+.m002-host[data-grid-style="sketch"] .m002-link:hover .m002-link-label{filter:none !important;}
+.m002-host[data-grid-style="sketch"] .m002-link.m002-selected .m002-link-label.m002-link-stripe-label{filter:none !important;}
