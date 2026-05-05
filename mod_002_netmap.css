@@ -680,11 +680,13 @@
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-dim:hover,
 .m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-dim:hover{opacity:.4;}
 /* Asymmetric link — VLAN configured on one endpoint only, the other side
-   isn't tagged. Mirrors the configured-only amber pulse on devices/stacks
-   ("declared but not wired through"). */
+   isn't tagged. Mirrors the configured-only amber state on devices/stacks
+   ("declared but not wired through"). Opacity-only pulse (no drop-shadow)
+   so the warning stays distinguishable from a genuinely amber-coloured VLAN
+   without bringing back the glow halos that were stripped in v2.33.26. */
 @keyframes m002-link-vsolo-asym-pulse {
-  0%, 100% { filter: drop-shadow(0 0 2px #ffbf3c) drop-shadow(0 0 7px #ffbf3c); }
-  50%      { filter: drop-shadow(0 0 5px #ffbf3c) drop-shadow(0 0 18px #ffbf3c); }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.32; }
 }
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym,
 .m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym{animation:m002-link-vsolo-asym-pulse 2.4s ease-in-out infinite;}
@@ -1341,8 +1343,7 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-drag-stack-target.m002-merge-ok,
 .m002-drag-stack-target.m002-merge-bad,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"],
-.m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym{
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{
   animation: none !important;
   filter: none !important;
 }
