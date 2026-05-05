@@ -8835,6 +8835,41 @@ function vfxEaseInQuad(t)    { return t * t; }
 function vfxEaseOutQuad(t)   { return 1 - (1 - t) * (1 - t); }
 function vfxEaseOutCubic(t)  { return 1 - Math.pow(1 - t, 3); }
 
+// Visual-state fingerprint for the snapshot digest. Two parts:
+//   1. Wrapper attributes (class + data-l3 / data-gw / data-vlan-solo /
+//      data-routing-solo) — catches CSS rules whose selector matches the
+//      wrapper directly. Class is included so a collapse↔expand swap that
+//      flips .m002-stack-member counts as a look change.
+//   2. Computed styles of indicator children (`.m002-dev-bg`,
+//      `.m002-dev-type`, `.m002-stack-env-bg`, `.m002-link-line`,
+//      `.m002-link-label`, `.m002-l3-route`) — catches CSS rules that
+//      reach INSIDE the wrapper via descendant selectors. The L3-stack-
+//      member case is the canonical trigger: in routing layer the
+//      `[data-active-layer="routing"] .m002-stack-member[data-l3="true"]
+//      .m002-dev-bg{stroke:var(--accent)}` rule paints the inner rect
+//      green, but the wrapper's own filter is pinned to `none` by the
+//      global glow-kill CSS — wrapper-only digests therefore matched
+//      before/after and the persisting-unchanged branch skipped these
+//      members entirely.
+function vfxAttrDigest(el) {
+  const attrs = [
+    el.getAttribute('class')             || '',
+    el.getAttribute('data-l3')           || '',
+    el.getAttribute('data-gw')           || '',
+    el.getAttribute('data-vlan-solo')    || '',
+    el.getAttribute('data-routing-solo') || '',
+  ].join('§');
+  const bg = el.querySelector('.m002-dev-bg, .m002-stack-env-bg, .m002-link-line, .m002-l3-route');
+  const tp = el.querySelector('.m002-dev-type, .m002-link-label');
+  const bgcs = bg ? window.getComputedStyle(bg) : null;
+  const tpcs = tp ? window.getComputedStyle(tp) : null;
+  const inner = [
+    bgcs ? `${bgcs.stroke}|${bgcs.fill}|${bgcs.opacity}` : '',
+    tpcs ? `${tpcs.fill}|${tpcs.opacity}` : '',
+  ].join('§');
+  return attrs + '◆' + inner;
+}
+
 // Solo-toggle entry point — VLAN solo, Subnet solo, and their CLEAR buttons
 // all funnel through here so they share one preset (snappier than layer
 // switches, but still sequential — the user reads "old fades out, new fades
@@ -8871,8 +8906,19 @@ function vfxSnapshot(s, freeze) {
       //     never overlay-drained on layer flips because their wrapper <g>
       //     stayed at the same key and the data-l3-only opacity check
       //     skipped them entirely.
+      //   - class + selected data-* attrs (l3/gw/vlan-solo/routing-solo):
+      //     catches CSS rules that reach INSIDE the wrapper to restyle
+      //     children — e.g. `[data-active-layer="routing"]
+      //     .m002-stack-member[data-l3="true"] .m002-dev-bg{stroke:accent}`
+      //     paints the inner rect green in routing but leaves wrapper
+      //     opacity+filter unchanged (the global glow-kill rule pins the
+      //     wrapper filter to none for stack members). Without these
+      //     attrs in the digest, stack members never animated on
+      //     layer/solo changes — the wrapper digest matched, persisting-
+      //     unchanged branch took over, and the visual swap was
+      //     instantaneous.
       const cs = window.getComputedStyle(el);
-      const frozen = `${cs.opacity}|${cs.filter}|${el.innerHTML}`;
+      const frozen = `${cs.opacity}|${cs.filter}|${vfxAttrDigest(el)}|${el.innerHTML}`;
       // BEFORE snapshot only: stamp the BRIGHT computed visuals as inline
       // styles on the live element so the look survives a layer flip when
       // a clone is later attached into a host with the new data-active-
