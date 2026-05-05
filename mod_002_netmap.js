@@ -10483,12 +10483,27 @@ function animateView(s, target, durationMs) {
 // s._viewBeforeDetail is NOT touched here — exiting always returns to the
 // original pre-detail viewport, regardless of how many hops happened.
 // =============================================================================
-// Hop port/link transition timings. Old ports/links/stubs fade out over
-// HOP_OUT_MS, then sync rebuilds the DOM, then new ports/links/stubs
-// pop/fade in over HOP_IN_MS. Tile FLIP runs in parallel from the sync
-// moment, so total hop = HOP_OUT_MS + DETAIL.flipMs (~680ms).
+// Hop port/link transition timings. Three sequential phases:
+//   t = 0           — hop-out class lands; old ports/stubs/peer-links fade
+//                     out over HOP_OUT_MS while tiles stay at their old
+//                     positions.
+//   t = HOP_OUT_MS  — sync (rebuilds ports/links DOM, replaces old with new
+//                     fresh nodes at their final positions); applyDetail
+//                     Layout starts the tile FLIP. New ports/links sit at
+//                     their base CSS state (scale 0.6, opacity 0) — the
+//                     hop-out class is removed in the same tick so the new
+//                     elements never inherit a hop-out animation; hop-in is
+//                     NOT yet added so they stay invisible. Tiles glide
+//                     for DETAIL.flipMs.
+//   t = HOP_OUT_MS  — FLIP done; hop-in class lands; new ports/stubs/peer-
+//   + flipMs         links pop in over ~HOP_IN_MS with a small per-port
+//                     stagger. The user explicitly asked for ports to only
+//                     appear AFTER the swap is complete; running hop-in in
+//                     parallel with FLIP made the seamless port-suck →
+//                     port-pop handoff (both end/start at scale 0.6
+//                     opacity 0) look like no animation at all.
 const HOP_OUT_MS = 200;
-const HOP_IN_MS  = 240;
+const HOP_IN_MS  = 280;
 
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
@@ -10553,11 +10568,14 @@ function hopToPeer(s, peerId, fromEl) {
       freshIds: newIds,
     });
 
-    // Swap hop-out → hop-in so the new ports/stubs/peer-links pop and
-    // fade in (mirrors the initial entry choreography).
+    // Drop hop-out NOW so the freshly-rendered ports/stubs/peer-links
+    // (which inherit the base CSS scale(0.6)/opacity:0 state) don't get
+    // the port-suck animation applied to them. Hop-in is added LATER —
+    // after the FLIP completes — so the new bits stay invisible during
+    // the tile glide and only pop in when the swap settles. The user
+    // explicitly asked for ports to appear after the swap is done.
     if (!reduceMotion) {
       overlay.classList.remove('m002-detail-hop-out');
-      overlay.classList.add('m002-detail-hop-in');
     }
 
     // Camera tween runs in parallel — doesn't gate the tile FLIP.
@@ -10566,15 +10584,27 @@ function hopToPeer(s, peerId, fromEl) {
     const ty = rect.height / 2 - peer.y * DETAIL_TARGET_ZOOM;
     animateView(s, { x: tx, y: ty, zoom: DETAIL_TARGET_ZOOM }, DETAIL_ENTER_MS);
 
-    // Settle once both the FLIP and the hop-in animation finish.
-    const settleAfter = (reduceMotion ? 0 : Math.max(DETAIL.flipMs, HOP_IN_MS) + 80);
-    s._detailSettleTimer = setTimeout(() => {
-      if (s.detailDeviceId === peerId) {
-        overlay.classList.add('m002-detail-overlay-settled');
-        overlay.classList.remove('m002-detail-hop-in');
-      }
+    if (reduceMotion) {
+      // Snap to settled state.
+      if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
       s._detailHopActive = false;
-    }, settleAfter);
+      return;
+    }
+
+    // Phase 3 — wait for FLIP to complete, THEN add hop-in so the new
+    // ports/stubs/peer-links pop / fade in deliberately. Settle one
+    // animation-pass later.
+    setTimeout(() => {
+      if (s.detailDeviceId !== peerId) return;
+      overlay.classList.add('m002-detail-hop-in');
+      s._detailSettleTimer = setTimeout(() => {
+        if (s.detailDeviceId === peerId) {
+          overlay.classList.add('m002-detail-overlay-settled');
+          overlay.classList.remove('m002-detail-hop-in');
+        }
+        s._detailHopActive = false;
+      }, HOP_IN_MS + 100);
+    }, DETAIL.flipMs);
   };
 
   if (reduceMotion) {

@@ -1008,17 +1008,28 @@ input.m002-field-conflict,
   animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
+/* Hop-in port animation. Gentler than the initial entry (cubic-bezier
+   1.2 instead of 1.4 = less aggressive overshoot) + 280ms duration so
+   each port reads as a deliberate settle rather than a snap. Per-port
+   stagger via the --enter-delay variable that renderDetailPortsMarkup
+   already sets inline (PORT_BASE_DELAY 700ms + i × PORT_STAGGER_MS):
+   subtract the 700ms base via calc() so the cascade starts immediately
+   at hop-in time but still spreads i × 12ms across the row, giving the
+   "wave" feel without the simultaneous-bounce ruppy crowding the user
+   flagged on v2.34.3.
+   stub + peer-link fade in slightly behind the ports (peer-link last so
+   the line draws between two visible endpoints). */
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-port .m002-detail-port-inner{
-  animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards!important;
-  animation-delay:0ms!important;
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.2,0.5,1) forwards!important;
+  animation-delay:calc(var(--enter-delay,700ms) - 700ms)!important;
 }
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-stub{
-  animation:m002-detail-stub-fade 200ms ease-out forwards!important;
-  animation-delay:100ms!important;
+  animation:m002-detail-stub-fade 240ms ease-out forwards!important;
+  animation-delay:120ms!important;
 }
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-peer-link{
-  animation:m002-detail-stub-fade 220ms ease-out forwards!important;
-  animation-delay:80ms!important;
+  animation:m002-detail-stub-fade 280ms ease-out forwards!important;
+  animation-delay:160ms!important;
 }
 /* Tile-inner / tile-bg freeze during hop. Higher specificity (0,5,0) than
    the show entry rules (0,4,0) so these win without needing !important on
