@@ -9619,7 +9619,9 @@ function animateView(s, target, durationMs) {
 // returns them to the original pre-detail viewport (s._viewBeforeDetail is
 // NOT overwritten on hop).
 // =============================================================================
-const HOP_FADE_MS = 240;
+// HOP_FADE_MS — must match the longest exit animation (140ms delay +
+// 280ms collapse) defined in the CSS .m002-detail-hop reverse-pop block.
+const HOP_FADE_MS = 440;
 const HOP_FLY_MS  = 460;
 
 function hopToPeer(s, peerId, fromEl) {

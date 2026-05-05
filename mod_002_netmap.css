@@ -839,6 +839,31 @@
   100% {opacity:1;}
 }
 
+/* Reverse-pop choreography — mirrors the entry keyframes above, used when
+   the user hops to a peer (everything except the survivor reverse-pops out
+   before the survivor flies to centre). Stagger is reversed too: smaller
+   pieces (stubs, ports, peer-tiles) leave first, central device collapses
+   last, so the device "swallows" its surroundings before vanishing. */
+@keyframes m002-detail-elem-collapse{
+  0%   {transform:scale(1,1);        opacity:1;}
+  60%  {transform:scale(0.005,1);    opacity:1;}
+  67%  {transform:scale(0.005,1);    opacity:1;}
+  95%  {transform:scale(0.005,0.02); opacity:1;}
+  100% {transform:scale(0.005,0.02); opacity:0;}
+}
+@keyframes m002-detail-elem-empty{
+  0%,40%   {fill:#0a0a10;}
+  60%,100% {fill:var(--accent);}
+}
+@keyframes m002-detail-port-suck{
+  0%   {transform:scale(1);   opacity:1;}
+  100% {transform:scale(0.6); opacity:0;}
+}
+@keyframes m002-detail-stub-fade-out{
+  0%   {opacity:1;}
+  100% {opacity:0;}
+}
+
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1070ms);}
@@ -906,21 +931,30 @@
    replays. Doubled selector .m002-detail-overlay.m002-detail-hop is
    intentional — needed to outweigh the .m002-detail-overlay-show animation
    rules in the cascade. */
-.m002-detail-overlay.m002-detail-hop .m002-detail-device-inner,
-.m002-detail-overlay.m002-detail-hop .m002-detail-port .m002-detail-port-inner,
-.m002-detail-overlay.m002-detail-hop .m002-detail-stub,
-.m002-detail-overlay.m002-detail-hop .m002-detail-peer:not(.m002-detail-hopper) .m002-detail-peer-inner{
-  animation:none!important;
-  transition:transform 240ms cubic-bezier(0.4,0,1,1),opacity 240ms cubic-bezier(0.4,0,1,1);
-  transform:scale(0.35);
-  opacity:0;
+/* Reverse-pop exits — staggered so smaller bits leave first, the central
+   device collapses last (mirrors the entry order in reverse). Total exit
+   window ~420ms, matched in JS by HOP_FADE_MS. */
+.m002-detail-overlay.m002-detail-hop .m002-detail-stub{
+  animation:m002-detail-stub-fade-out 140ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-peer-link{
-  animation:none!important;
-  transition:opacity 200ms cubic-bezier(0.4,0,1,1);
-  opacity:0;
+  animation:m002-detail-stub-fade-out 140ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-port .m002-detail-port-inner{
+  animation:m002-detail-port-suck 200ms cubic-bezier(0.4,0,1,1) 50ms forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-peer:not(.m002-detail-hopper) .m002-detail-peer-inner{
+  animation:m002-detail-port-suck 220ms cubic-bezier(0.4,0,1,1) 80ms forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-device-inner{
+  animation:m002-detail-elem-collapse 280ms cubic-bezier(0.4,0,0.2,1) 140ms forwards!important;
+}
+.m002-detail-overlay.m002-detail-hop .m002-detail-dev-bg{
+  animation:m002-detail-elem-empty 280ms cubic-bezier(0.4,0,0.2,1) 140ms forwards!important;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper{pointer-events:none;}
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-peer-inner{
