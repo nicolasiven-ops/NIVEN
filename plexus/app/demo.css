@@ -1,0 +1,123 @@
+/* ===================================================
+   PLEXUS — Demo banner overlay
+   Sits above the mounted Plexus app.
+   =================================================== */
+
+:root {
+  --demo-bg:     rgba(7, 7, 12, 0.92);
+  --demo-red:    #ff003c;
+  --demo-glow:   #ff2d5e;
+  --demo-text:   #e8e8f0;
+  --demo-dim:    #8a8a98;
+  --demo-border: rgba(255, 0, 60, 0.4);
+}
+
+html, body {
+  height: 100%;
+  margin: 0;
+  padding: 0;
+  background: #07070c;
+  overflow: hidden;
+}
+
+body.plexus-demo {
+  display: flex;
+  flex-direction: column;
+}
+
+/* === Banner === */
+.demo-banner {
+  flex: 0 0 auto;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.55rem 1rem;
+  background: var(--demo-bg);
+  border-bottom: 1px solid var(--demo-border);
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.74rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  z-index: 10000;
+  backdrop-filter: blur(8px);
+}
+
+.demo-banner-left,
+.demo-banner-right {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+}
+
+.demo-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--demo-red);
+  box-shadow: 0 0 10px var(--demo-red);
+  animation: demoPulse 1.6s ease-in-out infinite;
+  flex-shrink: 0;
+}
+
+@keyframes demoPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.4; }
+}
+
+.demo-label {
+  color: var(--demo-red);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+}
+
+.demo-fine {
+  color: var(--demo-dim);
+  font-size: 0.7rem;
+  letter-spacing: 0.08em;
+  text-transform: none;
+}
+
+.demo-link,
+.demo-buy {
+  text-decoration: none;
+  color: var(--demo-text);
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--demo-border);
+  transition: all 0.18s ease;
+  font-size: 0.74rem;
+  letter-spacing: 0.14em;
+  white-space: nowrap;
+}
+
+.demo-link:hover {
+  color: var(--demo-red);
+  border-color: var(--demo-red);
+}
+
+.demo-buy {
+  background: var(--demo-red);
+  color: #07070c;
+  border-color: var(--demo-red);
+  box-shadow: 0 0 12px rgba(255, 0, 60, 0.4);
+  font-weight: 700;
+}
+
+.demo-buy:hover {
+  background: var(--demo-glow);
+  box-shadow: 0 0 20px rgba(255, 0, 60, 0.6);
+}
+
+/* === Stage = remaining viewport === */
+.demo-stage {
+  flex: 1 1 auto;
+  position: relative;
+  overflow: hidden;
+}
+
+/* === Mobile === */
+@media (max-width: 720px) {
+  .demo-banner { padding: 0.45rem 0.7rem; gap: 0.5rem; }
+  .demo-fine   { display: none; }
+  .demo-link, .demo-buy { padding: 0.3rem 0.55rem; font-size: 0.68rem; }
+}
