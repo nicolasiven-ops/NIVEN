@@ -9743,16 +9743,52 @@ function enterDetailView(s, deviceId) {
   setMode(s, 'DETAIL');
 }
 
+// Detail-View exit choreography (v2.34 Push B). Mirrors the entry — the
+// central tile collapses point-by-point in reverse, peers + ports + stubs
+// + peer-links fade out in parallel ahead of it. Total exit window ~700ms;
+// the camera tween (350ms) lands well before that.
+//   t = 0    — overlay-leaving lands; settled is removed so leaving's
+//              !important rules can drive transform/animation; centre
+//              tile collapses with a 200ms delay + 480ms duration so it's
+//              the last visual to vanish.
+//   t = 500  — opacity fade kicks in (drop overlay-show); the .show
+//              transition takes 190ms via the existing CSS rule.
+//   t = 700  — overlay hidden, leaving class cleared, ready for re-entry.
+const DETAIL_LEAVING_INNER_MS = 700;
+const DETAIL_LEAVING_OPACITY_AT = 500;
+
 function exitDetailView(s) {
   if (!s.detailDeviceId) return;
   s.detailDeviceId = null;
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
-    overlay.classList.remove('m002-detail-overlay-show');
-    overlay.classList.remove('m002-detail-overlay-settled');
-    // Snappier exit than entry — feels responsive when the user wants out.
-    setTimeout(() => { if (!s.detailDeviceId) overlay.hidden = true; }, DETAIL_FADE_OUT_MS);
+    const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reduceMotion) {
+      // Snap exit — no choreography, just opacity fade.
+      overlay.classList.remove('m002-detail-overlay-show');
+      overlay.classList.remove('m002-detail-overlay-settled');
+      setTimeout(() => {
+        if (!s.detailDeviceId) {
+          overlay.hidden = true;
+          overlay.classList.remove('m002-detail-overlay-leaving');
+        }
+      }, DETAIL_FADE_OUT_MS);
+    } else {
+      // Full reverse-emerge. Drop settled FIRST so the leaving rules can
+      // override the !important pins on tile-inner / tile-bg.
+      overlay.classList.remove('m002-detail-overlay-settled');
+      overlay.classList.add('m002-detail-overlay-leaving');
+      setTimeout(() => {
+        if (!s.detailDeviceId) overlay.classList.remove('m002-detail-overlay-show');
+      }, DETAIL_LEAVING_OPACITY_AT);
+      setTimeout(() => {
+        if (!s.detailDeviceId) {
+          overlay.hidden = true;
+          overlay.classList.remove('m002-detail-overlay-leaving');
+        }
+      }, DETAIL_LEAVING_INNER_MS);
+    }
   }
   if (s._viewBeforeDetail) {
     animateView(s, s._viewBeforeDetail, DETAIL_ANIM_MS);

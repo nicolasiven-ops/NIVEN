@@ -943,22 +943,14 @@ input.m002-field-conflict,
   100% {opacity:0;}
 }
 
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,700ms);}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,700ms) + 200ms);}
 /* Settled state — applied ~1100ms after entry. Lets render(s) re-render the
-   detail body during edits without re-running the choreographed entry. */
-.m002-detail-overlay-settled .m002-detail-device-inner,
+   detail body during edits without re-running the choreographed entry.
+   Centre + peer pins live in the unified-tile block further down (operate
+   on .m002-detail-tile-inner / -tile-bg). */
 .m002-detail-overlay-settled .m002-detail-port-inner{animation:none!important;transform:none!important;opacity:1!important;}
-.m002-detail-overlay-settled .m002-detail-dev-bg{animation:none!important;fill:#0a0a10!important;}
 .m002-detail-overlay-settled .m002-detail-stub{animation:none!important;opacity:1!important;}
-.m002-detail-device{cursor:pointer;}
-.m002-detail-device .m002-detail-dev-bg{transition:filter .15s,stroke-width .15s;}
-.m002-detail-device.is-selected .m002-detail-dev-bg{stroke-width:2.4;filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));}
-.m002-detail-dev-type{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:18px;letter-spacing:3px;fill:var(--accent);opacity:.85;}
-.m002-detail-dev-name{font-family:'Inter','Rajdhani',sans-serif;font-size:34px;font-weight:600;fill:#f5f3ff;letter-spacing:1px;}
-.m002-detail-dev-ip{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:18px;fill:#9aa0a8;letter-spacing:1px;}
 .m002-detail-port{cursor:pointer;}
 .m002-detail-port-box{transition:filter .15s,stroke .15s,stroke-width .15s;}
 .m002-detail-port:hover .m002-detail-port-box{stroke:var(--accent);filter:drop-shadow(0 0 2px var(--accent)) drop-shadow(0 0 8px var(--accent));}
@@ -969,32 +961,9 @@ input.m002-field-conflict,
 .m002-detail-port-name{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;fill:#9aa0a8;letter-spacing:.5px;font-weight:600;}
 .m002-detail-stub{pointer-events:none;}
 
-/* Peer-tile row — neighbour switches rendered as full device tiles above
-   the central element, mirroring the grid's drawDevice() output (shares
-   .m002-dev-bg / -type / -name / -notes / -ip with grid devices, so theme
-   switches and per-type accents propagate automatically). The inner
-   wrapper is the morph target during a hop; transform-origin defaults to
-   (0,0) which is the tile's geometric centre because the tile rect is
-   drawn from -w/2,-h/2 to w/2,h/2.
-   Entry: tiles share the device-tile's choreographed emerge animation,
-   delayed slightly so they cascade in just behind the central element. */
-.m002-detail-peer{cursor:pointer;}
-.m002-detail-peer .m002-dev-bg{transition:filter .15s,stroke-width .15s,stroke .15s;}
-.m002-detail-peer:hover .m002-dev-bg{stroke-width:1.8;}
-.m002-detail-peer.is-selected .m002-dev-bg{stroke-width:2;}
-.m002-detail-peer-inner{transform-origin:0 0;transform:scale(0.6);opacity:0;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-inner{
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) forwards;
-  animation-delay:680ms;
-}
-.m002-detail-overlay-settled .m002-detail-peer-inner{animation:none!important;transform:none!important;opacity:1!important;}
-
-/* Peer-link — the wire connecting an uplink port on the central element
-   to its peer-tile above. Reuses .m002-link / .m002-link-hit /
-   .m002-link-line from the grid so hover, selection, hit-area, and
-   theming all match what the user sees on the canvas.
-   Initial opacity 0 + fade-in keeps the line from popping in before the
-   tiles + ports it connects have arrived. */
+/* Peer-link — the wire connecting an uplink port on the central tile to
+   its peer-tile above. Reuses .m002-link / .m002-link-hit / .m002-link-line
+   from the grid so hover, selection, and theming match the canvas. */
 .m002-detail-peer-link{opacity:0;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link{
   animation:m002-detail-stub-fade 320ms ease-out forwards;
@@ -1002,116 +971,43 @@ input.m002-field-conflict,
 }
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
 
-/* Post-hop fast-entry — set on the overlay by finishHop() (JS) right after
-   the survivor tile lands at centre. Skips the cinematic point→line phases
-   of the central element's emerge animation and pulls peer-tiles / ports /
-   stubs / peer-links massively forward, so the new body materialises within
-   ~700ms instead of ~1300ms. Closes the half-second "black monitor" gap the
-   user sees between the survivor landing and the new content arriving.
-   Per-port stagger is deliberately collapsed to zero here — this is a
-   "show me the new view, fast" moment, not a cinematic intro.
-   Selectors triple-class the overlay (.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop)
-   so they outweigh the standard entry rules in the cascade. */
-/* Post-hop horizontal expansion: the survivor flies to centre at uniform
-   1.875× scale and lands at 270×180 — exactly the central device's height
-   and ~37% of its width. The new central device-inner renders underneath
-   the survivor at scale(0.375, 1) = 270×180, perfectly matching the
-   survivor's footprint at the moment of DOM swap, then expands horizontally
-   to scale(1, 1) = 720×180 over 320ms. User sees: survivor lands, the
-   central element widens out from its footprint. transform-origin on the
-   inner is set per-render to the device-tile's centre (D.device.w/2,
-   D.device.h/2), so the expansion is symmetric left+right. The fill
-   animation is suppressed (animation:none + dark fill) so the rect doesn't
-   flash accent-colour during the widening — the survivor was already
-   showing the accent stroke and the new tile inherits the same visual
-   register. */
-@keyframes m002-detail-elem-widen{
-  0%   {transform:scale(0.375, 1); opacity:1;}
-  100% {transform:scale(1, 1);     opacity:1;}
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-device-inner{
-  animation:m002-detail-elem-widen 320ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-dev-bg{
-  animation:none;
-  fill:#0a0a10;
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-port-inner{
-  animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) 250ms forwards;
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-stub{
-  animation:m002-detail-stub-fade 255ms ease-out 450ms forwards;
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-peer-inner{
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 200ms forwards;
-}
-.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-peer-link{
-  animation:m002-detail-stub-fade 320ms ease-out 350ms forwards;
-}
+/* ============================================================================
+   Reverse-exit (v2.34 Push B). Mirrors the initial emerge — central tile
+   collapses point→line→pinhole, peers + ports + stubs + peer-links fade
+   out in parallel ahead of it so the centre is the last visual element to
+   vanish. Triggered by .m002-detail-overlay-leaving (added by
+   exitDetailView, removed when the overlay is hidden). Keeps the same
+   keyframes the legacy WAAPI hop used (m002-detail-elem-collapse,
+   m002-detail-port-suck, m002-detail-stub-fade-out, m002-detail-elem-empty)
+   so we get the reverse motion for free.
 
-/* Hop transition — Streetview-style navigation between switches.
-   When the user clicks a peer-tile, the overlay enters .m002-detail-hop.
-   Everything except that tile (.m002-detail-hopper) fades + shrinks; the
-   survivor flies to the centre via WAAPI on its inner group, then the
-   body re-renders rooted on the peer and the standard entry choreography
-   replays. Doubled selector .m002-detail-overlay.m002-detail-hop is
-   intentional — needed to outweigh the .m002-detail-overlay-show animation
-   rules in the cascade. */
-/* Reverse-pop exits — staggered so smaller bits leave first, the central
-   device collapses last (mirrors the entry order in reverse). Total exit
-   window ~510ms, matched in JS by HOP_FADE_MS. Durations were tuned ~20%
-   slower than the initial pass so the collapse reads as deliberate. */
-.m002-detail-overlay.m002-detail-hop .m002-detail-stub{
-  animation:m002-detail-stub-fade-out 170ms cubic-bezier(0.4,0,1,1) forwards!important;
+   Selectors triple-class (.m002-detail-overlay.m002-detail-overlay-leaving
+   .m002-detail-tile.is-center .m002-detail-tile-inner) to outweigh the
+   .show entry rules in the cascade; !important to override the settled
+   pin (the JS deliberately leaves .m002-detail-overlay-settled active to
+   keep tiles' transforms stable until the leaving rules take over).
+   ============================================================================ */
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
-.m002-detail-overlay.m002-detail-hop .m002-detail-peer-link{
-  animation:m002-detail-stub-fade-out 170ms cubic-bezier(0.4,0,1,1) forwards!important;
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
-.m002-detail-overlay.m002-detail-hop .m002-detail-port .m002-detail-port-inner{
-  animation:m002-detail-port-suck 240ms cubic-bezier(0.4,0,1,1) 60ms forwards!important;
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port .m002-detail-port-inner{
+  animation:m002-detail-port-suck 240ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
-.m002-detail-overlay.m002-detail-hop .m002-detail-peer:not(.m002-detail-hopper) .m002-detail-peer-inner{
-  animation:m002-detail-port-suck 260ms cubic-bezier(0.4,0,1,1) 100ms forwards!important;
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile.is-peer .m002-detail-tile-inner{
+  animation:m002-detail-port-suck 280ms cubic-bezier(0.4,0,1,1) 100ms forwards!important;
   pointer-events:none;
 }
-.m002-detail-overlay.m002-detail-hop .m002-detail-device-inner{
-  animation:m002-detail-elem-collapse 340ms cubic-bezier(0.4,0,0.2,1) 170ms forwards!important;
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile.is-center .m002-detail-tile-inner{
+  animation:m002-detail-elem-collapse 480ms cubic-bezier(0.4,0,0.2,1) 200ms forwards!important;
 }
-.m002-detail-overlay.m002-detail-hop .m002-detail-dev-bg{
-  animation:m002-detail-elem-empty 340ms cubic-bezier(0.4,0,0.2,1) 170ms forwards!important;
-}
-.m002-detail-overlay.m002-detail-hop .m002-detail-hopper{pointer-events:none;}
-/* Survivor click-confirmation pulse. Background: the JS removes
-   .m002-detail-overlay-settled when the hop starts, which strips the
-   "transform:none/opacity:1" overrides from .m002-detail-peer-inner.
-   Without an animation here, the peer-inner falls back to its base
-   scale(0.6)/opacity:0 state and the clicked tile reads as "going
-   black" for the 510ms HOP_FADE_MS window before WAAPI fly-in starts.
-   The pulse keeps the inner at scale(1)/opacity(1) (forwards fill) AND
-   adds a brief 1.0→1.08→1.0 scale flash so the click feels confirmed.
-   The companion .m002-dev-bg keyframe ramps stroke-width and adds an
-   accent drop-shadow for the actual "leuchten" effect, then settles
-   to a thicker steady state until WAAPI takes over.
-   Both animations finish at 250ms; WAAPI starts at 510ms — no overlap,
-   so WAAPI inherits the forwards-filled scale(1) baseline cleanly. */
-@keyframes m002-detail-hopper-pulse{
-  0%   {transform:scale(1);    opacity:1;}
-  40%  {transform:scale(1.08); opacity:1;}
-  100% {transform:scale(1);    opacity:1;}
-}
-@keyframes m002-detail-hopper-glow{
-  0%   {stroke-width:1.4; filter:drop-shadow(0 0 0 transparent);}
-  40%  {stroke-width:3;   filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px var(--accent));}
-  100% {stroke-width:2;   filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 8px var(--accent));}
-}
-.m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-peer-inner{
-  animation:m002-detail-hopper-pulse 250ms cubic-bezier(0.4,0,0.2,1) forwards !important;
-}
-.m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-dev-bg{
-  animation:m002-detail-hopper-glow 250ms cubic-bezier(0.4,0,0.2,1) forwards !important;
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile.is-center .m002-detail-tile-bg{
+  animation:m002-detail-elem-empty 480ms cubic-bezier(0.4,0,0.2,1) 200ms forwards!important;
 }
 
 /* ============================================================================
@@ -1211,8 +1107,8 @@ input.m002-field-conflict,
 
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner{animation:none!important;}
-  .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-inner,.m002-detail-peer-link,.m002-detail-tile-inner{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port-inner{animation:none!important;}
+  .m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-link,.m002-detail-tile-inner{transform:none!important;opacity:1!important;}
   .m002-detail-tile{transition:none!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
