@@ -686,10 +686,12 @@
    without bringing back the glow halos that were stripped in v2.33.26.
    Phase + duration mirror m002-vsolo-amber-pulse (devices/stacks): both peak
    at the 50% mark so an asym link pulses *with* the configured-only device
-   it's attached to, not against it. Trough is intentionally deep (0.22) so
-   the cadence reads even at small zooms. */
+   it's attached to, not against it. Trough is intentionally very deep (0.10)
+   so the cadence reads strongly even at small zooms — opacity is perceived
+   roughly along a power curve, so dropping the trough from 0.22 to 0.10
+   reads as ~30 % more pulse swing rather than the linear ~15 %. */
 @keyframes m002-link-vsolo-asym-pulse {
-  0%, 100% { opacity: 0.22; }
+  0%, 100% { opacity: 0.10; }
   50%      { opacity: 1; }
 }
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym,
