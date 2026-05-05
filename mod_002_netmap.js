@@ -10384,6 +10384,22 @@ function renderDetailLinksMarkup(s, frame) {
   const t = typeOf(frame.centerDev.type);
   const cx = frame.cx;
   const portStartX = cx - frame.upW / 2;
+  // Peers that absorb multiple uplinks (canonical case: a JUMP wired to
+  // several ports of the centre device, since JUMPs have no per-port slot
+  // and every hub-leg lands on the same peer tile). Without lanes, every
+  // peer-link uses the same `H tileCx V tileBottomY` tail and the final
+  // vertical drop + the horizontal cross-over visibly overlap. We fan them
+  // out by offsetting both the cross-over Y and the tile-entry X per
+  // sibling; lanes stay within the tile's bottom edge so each link still
+  // visually terminates on the same tile.
+  const peerCounts = new Map();
+  frame.uplinks.slice(0, D.maxCols).forEach((c) => {
+    const peerId = c.info.peer?.id;
+    if (!peerId) return;
+    peerCounts.set(peerId, (peerCounts.get(peerId) || 0) + 1);
+  });
+  const peerIdx = new Map();
+  const PEER_LANE = 7;
   const out = [];
   frame.uplinks.slice(0, D.maxCols).forEach((c, i) => {
     const peer = c.info.peer;
@@ -10395,8 +10411,13 @@ function renderDetailLinksMarkup(s, frame) {
     const portTopY = frame.upY;
     const tileBottomY = tilePos.y + D.tile.h / 2;
     const tileCx = tilePos.x;
-    const midY = (tileBottomY + portTopY) / 2;
-    const d = `M ${portCx} ${portTopY} V ${midY} H ${tileCx} V ${tileBottomY}`;
+    const total = peerCounts.get(peer.id) || 1;
+    const idx = peerIdx.get(peer.id) || 0;
+    peerIdx.set(peer.id, idx + 1);
+    const lane = total > 1 ? (idx - (total - 1) / 2) * PEER_LANE : 0;
+    const midY = (tileBottomY + portTopY) / 2 + lane;
+    const tileEntryX = tileCx + lane;
+    const d = `M ${portCx} ${portTopY} V ${midY} H ${tileEntryX} V ${tileBottomY}`;
     const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
     const firstV = (c.p.vlans || [])[0];
     const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
