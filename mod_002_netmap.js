@@ -1075,17 +1075,19 @@ function computeL3Paths(s) {
       cur = parent.get(cur);
       ids.unshift(cur);
     }
-    // Collapse members onto their stack id whenever the stack is visible as
-    // a single envelope on canvas — i.e. (a) the stack id already appears
-    // in the BFS path (transit/endpoint case) OR (b) the stack is expanded.
-    // (a) prevents BFS from threading a ribbon through a transit member
-    // before bending into the stack centre. (b) makes routes glide through
-    // the envelope's middle even when the gateway IP is owned by a single
-    // member rather than a VIP — so an open stack always reads as one node
-    // in the routing layer instead of "whichever member BFS picked first".
+    // Collapse TRANSIT members onto their stack id whenever the stack is
+    // visible as a single envelope on canvas — i.e. (a) the stack id already
+    // appears in the BFS path OR (b) the stack is expanded. Endpoints
+    // (ids[0] / ids[last]) are NEVER collapsed: a member with its own IP is
+    // a real L3 source/target in its own right (the line is "from this
+    // element with an IP to its default gateway"), so it must anchor at
+    // the member's position — not at the stack centre. The collapse only
+    // hides BFS-bridge members that sit mid-path.
     const stackIdsInPath = new Set();
     for (const id of ids) if ((s.stacks || []).some((st) => st.id === id)) stackIdsInPath.add(id);
-    const collapsed = ids.map((id) => {
+    const lastIdx = ids.length - 1;
+    const collapsed = ids.map((id, idx) => {
+      if (idx === 0 || idx === lastIdx) return id;
       const owningStackId = stackOfMember.get(id);
       if (!owningStackId) return id;
       const st = s.stacks.find((x) => x.id === owningStackId);
