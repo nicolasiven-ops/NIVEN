@@ -9218,10 +9218,13 @@ function setMode(s, txt) {
 // =============================================================================
 // Detail-View animation timings. The map zoom runs in the background and the
 // overlay fade-in stacks on top with a brief lead so the camera move plants
-// the user before the panel scales in. Easing is `easeOutExpo` (JS) /
-// cubic-bezier(0.16,1,0.3,1) (CSS) — the same family — so motion across the
-// JS and CSS sides reads as one coordinated decel.
+// the user before the panel scales in. Camera easing is `easeInOutCubic` (JS)
+// — gentle start, gentle finish — paired with the CSS overlay's
+// cubic-bezier(0.16,1,0.3,1). Entry uses a longer duration than exit/hop
+// because the inbound zoom is what the user is *watching*, while exit/hop
+// should feel snappy and responsive.
 const DETAIL_ANIM_MS       = 350;
+const DETAIL_ENTER_MS      = 600;
 const DETAIL_FADE_OUT_MS   = 190;
 const DETAIL_TARGET_ZOOM   = 1.6;
 
@@ -9241,7 +9244,7 @@ function enterDetailView(s, deviceId) {
   const targetZoom = DETAIL_TARGET_ZOOM;
   const targetX = rect.width / 2 - dev.x * targetZoom;
   const targetY = rect.height / 2 - dev.y * targetZoom;
-  animateView(s, { x: targetX, y: targetY, zoom: targetZoom }, DETAIL_ANIM_MS);
+  animateView(s, { x: targetX, y: targetY, zoom: targetZoom }, DETAIL_ENTER_MS);
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
     overlay.classList.remove('m002-detail-overlay-settled');
@@ -9607,7 +9610,10 @@ function animateView(s, target, durationMs) {
   if (s._viewAnimRaf) cancelAnimationFrame(s._viewAnimRaf);
   const start = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const t0 = performance.now();
-  const ease = (t) => (t >= 1 ? 1 : 1 - Math.pow(2, -10 * t));
+  // easeInOutCubic — symmetric, gentle on both ends. Replaces the previous
+  // easeOutExpo which front-loaded almost all the motion into the first ~1/3
+  // of the duration; that read as a sudden lurch followed by a crawl.
+  const ease = (t) => (t >= 1 ? 1 : (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2));
   const step = (now) => {
     const t = Math.min(1, (now - t0) / durationMs);
     const k = ease(t);
