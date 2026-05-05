@@ -866,8 +866,8 @@
 
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,1070ms);}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,1070ms) + 175ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,800ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,800ms) + 200ms);}
 /* Settled state — applied ~1100ms after entry. Lets render(s) re-render the
    detail body during edits without re-running the choreographed entry. */
 .m002-detail-overlay-settled .m002-detail-device-inner,
@@ -906,7 +906,7 @@
 .m002-detail-peer-inner{transform-origin:0 0;transform:scale(0.6);opacity:0;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-inner{
   animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) forwards;
-  animation-delay:920ms;
+  animation-delay:680ms;
 }
 .m002-detail-overlay-settled .m002-detail-peer-inner{animation:none!important;transform:none!important;opacity:1!important;}
 
@@ -919,7 +919,7 @@
 .m002-detail-peer-link{opacity:0;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link{
   animation:m002-detail-stub-fade 320ms ease-out forwards;
-  animation-delay:1180ms;
+  animation-delay:950ms;
 }
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
 
@@ -933,28 +933,29 @@
    rules in the cascade. */
 /* Reverse-pop exits — staggered so smaller bits leave first, the central
    device collapses last (mirrors the entry order in reverse). Total exit
-   window ~420ms, matched in JS by HOP_FADE_MS. */
+   window ~510ms, matched in JS by HOP_FADE_MS. Durations were tuned ~20%
+   slower than the initial pass so the collapse reads as deliberate. */
 .m002-detail-overlay.m002-detail-hop .m002-detail-stub{
-  animation:m002-detail-stub-fade-out 140ms cubic-bezier(0.4,0,1,1) forwards!important;
+  animation:m002-detail-stub-fade-out 170ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-peer-link{
-  animation:m002-detail-stub-fade-out 140ms cubic-bezier(0.4,0,1,1) forwards!important;
+  animation:m002-detail-stub-fade-out 170ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-port .m002-detail-port-inner{
-  animation:m002-detail-port-suck 200ms cubic-bezier(0.4,0,1,1) 50ms forwards!important;
+  animation:m002-detail-port-suck 240ms cubic-bezier(0.4,0,1,1) 60ms forwards!important;
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-peer:not(.m002-detail-hopper) .m002-detail-peer-inner{
-  animation:m002-detail-port-suck 220ms cubic-bezier(0.4,0,1,1) 80ms forwards!important;
+  animation:m002-detail-port-suck 260ms cubic-bezier(0.4,0,1,1) 100ms forwards!important;
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-device-inner{
-  animation:m002-detail-elem-collapse 280ms cubic-bezier(0.4,0,0.2,1) 140ms forwards!important;
+  animation:m002-detail-elem-collapse 340ms cubic-bezier(0.4,0,0.2,1) 170ms forwards!important;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-dev-bg{
-  animation:m002-detail-elem-empty 280ms cubic-bezier(0.4,0,0.2,1) 140ms forwards!important;
+  animation:m002-detail-elem-empty 340ms cubic-bezier(0.4,0,0.2,1) 170ms forwards!important;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper{pointer-events:none;}
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-peer-inner{

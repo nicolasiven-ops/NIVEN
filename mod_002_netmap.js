@@ -9639,10 +9639,13 @@ function animateView(s, target, durationMs) {
 // returns them to the original pre-detail viewport (s._viewBeforeDetail is
 // NOT overwritten on hop).
 // =============================================================================
-// HOP_FADE_MS — must match the longest exit animation (140ms delay +
-// 280ms collapse) defined in the CSS .m002-detail-hop reverse-pop block.
-const HOP_FADE_MS = 440;
-const HOP_FLY_MS  = 460;
+// HOP_FADE_MS — must match the longest exit animation (170ms delay +
+// 340ms collapse) defined in the CSS .m002-detail-hop reverse-pop block.
+// HOP_FLY_MS — survivor fly-in. Kept short so the gap between exit and the
+// next entry choreography (which has its own 50ms lead-in + line phase)
+// doesn't read as a black pause.
+const HOP_FADE_MS = 510;
+const HOP_FLY_MS  = 300;
 
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
