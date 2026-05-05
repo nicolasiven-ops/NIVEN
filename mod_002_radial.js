@@ -439,7 +439,7 @@ function renderRadialZones(s) {
     segs = `
       <text class="m002-rad-empty" x="${cx}" y="${cy - RADIAL_INNER_R - 24}"
             text-anchor="middle" fill="#5a5f6e"
-            font-family="'Share Tech Mono',monospace" font-size="10" letter-spacing="1.6">
+            font-family="'JetBrains Mono','Share Tech Mono',monospace" font-size="10" letter-spacing="1.6">
         NO ZONES
       </text>`;
   } else {
