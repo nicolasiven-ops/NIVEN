@@ -996,15 +996,34 @@
   animation:m002-detail-elem-empty 340ms cubic-bezier(0.4,0,0.2,1) 170ms forwards!important;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper{pointer-events:none;}
+/* Survivor click-confirmation pulse. Background: the JS removes
+   .m002-detail-overlay-settled when the hop starts, which strips the
+   "transform:none/opacity:1" overrides from .m002-detail-peer-inner.
+   Without an animation here, the peer-inner falls back to its base
+   scale(0.6)/opacity:0 state and the clicked tile reads as "going
+   black" for the 510ms HOP_FADE_MS window before WAAPI fly-in starts.
+   The pulse keeps the inner at scale(1)/opacity(1) (forwards fill) AND
+   adds a brief 1.0→1.08→1.0 scale flash so the click feels confirmed.
+   The companion .m002-dev-bg keyframe ramps stroke-width and adds an
+   accent drop-shadow for the actual "leuchten" effect, then settles
+   to a thicker steady state until WAAPI takes over.
+   Both animations finish at 250ms; WAAPI starts at 510ms — no overlap,
+   so WAAPI inherits the forwards-filled scale(1) baseline cleanly. */
+@keyframes m002-detail-hopper-pulse{
+  0%   {transform:scale(1);    opacity:1;}
+  40%  {transform:scale(1.08); opacity:1;}
+  100% {transform:scale(1);    opacity:1;}
+}
+@keyframes m002-detail-hopper-glow{
+  0%   {stroke-width:1.4; filter:drop-shadow(0 0 0 transparent);}
+  40%  {stroke-width:3;   filter:drop-shadow(0 0 6px var(--accent)) drop-shadow(0 0 14px var(--accent));}
+  100% {stroke-width:2;   filter:drop-shadow(0 0 3px var(--accent)) drop-shadow(0 0 8px var(--accent));}
+}
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-detail-peer-inner{
-  /* WAAPI drives the morph — disable the show-class entry animation
-     so the inline keyframe transform isn't fighting a CSS animation. */
-  animation:none!important;
+  animation:m002-detail-hopper-pulse 250ms cubic-bezier(0.4,0,0.2,1) forwards !important;
 }
 .m002-detail-overlay.m002-detail-hop .m002-detail-hopper .m002-dev-bg{
-  /* Survivor lights up its accent so the user can track it through the
-     fly-in (avoids the inert tile look mid-air). */
-  stroke-width:2;
+  animation:m002-detail-hopper-glow 250ms cubic-bezier(0.4,0,0.2,1) forwards !important;
 }
 
 @media (prefers-reduced-motion: reduce){
