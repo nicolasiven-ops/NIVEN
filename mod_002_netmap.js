@@ -368,7 +368,9 @@ function renderVlanPicker(s, container) {
   container.innerHTML = scope.available.map((v) => {
     const c = vlanColor(s, v);
     const on = scope.isOn(v);
-    return `<button type="button" class="m002-vlan-chip-btn ${on ? 'on' : ''}" data-vtoggle="${escAttr(v)}" style="--vc:${c}">VLAN ${escSvg(v)}</button>`;
+    const reg = (s.vlanRegistry || []).find((r) => String(r.id) === String(v));
+    const name = reg?.name ? ` · ${reg.name}` : '';
+    return `<button type="button" class="m002-vlan-chip-btn ${on ? 'on' : ''}" data-vtoggle="${escAttr(v)}" style="--vc:${c}" title="VLAN ${escAttr(v)}${escAttr(name)}">${escSvg(v)}</button>`;
   }).join('');
   container.querySelectorAll('[data-vtoggle]').forEach((b) => {
     b.addEventListener('click', () => {
@@ -5982,7 +5984,7 @@ function renderRoutesBlockHTML(s, host) {
           <button type="button" class="m002-route-rm" data-rt-rm title="Remove route">×</button>
         </div>`;
       }).join('')
-    : `<span class="m002-vlan-empty">no routes — type an IP on the interface above and a default route appears here automatically</span>`;
+    : `<span class="m002-vlan-empty">no routes</span>`;
   const hasDefault = routes.some((r) => cidrNormalize(r.dst) === '0.0.0.0/0');
   return `
     <div class="m002-l3-block">
@@ -6310,12 +6312,11 @@ function renderAggInspector(s, body, idEl) {
   `;
 
   body.innerHTML = `
-    <p class="m002-link-hint">×${agg.linkIds.length} link${agg.linkIds.length === 1 ? '' : 's'} between <b>${escSvg(sideName(agg.aSide, stkA))}</b> and <b>${escSvg(sideName(agg.bSide, stkB))}</b>. Configure a LAG to bundle them.</p>
+    <p class="m002-link-hint">×${agg.linkIds.length} link${agg.linkIds.length === 1 ? '' : 's'} between <b>${escSvg(sideName(agg.aSide, stkA))}</b> and <b>${escSvg(sideName(agg.bSide, stkB))}</b>.</p>
     ${sideBlock('SIDE A', agg.aSide, stkA)}
     ${sideBlock('SIDE B', agg.bSide, stkB)}
     ${linksTable}
     <button type="button" class="m002-action" data-agg-create>CREATE LAG${(stkA && stkB) ? '-PAIR' : ''}</button>
-    <p class="m002-link-hint">Tip: a "LAG-pair" creates and counterparts a LAG on each stack so the bundle visually reads as a single double-line afterwards.</p>
   `;
 
   // Toggle name input visibility when picking existing vs new
@@ -6370,8 +6371,6 @@ function renderPrefsInspector(s, body, idEl) {
   const prefs = s.prefs || (s.prefs = loadPrefs());
   const activeStyle = STYLES.find((x) => x.id === prefs.style) ? prefs.style : DEFAULT_STYLE;
   body.innerHTML = `
-    <p class="m002-link-hint">Preferences are stored locally and apply across all maps.</p>
-
     <div class="m002-prefs-section">
       <div class="m002-prefs-section-head">// VISUAL STYLE</div>
       <div class="m002-style-picker">
@@ -6523,7 +6522,6 @@ function renderReferenceInspector(s, dev, body) {
         ${anchor ? '<button type="button" class="m002-action small" data-anchor-clear title="Anker löschen">✕</button>' : ''}
       </div>
     </div>
-    <p class="m002-link-hint">Aktuelle Kameraposition als Landeansicht für diesen JUMP speichern. Beim nächsten Sprung des Partner-JUMPs schwenkt die Kamera genau hierhin.</p>
   `;
   const coupleSection = peer ? `
     <div class="m002-field">
@@ -6533,7 +6531,6 @@ function renderReferenceInspector(s, dev, body) {
         <div class="m002-couple-zone">${escSvg(peerZone ? peerZone.name : '(zone missing)')}</div>
       </div>
     </div>
-    <p class="m002-link-hint">JUMP-Paar bildet einen Hub: alle Hub-Legs auf beiden Seiten teilen sich eine Broadcast-Domain. Ports auf der Far-Side erscheinen im Port-Modal als Counterpart.</p>
     ${anchorSection}
     <div class="m002-row2">
       <button type="button" class="m002-action" data-ref-jump>JUMP NOW</button>
@@ -6557,7 +6554,7 @@ function renderReferenceInspector(s, dev, body) {
         `).join('')}
       </select>
     </div>
-    ${candidates.length === 0 ? '<p class="m002-link-hint">Keine weiteren JUMPs auf dieser Map. Erst einen JUMP in einer anderen Zone erstellen.</p>' : '<p class="m002-link-hint">Auswahl koppelt sofort. Die Far-Side wird mit-aktualisiert. Ungekoppelte JUMPs können auch als reines ZONE/MAP-Lesezeichen dienen (siehe FALLBACK TARGET).</p>'}
+    ${candidates.length === 0 ? '<p class="m002-link-hint">Keine weiteren JUMPs auf dieser Map.</p>' : ''}
     <details class="m002-ref-fallback">
       <summary>FALLBACK TARGET (ohne Couple)</summary>
       <div class="m002-field" style="margin-top:8px;">
@@ -6629,7 +6626,6 @@ function renderReferenceInspector(s, dev, body) {
         <div class="m002-field">
           <span>LAG-PAIR ÜBER COUPLE</span>
         </div>
-        <p class="m002-link-hint">Stacks mit Hub-Legs auf beiden Seiten — ein Klick bondet alle Ports der Seite zu einer LAG und counterparts sie über das JUMP-Paar.</p>
         ${pairRows.join('')}
       `;
     }
@@ -7083,9 +7079,6 @@ function openInspector(s) {
         <span>VLANS${isHubLeg ? '' : ' (port-pair)'}</span>
         <div class="m002-vlan-picker" data-vlan-target="link:${escAttr(link.id)}"></div>
       </div>
-      <p class="m002-link-hint">${isHubLeg
-        ? 'JUMP hub-leg: der Knoten reicht VLANs und Topologie unverändert weiter.'
-        : 'Aktivierte VLANs werden auf beide Ports gesetzt. Es erscheinen nur VLANs, die auf beiden Devices verfügbar sind.'}</p>
       <button type="button" class="m002-insp-del" data-del>DELETE LINK</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
@@ -7170,7 +7163,6 @@ function openInspector(s) {
             ${rows}
           </div>
           <button type="button" class="m002-action" data-newsl ${stack.members.length < 2 ? 'disabled' : ''}>+ NEW STACK-LINK</button>
-          <p class="m002-link-hint">Stacking cables zwischen Stack-Members. Werden als gestrichelte Linien angezeigt, wenn der Stack expanded ist.</p>
         </div>
       `;
     })();
@@ -7255,7 +7247,6 @@ function openInspector(s) {
           }).join('')}
         </div>
       </div>
-      <p class="m002-link-hint">Doppelklick auf den Stack zum Aus-/Einklappen. Jeder Layer kann unabhängig expandiert werden.</p>
       <button type="button" class="m002-insp-del" data-del>UNGROUP STACK</button>
     `;
     body.querySelector('[data-sf="name"]').addEventListener('input', (e) => {
@@ -7936,7 +7927,7 @@ function openPortModal(s, deviceId, portN) {
       const localVlans = (localPortObj?.vlans || []).map(String);
       const farVlans = (farPort?.vlans || []).map(String);
       const through = localVlans.filter((v) => farVlans.includes(v));
-      const chip = (v, on, dim) => `<span class="m002-vlan-chip-btn ${on ? 'on' : ''} ${dim ? 'dim' : ''}" style="--vc:${vlanColor(s, v)}">VLAN ${escSvg(v)}</span>`;
+      const chip = (v, on, dim) => { const reg = (s.vlanRegistry || []).find((r) => String(r.id) === String(v)); const name = reg?.name ? ` · ${reg.name}` : ''; return `<span class="m002-vlan-chip-btn ${on ? 'on' : ''} ${dim ? 'dim' : ''}" style="--vc:${vlanColor(s, v)}" title="VLAN ${escAttr(v)}${escAttr(name)}">${escSvg(v)}</span>`; };
       return `
         <div class="m002-field">
           <span>FAR-SIDE PORT</span>

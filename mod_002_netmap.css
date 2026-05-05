@@ -374,14 +374,14 @@
 .m002-layer-pill:hover{color:#e8e8ee;}
 .m002-layer-pill.active{background:rgba(255,0,60,0.1);border-color:#ff003c;color:#ff003c;}
 
-.m002-inspector.m002-rightpanel{padding:14px;display:flex;flex-direction:column;gap:10px;}
+.m002-inspector.m002-rightpanel{padding:14px;display:flex;flex-direction:column;gap:8px;}
 .m002-insp-head{display:flex;justify-content:space-between;align-items:center;}
 .m002-insp-id{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;color:#ff003c;letter-spacing:2px;}
 .m002-insp-close{background:transparent;border:none;color:#9aa0a8;font-size:18px;cursor:pointer;padding:0 4px;line-height:1;}
 .m002-insp-close:hover{color:#ff003c;}
 .m002-insp-body{display:flex;flex-direction:column;gap:8px;}
 .m002-field{display:flex;flex-direction:column;gap:3px;}
-.m002-field span{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.5px;}
+.m002-field span{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;color:#8a90a0;letter-spacing:1.5px;}
 .m002-field input,.m002-field select,.m002-field textarea{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:5px 8px;font-family:'Inter','Rajdhani',sans-serif;font-size:13px;outline:none;}
 .m002-field input:focus,.m002-field select:focus,.m002-field textarea:focus{border-color:#ff003c;}
 /* Port-count row: label + count + 24/48/-/+ buttons inline. The count uses
@@ -403,28 +403,28 @@
 .m002-link-end{font-weight:600;font-size:13px;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}
 .m002-link-arrow{color:#ff003c;font-family:'JetBrains Mono','Share Tech Mono',monospace;}
 .m002-ports-block{display:flex;flex-direction:column;gap:4px;}
-.m002-ports-head{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;letter-spacing:1.5px;padding:4px 0;}
+.m002-ports-head{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#b0b6c4;letter-spacing:1.5px;padding:4px 0;}
 .m002-ports-prefix{display:flex;align-items:center;gap:6px;padding:3px 6px;background:transparent;border:1px dashed #2a2a32;border-radius:2px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;}
 .m002-ports-prefix[hidden]{display:none;}
-.m002-ports-prefix-label{color:#5a5f6e;letter-spacing:1.4px;}
+.m002-ports-prefix-label{color:#8a90a0;letter-spacing:1.4px;}
 .m002-ports-prefix-val{color:inherit;background:transparent;padding:1px 5px;border:1px solid #1a1a22;border-radius:2px;font-size:11px;}
 .m002-ports-prefix-clear{margin-left:auto;background:transparent;border:1px solid #2a2a32;color:#9aa0a8;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;width:18px;height:18px;line-height:1;cursor:pointer;border-radius:2px;padding:0;}
 .m002-ports-prefix-clear:hover{border-color:#ff003c;color:#ff003c;}
-.m002-ports-grid{display:flex;flex-direction:column;gap:3px;max-height:240px;overflow-y:auto;}
-.m002-port-head-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 4px;order:-1;}
-.m002-port-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;cursor:pointer;padding:2px 4px;border:1px solid transparent;border-radius:2px;}
+.m002-ports-grid{display:flex;flex-direction:column;gap:2px;max-height:220px;overflow-y:auto;}
+.m002-port-head-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;color:#8a90a0;letter-spacing:1.4px;padding:2px 4px;order:-1;}
+.m002-port-row{display:grid;grid-template-columns:18px 60px 1fr;gap:6px;align-items:center;cursor:pointer;padding:1px 4px;border:1px solid transparent;border-radius:2px;}
 .m002-port-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
 .m002-port-row.is-duplicate{background:rgba(255,0,60,0.14);border-color:#ff003c;animation:m002-dupe-pulse 1.6s ease-in-out infinite;}
 .m002-port-row.is-duplicate input{border-color:#ff003c;color:#ff5a78;}
 .m002-port-row.is-duplicate .m002-port-num{color:#ff5a78;}
 .m002-pmodal-name.is-duplicate{border-color:#ff003c !important;color:#ff5a78;animation:m002-dupe-pulse 1.6s ease-in-out infinite;}
 @keyframes m002-dupe-pulse{0%,100%{box-shadow:0 0 4px rgba(255,0,60,0.45);}50%{box-shadow:0 0 12px rgba(255,0,60,0.85);}}
-.m002-port-num{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;color:#9aa0a8;text-align:left;}
-.m002-port-row input{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:3px 6px;font-size:11px;font-family:'JetBrains Mono','Share Tech Mono',monospace;outline:none;}
+.m002-port-num{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;color:#b8becc;text-align:left;}
+.m002-port-row input{background:#0a0a10;border:1px solid #1a1a22;color:#e8e8ee;padding:2px 6px;font-size:11px;font-family:'JetBrains Mono','Share Tech Mono',monospace;outline:none;}
 .m002-port-row input:focus{border-color:#ff003c;}
 .m002-port-counter{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;color:#e8e8ee;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 4px;}
-.m002-port-counter.dim{color:#5a5f6e;}
-.m002-link-hint{font-size:11px;color:#7a7f8e;line-height:1.4;margin:0;font-style:italic;}
+.m002-port-counter.dim{color:#8a90a0;}
+.m002-link-hint{font-size:11px;color:#9aa0ae;line-height:1.4;margin:0;font-style:italic;}
 .m002-link-end.dim{color:#5a5f6e;font-weight:400;}
 .m002-lag-props{margin-top:4px;padding-top:10px;border-top:1px dashed #1a1a22;display:flex;flex-direction:column;gap:8px;}
 .m002-lag-sides{display:flex;flex-direction:column;gap:10px;margin-top:4px;}
@@ -449,7 +449,7 @@
 .m002-port-back{display:inline-flex;align-items:center;justify-content:flex-start;background:transparent;border:1px solid #1a1a22;color:#9aa0a8;padding:6px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;letter-spacing:1.4px;cursor:pointer;text-align:left;text-transform:uppercase;transition:.15s;}
 .m002-port-back:hover{border-color:#ff003c;color:#ff003c;background:rgba(255,0,60,0.06);}
 .m002-vlan-chips{display:flex;flex-wrap:wrap;gap:4px;min-height:24px;padding:4px;background:#06060a;border:1px solid #1a1a22;}
-.m002-vlan-empty{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#5a5f6e;letter-spacing:1px;}
+.m002-vlan-empty{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#8a90a0;letter-spacing:1px;}
 .m002-vlan-chip{display:inline-flex;align-items:center;gap:4px;padding:2px 6px;background:rgba(0,0,0,0.4);border:1px solid var(--vc);color:var(--vc);font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;}
 .m002-vlan-chip button{background:transparent;border:none;color:var(--vc);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;opacity:.6;}
 .m002-vlan-chip button:hover{opacity:1;}
@@ -464,7 +464,7 @@
    NOTES so the inspector stays tidy by default but the metadata is one click
    away. Mirrors the .m002-ref-fallback summary treatment. */
 .m002-insp-details{margin:2px 0 6px;border:1px solid #1a1a22;background:rgba(10,10,16,0.6);}
-.m002-insp-details>summary{cursor:pointer;padding:6px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.6px;list-style:none;user-select:none;transition:.15s;}
+.m002-insp-details>summary{cursor:pointer;padding:6px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:1.6px;list-style:none;user-select:none;transition:.15s;}
 .m002-insp-details>summary::-webkit-details-marker{display:none;}
 .m002-insp-details>summary::before{content:'▸ ';color:#5a5f6e;}
 .m002-insp-details[open]>summary{color:#ff003c;border-bottom:1px solid #1a1a22;}
@@ -549,10 +549,10 @@
 .m002-agg-arrow{text-align:center;color:#5a5f6e;}
 .m002-link-bundle .m002-link-hit{stroke-width:18;}
 
-.m002-vlan-chip-btn{display:inline-flex;align-items:center;gap:4px;padding:3px 8px;background:transparent;border:1px solid #2a2a36;color:#7a7f8e;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;letter-spacing:1px;cursor:pointer;transition:.15s;}
+.m002-vlan-chip-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:2px 7px;min-width:26px;background:transparent;border:1px solid #2a2a36;color:#9aa0ae;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.5px;cursor:pointer;transition:.15s;}
 .m002-vlan-chip-btn:hover{border-color:var(--vc);color:var(--vc);}
 .m002-vlan-chip-btn.on{background:rgba(0,0,0,0.3);border-color:var(--vc);color:var(--vc);box-shadow:0 0 6px var(--vc);}
-.m002-vlan-picker{display:flex;flex-wrap:wrap;gap:4px;}
+.m002-vlan-picker{display:flex;flex-wrap:wrap;gap:3px;}
 .m002-vlan-legend-rm{background:transparent;border:none;color:var(--vc);cursor:pointer;font-size:13px;line-height:1;padding:0 2px;opacity:.5;}
 .m002-vlan-legend-rm:hover{opacity:1;}
 .m002-vlan-legend-add{display:flex;gap:4px;margin-top:6px;flex:0 0 auto;align-items:stretch;}
@@ -618,23 +618,23 @@
 
 /* L3 inspector — interfaces + routes table */
 .m002-insp-l3{margin-top:4px;border-top:1px solid #1a1a22;padding-top:8px;}
-.m002-insp-l3 > summary{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:2px;cursor:pointer;padding:4px 0;list-style:none;}
+.m002-insp-l3 > summary{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:2px;cursor:pointer;padding:4px 0;list-style:none;}
 .m002-insp-l3 > summary::-webkit-details-marker{display:none;}
 .m002-insp-l3 > summary::before{content:'▸ ';color:#5a5f6e;}
 .m002-insp-l3[open] > summary::before{content:'▾ ';color:#35ff7a;}
 .m002-l3-block{margin-top:8px;}
-.m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#7a7f8e;letter-spacing:1.5px;}
+.m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:1.5px;}
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}
-.m002-iface-head{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
+.m002-iface-head{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:8px;color:#8a90a0;letter-spacing:1.5px;text-transform:uppercase;}
 /* Endpoint / cloud / switch single-row L3 — IP + PREFIX, no NAME / GATEWAY */
 .m002-iface-row--non-l3{grid-template-columns:8px 1.4fr 0.6fr 18px !important;}
 .m002-iface-head--non-l3{grid-template-columns:8px 1.4fr 0.6fr 18px !important;}
-.m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:8px;color:#5a5f6e;letter-spacing:1.5px;text-transform:uppercase;}
+.m002-route-head{display:grid;grid-template-columns:1.2fr 1.2fr 1fr 0.6fr 18px;gap:4px;align-items:center;padding:0 6px 2px 6px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:8px;color:#8a90a0;letter-spacing:1.5px;text-transform:uppercase;}
 .m002-iface-row{display:grid;grid-template-columns:8px 0.7fr 1.2fr 0.5fr 1.2fr 18px;gap:4px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;transition:.12s;}
 .m002-iface-row:hover{border-color:var(--sc);}
 .m002-iface-dot{width:8px;height:8px;background:var(--sc);box-shadow:0 0 3px var(--sc);}
-.m002-iface-row input,.m002-iface-row select,.m002-route-row input,.m002-route-row select{background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:2px 4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;outline:none;min-width:0;}
+.m002-iface-row input,.m002-iface-row select,.m002-route-row input,.m002-route-row select{background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:2px 4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;outline:none;min-width:0;}
 .m002-iface-row input:focus,.m002-iface-row select:focus,.m002-route-row input:focus,.m002-route-row select:focus{border-color:#35ff7a;}
 .m002-iface-rm,.m002-route-rm{background:transparent;border:none;color:#5a5f6e;cursor:pointer;font-size:13px;line-height:1;padding:0;}
 .m002-iface-rm:hover,.m002-route-rm:hover{color:#ff003c;}
@@ -759,7 +759,7 @@
 /* L3 trio for non-L3 device inspector (endpoint/cloud/switch) */
 .m002-field-l3-trio{display:flex;flex-direction:column;gap:4px;}
 .m002-l3-trio{display:grid;grid-template-columns:1.4fr 0.6fr 1.4fr;gap:4px;}
-.m002-l3-trio input,.m002-l3-trio select{background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;outline:none;min-width:0;}
+.m002-l3-trio input,.m002-l3-trio select{background:#06060a;border:1px solid #1a1a22;color:#e8e8ee;padding:4px 8px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:12px;outline:none;min-width:0;}
 .m002-l3-trio input:focus,.m002-l3-trio select:focus{border-color:#35ff7a;}
 
 .m002-vlan-legend-list::-webkit-scrollbar-thumb{background:#1a1a22;}
