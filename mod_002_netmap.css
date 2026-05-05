@@ -977,17 +977,25 @@ input.m002-field-conflict,
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
 
 /* ============================================================================
-   Hop transient animations (v2.34 Push C). When the user clicks a peer-tile
-   for a Position-Swap, the *tiles* glide via FLIP (Push A) and the
-   *port-row + peer-links* fade out → re-render → fade in around them so
-   the swap reads as one cohesive "upper layer transitions" instead of a
-   hard innerHTML replace. Both classes carry !important to override the
-   settled pin (.m002-detail-overlay-settled stays on during the hop —
-   see hopToPeer for why — so its no-animation guards on port-inner /
-   stub / peer-link must be defeated here). Selectors triple-class the
-   overlay so specificity (0,3,0) ties the show entry rules; placed
-   AFTER them in source order so hop-in / hop-out wins the !important
-   cascade. */
+   Hop transient animations (v2.34 Push C, fixed v2.34.3). When the user
+   clicks a peer-tile for a Position-Swap, the *tiles* glide via FLIP
+   (Push A) while the *port-row + peer-links* fade out → re-render → fade
+   in around them so the swap reads as one cohesive "upper layer
+   transitions" instead of a hard innerHTML replace.
+
+   Crucial: hopToPeer REMOVES .m002-detail-overlay-settled before adding
+   hop-out, so settled's !important pins (transform:none, opacity:1,
+   animation:none) on port-inner / stub / peer-link are off — otherwise
+   per the CSS spec, !important on a regular property beats an animation's
+   keyframe values, and the animations would silently run with no visual
+   effect. Settled is re-added at the end of the hop so subsequent live
+   inspector edits don't replay entry choreography.
+
+   Tile-inner / tile-bg freeze rules below pin those at identity during
+   hop-out + hop-in (specificity 0,5,0 beats the .show entry rules at
+   0,4,0) so the surviving tiles don't have their entry-emerge animation
+   restart from frame 0 just because the animation property momentarily
+   changed when settled was removed. */
 .m002-detail-overlay.m002-detail-hop-out .m002-detail-port .m002-detail-port-inner{
   animation:m002-detail-port-suck 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
@@ -1011,6 +1019,28 @@ input.m002-field-conflict,
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-peer-link{
   animation:m002-detail-stub-fade 220ms ease-out forwards!important;
   animation-delay:80ms!important;
+}
+/* Tile-inner / tile-bg freeze during hop. Higher specificity (0,5,0) than
+   the show entry rules (0,4,0) so these win without needing !important on
+   the entry animations themselves; !important here defeats the entry
+   rule's properties cleanly. Without these guards, removing settled
+   would let the show rule's animation property re-bind on tile-inner +
+   tile-bg, triggering an emerge restart from scale(0.005,0.02)
+   simultaneously with the FLIP — visually catastrophic. */
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-center .m002-detail-tile-inner,
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-peer .m002-detail-tile-inner,
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-center .m002-detail-tile-inner,
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-peer .m002-detail-tile-inner{
+  animation:none!important;
+  transform:none!important;
+  opacity:1!important;
+}
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-center .m002-detail-tile-bg,
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-peer .m002-detail-tile-bg,
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-center .m002-detail-tile-bg,
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-peer .m002-detail-tile-bg{
+  animation:none!important;
+  fill:#0a0a10!important;
 }
 
 /* ============================================================================

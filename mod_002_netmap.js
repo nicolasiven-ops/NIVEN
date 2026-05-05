@@ -10501,19 +10501,16 @@ function hopToPeer(s, peerId, fromEl) {
   s._detailHopActive = true;
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
 
-  // NOTE — we deliberately do NOT remove .m002-detail-overlay-settled here.
-  // The settled rule pins .m002-detail-tile-inner / -tile-bg via !important
-  // but does NOT touch the outer .m002-detail-tile (which is what the FLIP
-  // transitions). Keeping settled active during the hop has two upsides:
-  //   1. Surviving tiles' inners stay frozen — no risk of the show-class
-  //      animation rules restarting from frame 0 just because the
-  //      animation property momentarily changed.
-  //   2. Newly-created tiles arrive at identity immediately (the settled
-  //      rule overrides their initial-state CSS), so they don't briefly
-  //      flash a 0.005 emerge-point at their final slot.
-  // The hop-out / hop-in classes have higher specificity + !important so
-  // they override settled's no-animation pin on port-inner / stub /
-  // peer-link without affecting the tile-inner pins.
+  // Remove settled BEFORE the hop-out class lands. Settled's !important
+  // pins (transform:none, opacity:1, animation:none) on port-inner / stub
+  // / peer-link beat any animation under the CSS cascade rules — keeping
+  // settled active here would silently neuter the hop-out / hop-in
+  // animations even though they technically "run". The CSS hop-out and
+  // hop-in classes carry their own !important guards on tile-inner +
+  // tile-bg (higher specificity than the show entry rules) so surviving
+  // tiles stay frozen at identity through the whole hop window even with
+  // settled off.
+  overlay.classList.remove('m002-detail-overlay-settled');
 
   const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
