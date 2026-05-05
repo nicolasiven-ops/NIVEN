@@ -4508,19 +4508,38 @@ function toggleStackExpanded(s, stackId) {
   const st = findStackById(s, stackId);
   if (!st) return;
   st.expanded = !st.expanded;
-  // On collapse, snap stack position to the centroid of members so the icon
-  // appears where the cluster was.
-  if (!st.expanded) {
-    const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
-    if (devs.length) {
-      const cx = Math.round((devs.reduce((sum, d) => sum + d.x, 0) / devs.length) / GRID) * GRID;
-      const cy = Math.round((devs.reduce((sum, d) => sum + d.y, 0) / devs.length) / GRID) * GRID;
+  const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  // Anchor = centre of the member bounding box. Same point in both states so
+  // toggling collapsed↔expanded never drifts the stack sideways: the icon
+  // sits exactly where the visual midpoint of the expanded view was, and the
+  // expanded bbox is centred exactly where the icon stood. Centroid (mean of
+  // member positions) was wrong for asymmetric layouts — two stacks aligned
+  // by their icons would expand to bboxes whose midpoints were offset by
+  // (centroid − bbox-centre), and vice-versa.
+  if (devs.length) {
+    if (!st.expanded) {
+      const xs = devs.map((d) => d.x);
+      const ys = devs.map((d) => d.y);
+      const cx = Math.round(((Math.min(...xs) + Math.max(...xs)) / 2) / GRID) * GRID;
+      const cy = Math.round(((Math.min(...ys) + Math.max(...ys)) / 2) / GRID) * GRID;
       st.x = cx; st.y = cy;
+    } else {
+      // On expand: column-layout overlapping members (already centred on the
+      // anchor); otherwise shift the existing arrangement so its bbox-centre
+      // matches the anchor — corrects pre-fix data where st.x was a centroid.
+      const laidOut = layoutStackMembersIfOverlapping(s, st);
+      if (!laidOut && devs.length >= 2) {
+        const xs = devs.map((d) => d.x);
+        const ys = devs.map((d) => d.y);
+        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
+        const ddx = Math.round((st.x - cx) / GRID) * GRID;
+        const ddy = Math.round((st.y - cy) / GRID) * GRID;
+        if (ddx !== 0 || ddy !== 0) {
+          devs.forEach((d) => { d.x += ddx; d.y += ddy; });
+        }
+      }
     }
-  } else {
-    // On expand, lay overlapping members out cleanly. Once the user has
-    // dragged them into place, positions stay put on subsequent toggles.
-    layoutStackMembersIfOverlapping(s, st);
   }
   render(s);
   schedSave(s);
@@ -4531,7 +4550,7 @@ function toggleStackExpanded(s, stackId) {
 // room between cells. Members that already sit cleanly are left untouched.
 function layoutStackMembersIfOverlapping(s, st) {
   const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
-  if (devs.length < 2) return;
+  if (devs.length < 2) return false;
   let overlap = false;
   for (let i = 0; i < devs.length && !overlap; i++) {
     for (let j = i + 1; j < devs.length; j++) {
@@ -4541,7 +4560,7 @@ function layoutStackMembersIfOverlapping(s, st) {
       }
     }
   }
-  if (!overlap) return;
+  if (!overlap) return false;
   // Vertical column — mirrors a physical switch stack (one switch on top of
   // the next). One grid line of breathing room between cells, centered on
   // the stack anchor.
@@ -4553,6 +4572,7 @@ function layoutStackMembersIfOverlapping(s, st) {
     d.x = colX;
     d.y = Math.round((startY + i * stepY) / GRID) * GRID;
   });
+  return true;
 }
 
 function drawCollapsedStack(s, stack) {
