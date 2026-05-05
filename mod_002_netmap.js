@@ -4507,6 +4507,18 @@ function toggleStackExpanded(s, stackId) {
   if (!st) return;
   st.expanded = !st.expanded;
   const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
+  // Heal sub-grid positions left behind by older versions of this code
+  // (v2.33.44–v2.33.49 transient stages, where the recenter-on-expand pass
+  // shifted members by sub-grid amounts to chase a half-grid bbox-centre).
+  // Idempotent: snapping an already-grid-aligned coordinate to the nearest
+  // grid line is a no-op. Worst-case shift = ±GRID/2 = 12px per coordinate,
+  // applied uniformly across the stack so relative arrangement survives.
+  st.x = Math.round(st.x / GRID) * GRID;
+  st.y = Math.round(st.y / GRID) * GRID;
+  devs.forEach((d) => {
+    d.x = Math.round(d.x / GRID) * GRID;
+    d.y = Math.round(d.y / GRID) * GRID;
+  });
   // Anchor = centre of the member bounding box. Same point in both states so
   // toggling collapsed↔expanded never drifts the stack sideways: the icon
   // sits exactly where the visual midpoint of the expanded view was, and the
