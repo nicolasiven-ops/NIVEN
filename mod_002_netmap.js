@@ -4126,6 +4126,7 @@ function visualEndpointKey(s, devIdA, devIdB) {
 function invalidateEdgeSlots(s) {
   s._edgeSlots = null;
   s._hubSides = null;
+  s._endpointDegrees = null;
 }
 
 // Hub sides — when ≥2 distinct peers approach a hub from the SAME side
@@ -4142,6 +4143,7 @@ function invalidateEdgeSlots(s) {
 function ensureHubSides(s) {
   if (s._hubSides) return s._hubSides;
   const m = new Map(); // hubKey → Map<peerKey, side>
+  const degrees = new Map(); // endpointKey → distinct-peer count (transit detection)
   const epPos = (id) => effectivePos(s, id);
   const epKey = (id) => {
     if ((s.stacks || []).some((st) => st.id === id)) return `stack:${id}`;
@@ -4194,8 +4196,21 @@ function ensureHubSides(s) {
     }
     if (peerToSide.size) m.set(hubKey, peerToSide);
   }
+  for (const [key, peers] of peerMap) degrees.set(key, peers.size);
   s._hubSides = m;
+  s._endpointDegrees = degrees;
   return m;
+}
+
+function endpointIsTransit(s, id) {
+  ensureHubSides(s);
+  const epKey = (s.stacks || []).some((st) => st.id === id)
+    ? `stack:${id}`
+    : (() => {
+        const stack = findStack(s, id);
+        return stack && isStackCollapsed(s, stack) ? `stack:${stack.id}` : `device:${id}`;
+      })();
+  return (s._endpointDegrees?.get(epKey) || 0) >= 2;
 }
 
 // Which hub side, if any, should this link's hub anchor be locked to?
@@ -4960,7 +4975,16 @@ function sourceSideForHub(srcPos, hubPos, _hubSide) {
 // 3 (single L), or 4 (Z / U). Both sides perpendicular → single L. Both
 // sides on the same axis pointing AT each other (E↔W or N↔S) → straight
 // when aligned, Z otherwise. Both sides identical → U-bypass.
-function pointsForAnchors(aP, aSide, bP, bSide) {
+//
+// `snapMode` controls the near-aligned-snap behaviour for opposite-facing
+// anchors:
+//   'avg'  — both anchors shift halfway to the average coordinate (default).
+//   'a'    — pin aP at its midpoint, pull bP onto aP's coord (used when A is
+//            a transit / multi-degree endpoint; keeps every link through it
+//            anchored at the same y/x so consecutive links visually meet).
+//   'b'    — symmetric: pin bP, move aP.
+//   'none' — never snap; always Z when misaligned.
+function pointsForAnchors(aP, aSide, bP, bSide, snapMode = 'avg') {
   const aH = aSide === 'E' || aSide === 'W';
   const bH = bSide === 'E' || bSide === 'W';
   const oppHoriz = (aSide === 'E' && bSide === 'W') || (aSide === 'W' && bSide === 'E');
@@ -4972,16 +4996,22 @@ function pointsForAnchors(aP, aSide, bP, bSide) {
   // Z so the anchor doesn't slide visibly toward a box corner.
   const SNAP_TOL = GRID; // total misalignment tolerated; per-anchor shift is half this
   if (oppHoriz) {
-    if (Math.abs(aP.y - bP.y) <= SNAP_TOL) {
-      const y = (aP.y + bP.y) / 2;
+    if (snapMode !== 'none' && Math.abs(aP.y - bP.y) <= SNAP_TOL) {
+      let y;
+      if      (snapMode === 'a') y = aP.y;
+      else if (snapMode === 'b') y = bP.y;
+      else                       y = (aP.y + bP.y) / 2;
       return [{ x: aP.x, y }, { x: bP.x, y }];
     }
     const mx = (aP.x + bP.x) / 2;
     return [aP, { x: mx, y: aP.y }, { x: mx, y: bP.y }, bP];
   }
   if (oppVert) {
-    if (Math.abs(aP.x - bP.x) <= SNAP_TOL) {
-      const x = (aP.x + bP.x) / 2;
+    if (snapMode !== 'none' && Math.abs(aP.x - bP.x) <= SNAP_TOL) {
+      let x;
+      if      (snapMode === 'a') x = aP.x;
+      else if (snapMode === 'b') x = bP.x;
+      else                       x = (aP.x + bP.x) / 2;
       return [{ x, y: aP.y }, { x, y: bP.y }];
     }
     const my = (aP.y + bP.y) / 2;
@@ -5082,7 +5112,7 @@ function detourAroundObstacles(pts, obstacles, pad = 8) {
 // pair so the line still bypasses the offender instead of vanishing
 // behind it.
 const _ORTH_SIDES = ['N', 'E', 'S', 'W'];
-function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
+function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null, transit = null) {
   const obstacles = routingObstacles(s, excludeIds);
   let prefA, prefB;
   if (hubInfo) {
@@ -5092,12 +5122,23 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
     const sd = pickAnchorSides(a, b);
     prefA = sd.aSide; prefB = sd.bSide;
   }
+  // Transit-aware snap mode: when one endpoint is a transit (≥2 distinct
+  // peers), pin its anchor to its true midpoint and pull the other anchor
+  // to match — so consecutive links through a JUMP/hub all attach at the
+  // same y/x and visually meet through it instead of stair-stepping by a
+  // few px each.
+  const aTransit = !!(transit && transit.aIsTransit);
+  const bTransit = !!(transit && transit.bIsTransit);
+  const snapMode = aTransit && !bTransit ? 'a'
+                 : bTransit && !aTransit ? 'b'
+                 : aTransit && bTransit  ? 'none'
+                 : 'avg';
   // 1) Preferred pair first. Wins outright when clean — the facing-side
   // exit/entry rule beats a slightly cheaper bend count from a side that
   // doesn't visually face the other end.
   const prefAP = anchorAt(a, prefA, off);
   const prefBP = anchorAt(b, prefB, off);
-  const prefPts = pointsForAnchors(prefAP, prefA, prefBP, prefB);
+  const prefPts = pointsForAnchors(prefAP, prefA, prefBP, prefB, snapMode);
   if (!pointsHitAny(prefPts, obstacles)) {
     const lbl = pointsLabel(prefPts);
     return {
@@ -5117,7 +5158,7 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null) {
       if (aS === prefA && bS === prefB) continue; // already tested
       const aP = anchorAt(a, aS, off);
       const bP = anchorAt(b, bS, off);
-      const pts = pointsForAnchors(aP, aS, bP, bS);
+      const pts = pointsForAnchors(aP, aS, bP, bS, snapMode);
       if (pointsHitAny(pts, obstacles)) continue;
       const bends = pts.length - 2;
       if (best === null || bends < best.bends) best = { bends, pts };
@@ -5178,8 +5219,8 @@ function lagDoubleLineHTML(aPos, bPos, opts = {}) {
   const width  = opts.width  || 1.8;
   const gap    = opts.gap    || 3;
   const lane   = opts.lane   || 0;
-  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds, opts.hubInfo);
-  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds, opts.hubInfo);
+  const a = orthPath(aPos, bPos, lane + gap, opts.s, opts.excludeIds, opts.hubInfo, opts.transit);
+  const b = orthPath(aPos, bPos, lane - gap, opts.s, opts.excludeIds, opts.hubInfo, opts.transit);
   return `
     <path class="m002-lag-line" d="${a.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
     <path class="m002-lag-line" d="${b.d}" stroke="${stroke}" stroke-width="${width}" fill="none"/>
@@ -5198,7 +5239,8 @@ function drawLagLink(s, p) {
   const lane = laneForLag(s, p.stackA.id, p.lagA.id);
   const excl = [p.stackA.id, p.stackB.id];
   const forced = hubMergeInfo(s, { from: p.stackA.id, to: p.stackB.id });
-  const path = orthPath(aPos, bPos, lane, s, excl, forced);
+  const transit = { aIsTransit: endpointIsTransit(s, p.stackA.id), bIsTransit: endpointIsTransit(s, p.stackB.id) };
+  const path = orthPath(aPos, bPos, lane, s, excl, forced, transit);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-bundle m002-laglink');
   g.setAttribute('data-laglink-id', `${p.stackA.id}|${p.lagA.id}`);
@@ -5226,13 +5268,13 @@ function drawLagLink(s, p) {
     const gap = 6;
     drawnVlans.forEach((v, i) => {
       const off = lane + (i - (drawnVlans.length - 1) / 2) * gap;
-      const op = orthPath(aPos, bPos, off, s, excl, forced);
+      const op = orthPath(aPos, bPos, off, s, excl, forced, transit);
       const c = vlanColor(s, v);
       inner += `<path class="m002-link-line m002-link-stripe" d="${op.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
       inner += `<text class="m002-link-label m002-link-stripe-label" x="${op.lx}" y="${op.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
     });
   } else {
-    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl, hubInfo: forced });
+    inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 2, lane, s, excludeIds: excl, hubInfo: forced, transit });
     if (s.activeLayer === 'vlan' && !isFiltered && sharedVlans.length) {
       inner += `<text class="m002-link-vlan-count" x="${path.lx}" y="${path.ly - 4}" fill="#9aa0a8" text-anchor="middle">${sharedVlans.length}x</text>`;
     }
@@ -5279,7 +5321,8 @@ function refreshAggregates(s) {
 function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   const lane = laneForAgg(s, key);
   const forced = hubMergeInfo(s, { from: agg.aSide, to: agg.bSide });
-  const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide], forced);
+  const transit = { aIsTransit: endpointIsTransit(s, agg.aSide), bIsTransit: endpointIsTransit(s, agg.bSide) };
+  const path = orthPath(aPos, bPos, lane, s, [agg.aSide, agg.bSide], forced, transit);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-agg');
   g.setAttribute('data-agg-key', key);
@@ -5708,7 +5751,8 @@ function drawLink(s, link) {
   const lane = laneForLink(s, link.id);
   const excl = linkExcludeIds(s, link);
   const forced = hubMergeInfo(s, link);
-  const base = orthPath(aPos, bPos, lane, s, excl, forced);
+  const transit = { aIsTransit: endpointIsTransit(s, a.id), bIsTransit: endpointIsTransit(s, b.id) };
+  const base = orthPath(aPos, bPos, lane, s, excl, forced, transit);
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link');
   g.setAttribute('data-link-id', link.id);
@@ -5742,7 +5786,7 @@ function drawLink(s, link) {
           const gap = 6;
           drawn.forEach((v, i) => {
             const off = lane + (i - (drawn.length - 1) / 2) * gap;
-            const p = orthPath(aPos, bPos, off, s, excl, forced);
+            const p = orthPath(aPos, bPos, off, s, excl, forced, transit);
             const c = vlanColor(s, v);
             inner += `<path class="m002-link-line m002-link-stripe" d="${p.d}" style="stroke:${c};color:${c}" stroke-width="2.4"/>`;
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
@@ -5756,12 +5800,12 @@ function drawLink(s, link) {
             inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
           }
         }
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced, transit });
       } else if (layer === 'routing') {
         if (linkRoutingSoloDim(s, link)) g.classList.add('m002-link-rsolo-dim');
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
-        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
+        inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, hubInfo: forced, transit });
       }
       // Physical layer carries the LAG-name pair label; VLAN already speaks
       // through its own stripes / count badge, and routing stays unlabelled
@@ -5802,7 +5846,7 @@ function drawLink(s, link) {
       const gap = 6;
       drawn.forEach((v, i) => {
         const off = lane + (i - (drawn.length - 1) / 2) * gap;
-        const p = orthPath(aPos, bPos, off, s, excl, forced);
+        const p = orthPath(aPos, bPos, off, s, excl, forced, transit);
         const c = vlanColor(s, v);
         const w = bundleInfo?.members ? 2.4 : 1.4;
         // Inline style on stripes — beats the .m002-selected white-stroke rule
@@ -5824,7 +5868,7 @@ function drawLink(s, link) {
       const lbl = `${aLbl} ⇄ ${bLbl} · ×${bundleInfo.members.length}`;
       inner += `<text class="m002-link-bundle-label" x="${base.lx}" y="${base.ly + 14}" fill="#e8e8ee" text-anchor="middle">${escSvg(lbl)}</text>`;
       // LAG accent — parallel double-line on top of the VLAN stripes
-      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
+      inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced, transit });
     }
   } else if (layer === 'routing') {
     // L3 view. Every wire (regular link OR LAG-bundle rep) draws as a single
