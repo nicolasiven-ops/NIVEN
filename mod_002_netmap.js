@@ -3765,7 +3765,7 @@ function drawDevice(s, dev) {
   if (isReference(dev)) {
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 30}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-name" x="0" y="${-h/2 + 30}" text-anchor="middle">${escSvg(dev.name)}</text>
     `;
   } else {
     // L3 routing-layer label: show interface count for routers/firewalls,
@@ -3779,7 +3779,7 @@ function drawDevice(s, dev) {
       : '';
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 30}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-name" x="0" y="${-h/2 + 30}" text-anchor="middle">${escSvg(dev.name)}</text>
       <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(dev.notes, 18) || '—')}</text>
       <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(dev.ip || '')}</text>
       <text class="m002-dev-l3" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(l3Label)}</text>
@@ -4609,7 +4609,7 @@ function drawCollapsedStack(s, stack) {
     <rect class="m002-stack-ghost" x="${-w/2 + 6}" y="${-h/2 - 6}" width="${w}" height="${h}" rx="3"/>
     <rect class="m002-stack-ghost" x="${-w/2 + 3}" y="${-h/2 - 3}" width="${w}" height="${h}" rx="3"/>
     <rect class="m002-dev-bg"      x="${-w/2}"     y="${-h/2}"     width="${w}" height="${h}" rx="3"/>
-    <text class="m002-dev-name m002-stack-name" x="${-w/2 + 10}" y="${-h/2 + 36}">${escSvg(stack.name)}</text>
+    <text class="m002-dev-name m002-stack-name" x="0" y="${-h/2 + 36}" text-anchor="middle">${escSvg(stack.name)}</text>
     <text class="m002-stack-badge" x="${w/2 - 10}"  y="${-h/2 + 18}" text-anchor="end">×${memberCount}</text>
     <text class="m002-dev-notes"  x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(memberCount + ' members')}</text>
     ${gwBadge}
@@ -9598,7 +9598,7 @@ function renderDetailBody(s, dev, t) {
         <g class="m002-detail-peer ${isSel ? 'is-selected' : ''}" data-detail-peer-id="${escAttr(peer.id)}" data-detail-stop="1" transform="translate(${pos.cx} ${pos.cy})" style="--accent:${pt.accent}">
           <g class="m002-detail-peer-inner">
             <rect class="m002-dev-bg" x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="3"/>
-            <text class="m002-dev-name" x="${-w / 2 + 10}" y="${-h / 2 + 30}">${escSvg(peer.name || '')}</text>
+            <text class="m002-dev-name" x="0" y="${-h / 2 + 30}" text-anchor="middle">${escSvg(peer.name || '')}</text>
             <text class="m002-dev-notes" x="${-w / 2 + 10}" y="${h / 2 - 10}">${notesText}</text>
             ${ipText ? `<text class="m002-dev-ip" x="${w / 2 - 10}" y="${h / 2 - 10}" text-anchor="end">${ipText}</text>` : ''}
           </g>
