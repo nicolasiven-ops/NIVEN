@@ -957,35 +957,74 @@ function describeConflictTarget(conflict) {
   return owner;
 }
 
-function clearFieldConflict(el) {
+// Range check for a fully-shaped quad-IPv4. Returns the offending octet
+// (number) when one is > 255, else null. Partial / non-quad input passes
+// through as null so live-typing stays unblocked.
+function findIpRangeError(ip) {
+  const target = String(ip || '').trim();
+  if (!target) return null;
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(target)) return null;
+  const oct = target.split('.').map((o) => parseInt(o, 10));
+  const bad = oct.find((o) => o > 255);
+  return bad == null ? null : { kind: 'range', badOctet: bad };
+}
+
+// Combined validator. Range first (a malformed quad can't usefully be tested
+// for collisions), then conflict. Returns one of:
+//   null                  → input is acceptable
+//   { kind: 'range', ... } → octet > 255
+//   { kind: 'conflict', conflict } → IP already used by another slot
+function findIpInputError(s, ip, excludeKey) {
+  const range = findIpRangeError(ip);
+  if (range) return range;
+  const conflict = findIpConflict(s, ip, excludeKey);
+  if (conflict) return { kind: 'conflict', conflict };
+  return null;
+}
+
+const _REJECT_TITLE_PREFIXES = ['IP already in use', 'Invalid IPv4'];
+
+function clearFieldRejection(el) {
   if (!el || !el.classList) return;
   el.classList.remove('m002-field-conflict');
   if (el.dataset && el.dataset.conflictWith) delete el.dataset.conflictWith;
-  if (el.title && el.title.startsWith('IP already in use')) el.removeAttribute('title');
+  if (el.title && _REJECT_TITLE_PREFIXES.some((p) => el.title.startsWith(p))) {
+    el.removeAttribute('title');
+  }
 }
 
-function markFieldConflict(el, conflict) {
+function markFieldRejection(el, err) {
   if (!el || !el.classList) return;
   el.classList.add('m002-field-conflict');
-  el.title = `IP already in use by ${describeConflictTarget(conflict)} — input rejected`;
+  if (err.kind === 'range') {
+    el.title = `Invalid IPv4: octet ${err.badOctet} out of range (0–255) — input rejected`;
+  } else {
+    el.title = `IP already in use by ${describeConflictTarget(err.conflict)} — input rejected`;
+  }
 }
 
 // Single entry-point for IP-edit handlers: returns true when the value should
 // be REJECTED (caller skips its mutation/save path). On rejection: marks the
-// field red, pulses the conflicting tile on first detection (and again only
-// on a target-change). Empty/partial inputs always pass through (return false
-// + clear field marker) so live typing remains usable.
-function rejectIpEditOnConflict(s, el, slotKey, candidateIp) {
-  const conflict = findIpConflict(s, candidateIp, slotKey);
-  if (!conflict) {
-    clearFieldConflict(el);
+// field red, and for a conflict additionally pulses the colliding tile on
+// first detection (and again only when the target-id changes — keeps the
+// pulse from re-firing on every keystroke against the same conflict source).
+// Empty / partial / mid-typing inputs always pass through (return false +
+// clear marker) so live typing stays usable.
+function rejectIpEdit(s, el, slotKey, candidateIp) {
+  const err = findIpInputError(s, candidateIp, slotKey);
+  if (!err) {
+    clearFieldRejection(el);
     return false;
   }
-  const prev = el.dataset.conflictWith || '';
-  markFieldConflict(el, conflict);
-  if (conflict.ownerId !== prev) {
-    el.dataset.conflictWith = conflict.ownerId;
-    pulseConflictEntity(s, conflict.ownerId);
+  markFieldRejection(el, err);
+  if (err.kind === 'conflict') {
+    const prev = el.dataset.conflictWith || '';
+    if (err.conflict.ownerId !== prev) {
+      el.dataset.conflictWith = err.conflict.ownerId;
+      pulseConflictEntity(s, err.conflict.ownerId);
+    }
+  } else if (el.dataset && el.dataset.conflictWith) {
+    delete el.dataset.conflictWith;
   }
   return true;
 }
@@ -6364,10 +6403,15 @@ function bindL3Sections(s, dev, body) {
       //     the derived subnet in the legend so it shows up immediately
       //   - rerender for selects so dependent UI (subnet legend, dot colour,
       //     gateway placeholder) refreshes; inputs keep typing focus instead
-      const apply = (rerender) => {
+      // `committed` flips the auto-default-route side-effect on. While the
+      // user is still typing (`input` event), we only assign + refresh —
+      // dropping a default route + re-opening the inspector mid-keystroke
+      // would yank focus out of the input the moment "10.0.0.4" appeared
+      // valid, before the user could finish typing "10.0.0.40".
+      const apply = (rerender, committed = false) => {
         const f = el.dataset.ifF;
         const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
-        if (f === 'ip' && rejectIpEditOnConflict(s, el, ipSlotKey('iface', dev.id, iface.id), val)) return;
+        if (f === 'ip' && rejectIpEdit(s, el, ipSlotKey('iface', dev.id, iface.id), val)) return;
         if (f === 'prefix') {
           iface.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -6380,25 +6424,30 @@ function bindL3Sections(s, dev, body) {
           if (p && p.prefix < 31) {
             subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
           }
-          // First IP on a router/firewall: drop in a default route so the
-          // gateway is visible and editable in the routes table without the
-          // user having to add it manually. The next-hop is .1-of-the-net,
-          // suppressed when the iface IS .1 (defaultGatewayFor handles that).
-          const added = autoCreateDefaultRoute(dev.routes, iface.ip, iface.prefix, iface.id);
           subnetsChanged(s);
-          if (added) { refreshSelfAndCanvas(); openInspector(s); return; }
+          if (committed) {
+            // First IP on a router/firewall: drop in a default route so the
+            // gateway is visible and editable in the routes table without
+            // the user having to add it manually. defaultGatewayFor() picks
+            // .1-of-the-net (suppressed when the iface IS .1).
+            const added = autoCreateDefaultRoute(dev.routes, iface.ip, iface.prefix, iface.id);
+            if (added) { refreshSelfAndCanvas(); openInspector(s); return; }
+          }
         }
         refreshSelfAndCanvas();
         if (rerender) openInspector(s);
       };
       if (isSelect) {
-        el.addEventListener('change', () => apply(true));
+        // Selects only fire `change` (commit-equivalent) — pass committed=true.
+        el.addEventListener('change', () => apply(true, true));
       } else {
-        el.addEventListener('input', () => apply(false));
+        el.addEventListener('input', () => apply(false, false));
         el.addEventListener('change', () => {
           if (el.dataset.ifF === 'ip') {
             const fixed = normalizeIpInput(el.value);
-            if (fixed !== el.value) { el.value = fixed; apply(false); }
+            if (fixed !== el.value) el.value = fixed;
+            apply(false, true);
+            return;
           }
           if (el.dataset.ifF === 'name') openInspector(s);
         });
@@ -6515,10 +6564,13 @@ function bindStackVipSection(s, stack, body) {
     if (!vif) return;
     row.querySelectorAll('[data-vif-f]').forEach((el) => {
       const isSelect = el.tagName === 'SELECT';
-      const apply = (rerender) => {
+      // `committed` flips the auto-default-route side-effect on. Live-typing
+      // skips it so the inspector doesn't rebuild + steal focus mid-keystroke
+      // when "10.0.0.4" momentarily looks like a complete IP.
+      const apply = (rerender, committed = false) => {
         const f = el.dataset.vifF;
         const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
-        if (f === 'ip' && rejectIpEditOnConflict(s, el, ipSlotKey('vif', stack.id, vif.id), val)) return;
+        if (f === 'ip' && rejectIpEdit(s, el, ipSlotKey('vif', stack.id, vif.id), val)) return;
         if (f === 'prefix') {
           vif.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -6530,19 +6582,21 @@ function bindStackVipSection(s, stack, body) {
           const p = cidr ? parseCidr(cidr) : null;
           if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
           if (!Array.isArray(stack.routes)) stack.routes = [];
-          routeAdded = autoCreateDefaultRoute(stack.routes, vif.ip, vif.prefix, vif.id);
+          if (committed) routeAdded = autoCreateDefaultRoute(stack.routes, vif.ip, vif.prefix, vif.id);
           subnetsChanged(s);
         }
         refresh();
         if (rerender || routeAdded) openInspector(s);
       };
-      if (isSelect) el.addEventListener('change', () => apply(true));
+      if (isSelect) el.addEventListener('change', () => apply(true, true));
       else {
-        el.addEventListener('input', () => apply(false));
+        el.addEventListener('input', () => apply(false, false));
         el.addEventListener('change', () => {
           if (el.dataset.vifF === 'ip') {
             const fixed = normalizeIpInput(el.value);
-            if (fixed !== el.value) { el.value = fixed; apply(false); }
+            if (fixed !== el.value) el.value = fixed;
+            apply(false, true);
+            return;
           }
           if (el.dataset.vifF === 'name') openInspector(s);
         });
@@ -7215,9 +7269,9 @@ function openInspector(s) {
       el.addEventListener('input', () => {
         if (el.dataset.f === 'ip' && el.tagName === 'INPUT') {
           const candidate = normalizeIpInput(el.value);
-          if (rejectIpEditOnConflict(s, el, ipSlotKey('dev', dev.id), candidate)) return;
+          if (rejectIpEdit(s, el, ipSlotKey('dev', dev.id), candidate)) return;
         }
-        updateDeviceField(s, dev, el);
+        updateDeviceField(s, dev, el, false);
       });
       el.addEventListener('change', () => {
         // IP fields: write the normalized form back into the input so the
@@ -7225,9 +7279,9 @@ function openInspector(s) {
         if (el.dataset.f === 'ip' && el.tagName === 'INPUT') {
           const fixed = normalizeIpInput(el.value);
           if (fixed !== el.value) el.value = fixed;
-          if (rejectIpEditOnConflict(s, el, ipSlotKey('dev', dev.id), fixed)) return;
+          if (rejectIpEdit(s, el, ipSlotKey('dev', dev.id), fixed)) return;
         }
-        updateDeviceField(s, dev, el);
+        updateDeviceField(s, dev, el, true);
         // Commit-only refresh for the port count: rebuilds the port table to
         // match the new size. We skip on 'input' to avoid clobbering focus
         // mid-keystroke; 'type' already re-opens itself inside the handler.
@@ -7836,7 +7890,7 @@ function openInspector(s) {
   }
 }
 
-function updateDeviceField(s, dev, el) {
+function updateDeviceField(s, dev, el, committed = false) {
   const f = el.dataset.f;
   if (f === 'ports') {
     const n = Math.max(1, Math.min(96, parseInt(el.value, 10) || 1));
@@ -7912,7 +7966,7 @@ function updateDeviceField(s, dev, el) {
     openInspector(s);
   } else if (f === 'prefix') {
     dev.prefix = Math.max(0, Math.min(32, Number(el.value)));
-    onL3DeviceFieldChanged(s, dev);
+    onL3DeviceFieldChanged(s, dev, committed);
   } else {
     dev[f] = f === 'ip' ? normalizeIpInput(el.value) : el.value;
     if (f === 'name' || f === 'ip' || f === 'notes') redrawDevice(s, dev);
@@ -7920,7 +7974,7 @@ function updateDeviceField(s, dev, el) {
       // Counterpart text on other devices' inspector rows references this name
       s.links.filter((l) => l.from === dev.id || l.to === dev.id).forEach((l) => redrawLink(s, l));
     }
-    if (f === 'ip') onL3DeviceFieldChanged(s, dev);
+    if (f === 'ip') onL3DeviceFieldChanged(s, dev, committed);
   }
   schedSave(s);
   refreshDetailViewIfSettled(s);
@@ -7929,8 +7983,12 @@ function updateDeviceField(s, dev, el) {
 // Shared post-edit logic for non-L3 device IP/prefix changes: auto-add the
 // derived subnet to the registry (so the legend lights up immediately),
 // auto-fill the gateway if blank, refresh the subnet legend + routing-layer
-// link visuals.
-function onL3DeviceFieldChanged(s, dev) {
+// link visuals. The auto-default-route is gated on `committed` — running it
+// on every keystroke would yank focus out of the input the moment the user
+// types a complete-looking IP, even if they're still going (e.g. typing
+// "10.0.0.4" en route to "10.0.0.40"). Subnet registry add stays live since
+// it doesn't rebuild the inspector.
+function onL3DeviceFieldChanged(s, dev, committed = false) {
   if (isL3Type(dev.type) || isReference(dev)) return;
   let routeAdded = false;
   if (dev.ip) {
@@ -7938,7 +7996,7 @@ function onL3DeviceFieldChanged(s, dev) {
     const p = parseCidr(cidr);
     if (p && p.prefix < 31) subnetRegistryAdd(s, `${p.network}/${p.prefix}`, '');
     if (!Array.isArray(dev.routes)) dev.routes = [];
-    routeAdded = autoCreateDefaultRoute(dev.routes, dev.ip, dev.prefix, null);
+    if (committed) routeAdded = autoCreateDefaultRoute(dev.routes, dev.ip, dev.prefix, null);
   }
   redrawDevice(s, dev);
   subnetsChanged(s);
