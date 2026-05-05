@@ -3772,8 +3772,7 @@ function drawDevice(s, dev) {
     }
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${arrow}</text>
-      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 30}">${escSvg(dev.name)}</text>
       <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 24))}</text>
       <text class="m002-dev-ref-hint" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">DBL</text>
     `;
@@ -4661,7 +4660,7 @@ function drawStackEnvelope(s, stack) {
   if (envVsState) env.setAttribute('data-vlan-solo', envVsState);
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
-    <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// STACK · ${escSvg(stack.name)} · ×${members.length}</text>
+    <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">// ${escSvg(stack.name)} · ×${members.length}</text>
   `;
   s.gStacksBg.appendChild(env);
   // Stacking cables — only the user-configured stack-links. Each one is a
@@ -7278,7 +7277,7 @@ function openInspector(s) {
       if (g) g.textContent = stack.name;
       // Expanded view: envelope label in gStacksBg uses a composed string.
       const env = s.gStacksBg.querySelector(`g.m002-stack-envelope[data-stack-id="${stack.id}"] .m002-stack-env-label`);
-      if (env) env.textContent = `// STACK · ${stack.name} · ×${stack.members.length}`;
+      if (env) env.textContent = `// ${stack.name} · ×${stack.members.length}`;
       schedSave(s);
     });
     body.querySelector('[data-stk="toggle"]').addEventListener('click', () => {
