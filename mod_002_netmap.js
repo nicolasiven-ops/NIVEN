@@ -1075,33 +1075,46 @@ function computeL3Paths(s) {
       cur = parent.get(cur);
       ids.unshift(cur);
     }
-    // When a stack id appears in the path (target or transit), drop any
-    // member-of-that-stack hops from the same path. BFS often inserts a
-    // member as transit between an external link and the stack-virtual-node,
-    // which visually routes the ribbon through the member's position
-    // before bending into the stack centre. Filtering those out makes the
-    // ribbon glide PAST the members directly to the stack — matching the
-    // "an den Membern des Default-Gateway-Stacks vorbei" requirement.
+    // Collapse members onto their stack id whenever the stack is visible as
+    // a single envelope on canvas — i.e. (a) the stack id already appears
+    // in the BFS path (transit/endpoint case) OR (b) the stack is expanded.
+    // (a) prevents BFS from threading a ribbon through a transit member
+    // before bending into the stack centre. (b) makes routes glide through
+    // the envelope's middle even when the gateway IP is owned by a single
+    // member rather than a VIP — so an open stack always reads as one node
+    // in the routing layer instead of "whichever member BFS picked first".
     const stackIdsInPath = new Set();
     for (const id of ids) if ((s.stacks || []).some((st) => st.id === id)) stackIdsInPath.add(id);
-    const filtered = ids.filter((id) => {
+    const collapsed = ids.map((id) => {
       const owningStackId = stackOfMember.get(id);
-      return !owningStackId || !stackIdsInPath.has(owningStackId);
+      if (!owningStackId) return id;
+      const st = s.stacks.find((x) => x.id === owningStackId);
+      if (!st) return id;
+      if (stackIdsInPath.has(owningStackId) || !isStackCollapsed(s, st)) return owningStackId;
+      return id;
     });
-    // Dedupe consecutive duplicates (stack-virtual-node BFS can cause them).
+    // Dedupe consecutive duplicates (stack-virtual-node BFS can cause them,
+    // and the collapse pass above can produce same-stack runs).
     const trimmed = [];
-    for (const id of filtered) if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
+    for (const id of collapsed) if (trimmed[trimmed.length - 1] !== id) trimmed.push(id);
     if (trimmed.length < 2) continue;
     paths.push({ subnetId: sn.id, ids: trimmed });
   }
   return paths;
 }
 
-// Geometric waypoint for an L3-ribbon node. Defers to effectivePos() so
-// members of a collapsed stack resolve to the stack centre (matching the
-// canvas), keeping the curve gliding through stack icons rather than
-// snaking out to where members would sit if expanded.
+// Geometric waypoint for an L3-ribbon node. For an expanded stack we use
+// the envelope's geometric centre (midpoint of the dashed bounding box)
+// instead of the member centroid effectivePos() returns — so a ribbon
+// passing through an open stack hits the visual middle of the box rather
+// than drifting toward whichever member happens to sit off-axis. For
+// collapsed stacks and bare devices we defer to effectivePos().
 function ribbonWaypoint(s, id) {
+  const stack = (s.stacks || []).find((st) => st.id === id);
+  if (stack && !isStackCollapsed(s, stack)) {
+    const r = stackEnvelopeRect(s, stack);
+    if (r) return { x: (r.minX + r.maxX) / 2, y: (r.minY + r.maxY) / 2 };
+  }
   return effectivePos(s, id);
 }
 
