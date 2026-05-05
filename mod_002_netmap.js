@@ -4516,38 +4516,28 @@ function toggleStackExpanded(s, stackId) {
   // (centroid − bbox-centre), and vice-versa.
   if (devs.length) {
     if (!st.expanded) {
-      // Exact bbox-centre — NO GRID rounding. For an asymmetric layout the
-      // bbox-centre legitimately falls on a half-grid Y (e.g. members at
-      // 552/600/672/912 → centre 732, sitting between grid lines 720 & 744).
-      // Snapping st.y to GRID at this step would offset the anchor by GRID/2,
-      // and the recenter pass below would then shift members by a full GRID
-      // step (round(0.5)*24 = 24 in JS — Math.round always rounds .5 up),
-      // which compounds into a +24px-per-toggle drift. Drag still snaps st.x,
-      // st.y to GRID via the drag handler, so user-initiated moves stay grid-
-      // aligned; the toggle itself just preserves the exact midpoint.
+      // st.x,st.y = bbox-centre snapped to nearest grid. Members are NOT
+      // moved — they keep their existing grid-aligned positions. For an
+      // asymmetric layout the true bbox-centre may fall on a half-grid line;
+      // accepting a ≤GRID/2 icon-vs-bbox offset is the lesser evil compared
+      // to (i) shifting members by sub-grid amounts (members go off-grid —
+      // direct user complaint), or (ii) leaving st.x,st.y on a half-grid line
+      // (icon between grid lines, and the next user-drag snap creates sub-
+      // grid member shifts). The auto-column layout below now uses
+      // stepY = 6·GRID so newly laid-out stacks always have bbox-centre
+      // exactly on grid for any member count, eliminating any one-time st.y
+      // jump on the first toggle after auto-layout.
       const xs = devs.map((d) => d.x);
       const ys = devs.map((d) => d.y);
-      st.x = (Math.min(...xs) + Math.max(...xs)) / 2;
-      st.y = (Math.min(...ys) + Math.max(...ys)) / 2;
+      st.x = Math.round(((Math.min(...xs) + Math.max(...xs)) / 2) / GRID) * GRID;
+      st.y = Math.round(((Math.min(...ys) + Math.max(...ys)) / 2) / GRID) * GRID;
     } else {
-      // On expand: column-layout overlapping members (already centred on the
-      // anchor); otherwise shift the existing arrangement so its bbox-centre
-      // matches the anchor — corrects pre-fix data where st.x was a centroid.
-      // Delta is applied EXACTLY (no GRID rounding) for the same reason as
-      // above: rounding a sub-grid offset to a full grid step is what caused
-      // the per-cycle drift on asymmetric stacks.
-      const laidOut = layoutStackMembersIfOverlapping(s, st);
-      if (!laidOut && devs.length >= 2) {
-        const xs = devs.map((d) => d.x);
-        const ys = devs.map((d) => d.y);
-        const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
-        const cy = (Math.min(...ys) + Math.max(...ys)) / 2;
-        const ddx = st.x - cx;
-        const ddy = st.y - cy;
-        if (ddx !== 0 || ddy !== 0) {
-          devs.forEach((d) => { d.x += ddx; d.y += ddy; });
-        }
-      }
+      // On expand: only auto-layout overlapping members. NO recenter pass —
+      // shifting an existing arrangement by sub-grid amounts to match an
+      // arbitrary anchor would push members off the grid. Legacy stacks
+      // (where st.x was a centroid, not a bbox-centre) self-heal on the
+      // very next collapse, which snaps st.x,st.y to the bbox-centre.
+      layoutStackMembersIfOverlapping(s, st);
     }
   }
   render(s);
@@ -4555,7 +4545,7 @@ function toggleStackExpanded(s, stackId) {
 }
 
 // If members of an expanded stack visually overlap, re-arrange them in a
-// clean grid centered on the stack anchor with one grid line of breathing
+// clean column centered on the stack anchor with two grid lines of breathing
 // room between cells. Members that already sit cleanly are left untouched.
 function layoutStackMembersIfOverlapping(s, st) {
   const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
@@ -4570,19 +4560,16 @@ function layoutStackMembersIfOverlapping(s, st) {
     }
   }
   if (!overlap) return false;
-  // Vertical column — mirrors a physical switch stack (one switch on top of
-  // the next). One grid line of breathing room between cells, centered on
-  // the stack anchor.
-  const stepY = DEVICE_H + GRID;
+  // stepY = DEVICE_H + 2·GRID = 144 = 6·GRID. Picked over the older 5·GRID
+  // (= 120) so totalH/2 is always a multiple of GRID, regardless of member
+  // count: for any N, every member lands exactly on a grid line AND the
+  // bbox-centre lands exactly on a grid line (= st.y). With 5·GRID, even-N
+  // stacks had bbox-centre on a half-grid line, which forced a choice
+  // between off-grid members and per-toggle drift.
+  const stepY = DEVICE_H + 2 * GRID;
   const totalH = (devs.length - 1) * stepY;
   const colX = Math.round(st.x / GRID) * GRID;
-  // Exact, NOT rounded. With stepY = 120 (DEVICE_H + GRID) and an even member
-  // count, totalH/2 is a multiple of 60 — half-grid relative to GRID = 24.
-  // Rounding startY would offset the column from the anchor and re-introduce
-  // the toggle drift we just removed in toggleStackExpanded above. Members
-  // ending up on a half-grid Y is harmless: drag-snap will re-grid them when
-  // the user moves them.
-  const startY = st.y - totalH / 2;
+  const startY = Math.round((st.y - totalH / 2) / GRID) * GRID;
   devs.forEach((d, i) => {
     d.x = colX;
     d.y = startY + i * stepY;
