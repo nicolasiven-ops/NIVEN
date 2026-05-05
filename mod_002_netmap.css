@@ -966,10 +966,52 @@ input.m002-field-conflict,
    from the grid so hover, selection, and theming match the canvas. */
 .m002-detail-peer-link{opacity:0;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link{
+  /* 800ms delay = 100ms after peer-tiles + uplink-ports start at 700ms,
+     so the wire visibly draws between two endpoints that have already
+     arrived. The whole "upper row" group still reads as one wave to the
+     user — peer-tile + port endpoints first, link bridging them right
+     behind. */
   animation:m002-detail-stub-fade 320ms ease-out forwards;
   animation-delay:800ms;
 }
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
+
+/* ============================================================================
+   Hop transient animations (v2.34 Push C). When the user clicks a peer-tile
+   for a Position-Swap, the *tiles* glide via FLIP (Push A) and the
+   *port-row + peer-links* fade out → re-render → fade in around them so
+   the swap reads as one cohesive "upper layer transitions" instead of a
+   hard innerHTML replace. Both classes carry !important to override the
+   settled pin (.m002-detail-overlay-settled stays on during the hop —
+   see hopToPeer for why — so its no-animation guards on port-inner /
+   stub / peer-link must be defeated here). Selectors triple-class the
+   overlay so specificity (0,3,0) ties the show entry rules; placed
+   AFTER them in source order so hop-in / hop-out wins the !important
+   cascade. */
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-port .m002-detail-port-inner{
+  animation:m002-detail-port-suck 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-stub{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-peer-link{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-port .m002-detail-port-inner{
+  animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards!important;
+  animation-delay:0ms!important;
+}
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-stub{
+  animation:m002-detail-stub-fade 200ms ease-out forwards!important;
+  animation-delay:100ms!important;
+}
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-peer-link{
+  animation:m002-detail-stub-fade 220ms ease-out forwards!important;
+  animation-delay:80ms!important;
+}
 
 /* ============================================================================
    Reverse-exit (v2.34 Push B). Mirrors the initial emerge — central tile
@@ -1069,7 +1111,10 @@ input.m002-field-conflict,
   animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;
 }
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-peer .m002-detail-tile-inner{
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 680ms forwards;
+  /* 700ms delay matches the uplink-port-row's PORT_BASE_DELAY in JS so
+     peer-tiles + ports + peer-links arrive as one cohesive "upper row"
+     wave AFTER the centre has emerged, instead of three separate phases. */
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 700ms forwards;
 }
 
 /* Settled — pins inner state so live edits to the inspector don't replay

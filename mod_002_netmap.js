@@ -10304,9 +10304,13 @@ function renderDetailPortsMarkup(s, frame) {
   const t = typeOf(frame.centerDev.type);
   const cx = frame.cx;
 
-  // Per-port enter delay (animation cascade).
+  // Per-port enter delay (animation cascade). Stagger tightened from 25 to
+  // 12 so the whole port-row arrives as part of the same "upper row" wave
+  // as the peer-tiles + peer-links — at 25ms × 24 ports the last port lands
+  // 600ms after the first, which trails well past the peer-link fade-in
+  // and reads as a third separate phase rather than one cohesive wave.
   const PORT_BASE_DELAY = 700;
-  const PORT_STAGGER_MS = 25;
+  const PORT_STAGGER_MS = 12;
   let portIndex = 0;
   const STUB_LEN = frame.STUB_LEN;
 
@@ -10479,6 +10483,13 @@ function animateView(s, target, durationMs) {
 // s._viewBeforeDetail is NOT touched here — exiting always returns to the
 // original pre-detail viewport, regardless of how many hops happened.
 // =============================================================================
+// Hop port/link transition timings. Old ports/links/stubs fade out over
+// HOP_OUT_MS, then sync rebuilds the DOM, then new ports/links/stubs
+// pop/fade in over HOP_IN_MS. Tile FLIP runs in parallel from the sync
+// moment, so total hop = HOP_OUT_MS + DETAIL.flipMs (~680ms).
+const HOP_OUT_MS = 200;
+const HOP_IN_MS  = 240;
+
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
   if (s._detailHopActive) return;
@@ -10500,10 +10511,16 @@ function hopToPeer(s, peerId, fromEl) {
   //   2. Newly-created tiles arrive at identity immediately (the settled
   //      rule overrides their initial-state CSS), so they don't briefly
   //      flash a 0.005 emerge-point at their final slot.
+  // The hop-out / hop-in classes have higher specificity + !important so
+  // they override settled's no-animation pin on port-inner / stub /
+  // peer-link without affecting the tile-inner pins.
 
   const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // FIRST — capture every tile's screen-space bounding box.
+  // FIRST — capture every tile's screen-space bounding box. Captured
+  // BEFORE hop-out so the rect-snapshots reflect the state the user is
+  // currently seeing; tiles don't move during the hop-out fade so
+  // these rects stay valid for the FLIP at the sync moment.
   const oldRects = new Map();
   const tilesGroup = overlay.querySelector('.m002-detail-tiles-group');
   if (tilesGroup) {
@@ -10512,46 +10529,65 @@ function hopToPeer(s, peerId, fromEl) {
     });
   }
 
-  // Update state — focus + selection + title.
-  s.detailDeviceId = peerId;
-  if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
-    select(s, 'device', peerId);
+  const performSyncAndFlip = () => {
+    // Update state — focus + selection + title.
+    s.detailDeviceId = peerId;
+    if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
+      select(s, 'device', peerId);
+    }
+    const t = typeOf(peer.type);
+    const titleEl = overlay.querySelector('.m002-detail-title');
+    if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
+
+    // LAST — sync DOM around the new centre. Tiles that survive the hop
+    // keep their <g> nodes; new peers get fresh ones; departed peers
+    // detach. Ports + links are rebuilt entirely (cheap).
+    const body = overlay.querySelector('.m002-detail-body');
+    const frame = computeDetailFrame(s, peer);
+    const { newIds } = syncDetailFrame(s, body, frame);
+
+    // INVERT + PLAY — write the new --layout-* on every tile, then for
+    // each tile that pre-existed compute the delta and write --flip-*
+    // (without transition). The double-rAF inside applyDetailLayout
+    // clears --flip-* and lets the CSS transition glide each tile to
+    // its new slot.
+    applyDetailLayout(s, frame, {
+      flip: reduceMotion ? null : oldRects,
+      freshIds: newIds,
+    });
+
+    // Swap hop-out → hop-in so the new ports/stubs/peer-links pop and
+    // fade in (mirrors the initial entry choreography).
+    if (!reduceMotion) {
+      overlay.classList.remove('m002-detail-hop-out');
+      overlay.classList.add('m002-detail-hop-in');
+    }
+
+    // Camera tween runs in parallel — doesn't gate the tile FLIP.
+    const rect = s.svg.getBoundingClientRect();
+    const tx = rect.width  / 2 - peer.x * DETAIL_TARGET_ZOOM;
+    const ty = rect.height / 2 - peer.y * DETAIL_TARGET_ZOOM;
+    animateView(s, { x: tx, y: ty, zoom: DETAIL_TARGET_ZOOM }, DETAIL_ENTER_MS);
+
+    // Settle once both the FLIP and the hop-in animation finish.
+    const settleAfter = (reduceMotion ? 0 : Math.max(DETAIL.flipMs, HOP_IN_MS) + 80);
+    s._detailSettleTimer = setTimeout(() => {
+      if (s.detailDeviceId === peerId) {
+        overlay.classList.add('m002-detail-overlay-settled');
+        overlay.classList.remove('m002-detail-hop-in');
+      }
+      s._detailHopActive = false;
+    }, settleAfter);
+  };
+
+  if (reduceMotion) {
+    // No fade-out phase — tiles snap, ports/links snap with them.
+    performSyncAndFlip();
+  } else {
+    // Phase 1 — old ports / links / stubs fade out. Tiles stay put.
+    overlay.classList.add('m002-detail-hop-out');
+    setTimeout(performSyncAndFlip, HOP_OUT_MS);
   }
-  const t = typeOf(peer.type);
-  const titleEl = overlay.querySelector('.m002-detail-title');
-  if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
-
-  // LAST — sync DOM around the new centre. Tiles that survive the hop
-  // keep their <g> nodes; new peers get fresh ones; departed peers
-  // detach. Ports + links are rebuilt entirely (cheap).
-  const body = overlay.querySelector('.m002-detail-body');
-  const frame = computeDetailFrame(s, peer);
-  const { newIds } = syncDetailFrame(s, body, frame);
-
-  // INVERT + PLAY — write the new --layout-* on every tile, then for
-  // each tile that pre-existed compute the delta and write --flip-*
-  // (without transition). The double-rAF inside applyDetailLayout
-  // clears --flip-* and lets the CSS transition glide each tile to
-  // its new slot.
-  applyDetailLayout(s, frame, {
-    flip: reduceMotion ? null : oldRects,
-    freshIds: newIds,
-  });
-
-  // Camera tween runs in parallel — doesn't gate the tile FLIP.
-  const rect = s.svg.getBoundingClientRect();
-  const tx = rect.width  / 2 - peer.x * DETAIL_TARGET_ZOOM;
-  const ty = rect.height / 2 - peer.y * DETAIL_TARGET_ZOOM;
-  animateView(s, { x: tx, y: ty, zoom: DETAIL_TARGET_ZOOM }, DETAIL_ENTER_MS);
-
-  // Settle once the FLIP transition finishes — re-applies the
-  // animation:none/!important guard so subsequent live edits to the
-  // inspector don't re-trigger entry choreography.
-  const settleAfter = (reduceMotion ? 0 : DETAIL.flipMs) + 80;
-  s._detailSettleTimer = setTimeout(() => {
-    if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
-    s._detailHopActive = false;
-  }, settleAfter);
 }
 
 // =============================================================================
