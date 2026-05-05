@@ -9222,13 +9222,14 @@ function setMode(s, txt) {
 // =============================================================================
 // Detail-View animation timings. The map zoom runs in the background and the
 // overlay fade-in stacks on top with a brief lead so the camera move plants
-// the user before the panel scales in. Camera easing is `easeInOutCubic` (JS)
-// — gentle start, gentle finish — paired with the CSS overlay's
-// cubic-bezier(0.16,1,0.3,1). Entry uses a longer duration than exit/hop
-// because the inbound zoom is what the user is *watching*, while exit/hop
-// should feel snappy and responsive.
+// the user before the panel scales in. Camera easing is `easeOutCubic` (JS)
+// — visible motion immediately, gentle deceleration as it lands. The earlier
+// easeInOutCubic at 600ms was so smooth at the start (0.4% motion in the
+// first 60ms) that the entry read as "no animation"; easeOutCubic restores
+// perceptible transit while still staying away from the lurch character of
+// the original easeOutExpo.
 const DETAIL_ANIM_MS       = 350;
-const DETAIL_ENTER_MS      = 600;
+const DETAIL_ENTER_MS      = 500;
 const DETAIL_FADE_OUT_MS   = 190;
 const DETAIL_TARGET_ZOOM   = 1.6;
 
@@ -9406,10 +9407,16 @@ function renderDetailBody(s, dev, t) {
     });
   }
 
-  // Per-port enter delay (animation cascade). Element finishes around 1000ms,
-  // then ports stagger every PORT_STAGGER_MS. Stubs derive their delay from
-  // the parent port via a CSS calc() so they always come last on a port.
-  const PORT_BASE_DELAY = 1070;
+  // Per-port enter delay (animation cascade). Ports now arrive synchronised
+  // with the peer-tile row above (peer-tile delay = 680ms in CSS), instead of
+  // waiting for the central element's horizontal expansion to finish — the
+  // user perceived "ports trail the navigation switches" when the gap was
+  // 380ms+, even though v2.33.45 had pulled the CSS default-delay down. This
+  // JS constant overrides the CSS default via inline --enter-delay style, so
+  // *this* number is what actually controls when ports pop. Stubs derive
+  // their delay from the parent port via a CSS calc() so they always come
+  // last on a port.
+  const PORT_BASE_DELAY = 700;
   const PORT_STAGGER_MS = 25;
   let portIndex = 0;
 
@@ -9612,10 +9619,12 @@ function animateView(s, target, durationMs) {
   if (s._viewAnimRaf) cancelAnimationFrame(s._viewAnimRaf);
   const start = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   const t0 = performance.now();
-  // easeInOutCubic — symmetric, gentle on both ends. Replaces the previous
-  // easeOutExpo which front-loaded almost all the motion into the first ~1/3
-  // of the duration; that read as a sudden lurch followed by a crawl.
-  const ease = (t) => (t >= 1 ? 1 : (t < 0.5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2));
+  // easeOutCubic — perceptible motion from frame 1 (~27% travelled at t=0.1
+  // of the duration), gentle deceleration as the camera lands. Picked over
+  // easeInOutCubic (which barely moves in the first 100ms and reads as "no
+  // animation") and easeOutExpo (which front-loads ~75% of motion into the
+  // first 200ms and reads as a lurch).
+  const ease = (t) => (t >= 1 ? 1 : 1 - Math.pow(1 - t, 3));
   const step = (now) => {
     const t = Math.min(1, (now - t0) / durationMs);
     const k = ease(t);
@@ -9745,16 +9754,28 @@ function hopToPeer(s, peerId, fromEl) {
     animateView(s, { x: tx, y: ty, zoom: targetZoom }, DETAIL_ANIM_MS);
 
     // Re-render body — new DOM nodes match the .m002-detail-overlay-show
-    // animation rules, so the entry choreography replays automatically.
+    // animation rules, so the entry choreography replays automatically. We
+    // add .m002-detail-post-hop to override the cinematic point→line phase
+    // of the central element's emerge animation: after a hop the user has
+    // already seen the entry choreography once and is waiting for the new
+    // element to be there. The post-hop variant skips straight to the
+    // horizontal expansion (450ms), and pulls peer-tiles / ports / stubs /
+    // peer-links way forward so the new body is fully assembled ~700ms
+    // after fly-in — closing the half-second "black monitor" gap between
+    // the survivor tile landing and the new content materialising.
     const t = typeOf(peer.type);
     const titleEl = overlay.querySelector('.m002-detail-title');
     if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
     overlay.classList.remove('m002-detail-hop');
+    overlay.classList.add('m002-detail-post-hop');
     renderDetailView(s);
 
     s._detailSettleTimer = setTimeout(() => {
-      if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
-    }, 1100);
+      if (s.detailDeviceId === peerId) {
+        overlay.classList.add('m002-detail-overlay-settled');
+        overlay.classList.remove('m002-detail-post-hop');
+      }
+    }, 800);
     s._detailHopActive = false;
   }
 

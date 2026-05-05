@@ -867,8 +867,8 @@
 
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner{animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg{animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,800ms);}
-.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,800ms) + 200ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner{animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) forwards;animation-delay:var(--enter-delay,700ms);}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub{animation:m002-detail-stub-fade 255ms ease-out forwards;animation-delay:calc(var(--enter-delay,700ms) + 200ms);}
 /* Settled state — applied ~1100ms after entry. Lets render(s) re-render the
    detail body during edits without re-running the choreographed entry. */
 .m002-detail-overlay-settled .m002-detail-device-inner,
@@ -920,9 +920,46 @@
 .m002-detail-peer-link{opacity:0;}
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link{
   animation:m002-detail-stub-fade 320ms ease-out forwards;
-  animation-delay:950ms;
+  animation-delay:800ms;
 }
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
+
+/* Post-hop fast-entry — set on the overlay by finishHop() (JS) right after
+   the survivor tile lands at centre. Skips the cinematic point→line phases
+   of the central element's emerge animation and pulls peer-tiles / ports /
+   stubs / peer-links massively forward, so the new body materialises within
+   ~700ms instead of ~1300ms. Closes the half-second "black monitor" gap the
+   user sees between the survivor landing and the new content arriving.
+   Per-port stagger is deliberately collapsed to zero here — this is a
+   "show me the new view, fast" moment, not a cinematic intro.
+   Selectors triple-class the overlay (.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop)
+   so they outweigh the standard entry rules in the cascade. */
+@keyframes m002-detail-elem-quick-emerge{
+  0%   {transform:scale(0.005,1); opacity:1;}
+  100% {transform:scale(1,1);     opacity:1;}
+}
+@keyframes m002-detail-elem-empty-quick{
+  0%   {fill:var(--accent);}
+  100% {fill:#0a0a10;}
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-device-inner{
+  animation:m002-detail-elem-quick-emerge 450ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-dev-bg{
+  animation:m002-detail-elem-empty-quick 450ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-port-inner{
+  animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) 250ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-stub{
+  animation:m002-detail-stub-fade 255ms ease-out 450ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-peer-inner{
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 200ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-peer-link{
+  animation:m002-detail-stub-fade 320ms ease-out 350ms forwards;
+}
 
 /* Hop transition — Streetview-style navigation between switches.
    When the user clicks a peer-tile, the overlay enters .m002-detail-hop.
