@@ -5525,10 +5525,11 @@ function vlanSoloStateForStack(s, stack) {
 //   'unmatched-isolated'  entity doesn't, no neighbor does either             → dim
 //   null                  no filter active                                    → normal
 //
-// "Participates" = (a) entity has an IP/VIP/interface that resolves into the
-// soloed subnet, OR (b) entity appears as a transit hop on an L3 ribbon for
-// that subnet. (b) keeps L2 transit switches lit — they carry the traffic
-// even though they don't terminate IP themselves.
+// "Participates" = entity has an IP/VIP/interface that resolves into the
+// soloed subnet. Pure transit hops (L2 switches the ribbon glides through
+// without terminating IP) do NOT count as participants and dim out — the
+// routing layer is an L3 view, and "trägt den Stream" is not the same as
+// "ist Teil des Netzes".
 function effectiveSubnetSolo(s) {
   const filter = (s.view?.subnetFilter || []).map(String);
   const hover = s._subnetHover != null ? String(s._subnetHover) : null;
@@ -5551,20 +5552,10 @@ function subnetSoloCtx(s) {
   (s.stacks || []).forEach((st) => {
     if (stackSubnets(s, st).some((sn) => filterSet.has(String(sn.id)))) carrier.add(st.id);
   });
-  // Transit participation: every L3 path of a soloed subnet contributes its
-  // transit hops, so L2 switches between source and gateway stay lit.
-  // Members of an expanded stack contribute the stack id too — the env
-  // wraps them and should follow.
+  // stackOfMember used downstream by linkRoutingSoloDim + state resolvers
+  // to fold member matches up to their stack and vice versa.
   const stackOfMember = new Map();
   (s.stacks || []).forEach((st) => (st.members || []).forEach((mid) => stackOfMember.set(mid, st.id)));
-  computeL3Paths(s).forEach((p) => {
-    if (!filterSet.has(String(p.subnetId))) return;
-    p.ids.forEach((id) => {
-      carrier.add(id);
-      const stk = stackOfMember.get(id);
-      if (stk) carrier.add(stk);
-    });
-  });
   // Adjacency over the link graph (devices + stack-as-virtual-node), used to
   // separate "unmatched-isolated" from "unmatched-adjacent". Mirrors the
   // adjacency built in computeL3Paths but indexed by id only.
