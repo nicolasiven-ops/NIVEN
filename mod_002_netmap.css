@@ -743,6 +743,43 @@
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"] .m002-dev-bg,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"] .m002-dev-bg{stroke:#ffbf3c;}
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"] .m002-stack-env-bg{stroke:#ffbf3c;}
+
+/* Routing-solo dimming — sibling of VLAN solo for the routing layer. When the
+   user solos one or more subnets (click in the subnet legend) every device,
+   stack, envelope and link gets a data-routing-solo state stamped by JS.
+   Non-participants fade to the background so the chosen subnet stands out;
+   transit devices on the L3 ribbon path keep their participating state and
+   remain lit. Same opacity/saturation values as VLAN-solo so both layers
+   read with identical visual weight. */
+.m002-host[data-active-layer="routing"] .m002-device,
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed,
+.m002-host[data-active-layer="routing"] .m002-stack-envelope{transition:opacity .6s ease-out, filter .6s ease-out;}
+.m002-host[data-active-layer="routing"] .m002-device[data-routing-solo="unmatched-isolated"],
+.m002-host[data-active-layer="routing"] .m002-device[data-routing-solo="unmatched-adjacent"],
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-isolated"],
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-adjacent"],
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-isolated"],
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-adjacent"]{opacity:.18 !important;filter:saturate(0) brightness(.55) !important;}
+.m002-host[data-active-layer="routing"] .m002-device[data-routing-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="routing"] .m002-device[data-routing-solo="unmatched-adjacent"]:hover,
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-adjacent"]:hover,
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-isolated"]:hover,
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
+/* Stacking cables ride along with their parent envelope's solo state. */
+.m002-host[data-active-layer="routing"] .m002-stacklink{transition:opacity .6s ease-out;}
+.m002-host[data-active-layer="routing"] .m002-stacklink[data-routing-solo="unmatched-isolated"],
+.m002-host[data-active-layer="routing"] .m002-stacklink[data-routing-solo="unmatched-adjacent"]{opacity:.07;}
+/* Links that don't carry the soloed subnet fade to the background. The L3
+   ribbon above already speaks through the colour stripe, so dimming the
+   underlying L2 wire pulls the eye onto the active subnet's path. */
+.m002-host[data-active-layer="routing"] .m002-link,
+.m002-host[data-active-layer="routing"] .m002-laglink{transition:opacity .6s ease-out;}
+.m002-host[data-active-layer="routing"] .m002-link.m002-link-rsolo-dim,
+.m002-host[data-active-layer="routing"] .m002-laglink.m002-link-rsolo-dim{opacity:.07;}
+.m002-host[data-active-layer="routing"] .m002-link.m002-link-rsolo-dim:hover,
+.m002-host[data-active-layer="routing"] .m002-laglink.m002-link-rsolo-dim:hover{opacity:.4;}
+
 .m002-link-l3{transition:stroke-width .15s;}
 .m002-link-l3-glow{opacity:.22;filter:blur(2px);pointer-events:none;}
 /* Detached L3 ribbons — smooth Catmull-Rom curves through L3 endpoints.

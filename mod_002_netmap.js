@@ -574,12 +574,12 @@ function renderSubnetLegend(s) {
       const id = String(row.dataset.ssolo);
       if (s._subnetHover === id) return;
       s._subnetHover = id;
-      if (s.activeLayer === 'routing') drawL3Paths(s);
+      if (s.activeLayer === 'routing') render(s);
     });
     row.addEventListener('mouseleave', () => {
       if (s._subnetHover == null) return;
       s._subnetHover = null;
-      if (s.activeLayer === 'routing') drawL3Paths(s);
+      if (s.activeLayer === 'routing') render(s);
     });
   });
   body.querySelector('[data-sclear]')?.addEventListener('click', (e) => {
@@ -3767,9 +3767,20 @@ function drawDevice(s, dev) {
       const peerState = peerForVsolo ? vlanSoloStateForDevice(s, peerForVsolo) : null;
       g.setAttribute('data-vlan-solo', peerState || 'unmatched-isolated');
     }
+    // Routing-solo mirrors the same JUMP-borrows-peer logic on the routing
+    // layer — uncoupled JUMPs dim out as isolated when a subnet filter is on.
+    if (s.activeLayer === 'routing' && effectiveSubnetSolo(s).length) {
+      const peerForRsolo = couplePeer(s, dev);
+      const peerRState = peerForRsolo ? subnetSoloStateForDevice(s, peerForRsolo) : null;
+      g.setAttribute('data-routing-solo', peerRState || 'unmatched-isolated');
+    }
   } else {
     const vsState = vlanSoloStateForDevice(s, dev);
     if (vsState) g.setAttribute('data-vlan-solo', vsState);
+    if (s.activeLayer === 'routing') {
+      const rsState = subnetSoloStateForDevice(s, dev);
+      if (rsState) g.setAttribute('data-routing-solo', rsState);
+    }
   }
   g.style.setProperty('--accent', t.accent);
   updateDeviceTransform({ }, dev, g);
@@ -4611,6 +4622,10 @@ function drawCollapsedStack(s, stack) {
   if (stackIsDefaultGateway(s, stack)) g.setAttribute('data-gw', 'true');
   const vsState = vlanSoloStateForStack(s, stack);
   if (vsState) g.setAttribute('data-vlan-solo', vsState);
+  if (s.activeLayer === 'routing') {
+    const rsState = subnetSoloStateForStack(s, stack);
+    if (rsState) g.setAttribute('data-routing-solo', rsState);
+  }
   g.style.setProperty('--accent', t.accent);
   g.setAttribute('transform', `translate(${stack.x} ${stack.y})`);
   const memberCount = stack.members.length;
@@ -4661,6 +4676,8 @@ function drawStackEnvelope(s, stack) {
   env.setAttribute('data-l3', stackIsL3 ? 'true' : 'false');
   const envVsState = vlanSoloStateForStack(s, stack);
   if (envVsState) env.setAttribute('data-vlan-solo', envVsState);
+  const envRsState = s.activeLayer === 'routing' ? subnetSoloStateForStack(s, stack) : null;
+  if (envRsState) env.setAttribute('data-routing-solo', envRsState);
   env.innerHTML = `
     <rect class="m002-stack-env-bg" x="${minX}" y="${minY}" width="${maxX - minX}" height="${maxY - minY}" rx="6"/>
     <text class="m002-stack-env-label" x="${minX + 10}" y="${minY + 14}">${escSvg(stack.name)} ×${members.length}</text>
@@ -4691,6 +4708,7 @@ function drawStackEnvelope(s, stack) {
     // the stack itself is dimmed/amber, its stacking cables follow suit
     // instead of staying lit and visually contradicting the envelope.
     if (envVsState) cab.setAttribute('data-vlan-solo', envVsState);
+    if (envRsState) cab.setAttribute('data-routing-solo', envRsState);
     const path = orthPath(a, b, off, s, [a.id, b.id]);
     let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
     // Port labels on stacking cables only in Physical — VLAN/Routing layers
@@ -5062,6 +5080,9 @@ function drawLagLink(s, p) {
     // dashed underlay every other link gets. The L3 ribbon above carries the
     // colour. Without this we'd stack a gray double-line beneath the ribbon
     // and end up with four parallel highlights through one wire pair.
+    if (linkRoutingSoloDim(s, { from: p.stackA.id, to: p.stackB.id })) {
+      g.classList.add('m002-link-rsolo-dim');
+    }
     inner += `<path class="m002-link-line m002-link-dim" d="${path.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
   } else if (s.activeLayer === 'vlan' && drawnVlans.length) {
     const gap = 6;
@@ -5124,6 +5145,10 @@ function drawStackPairAggregate(s, key, agg, aPos, bPos) {
   const g = document.createElementNS(SVG_NS, 'g');
   g.setAttribute('class', 'm002-link m002-link-agg');
   g.setAttribute('data-agg-key', key);
+  if (s.activeLayer === 'routing'
+      && linkRoutingSoloDim(s, { from: agg.aSide, to: agg.bSide })) {
+    g.classList.add('m002-link-rsolo-dim');
+  }
   let inner = `<path class="m002-link-hit" d="${path.d}"/>`;
   inner += `<path class="m002-link-line m002-link-agg-line" d="${path.d}" stroke="#5a5f6e" stroke-dasharray="6 4" stroke-width="1.4"/>`;
   // No textual badge — the dashed line itself is enough of a placeholder.
@@ -5305,6 +5330,130 @@ function vlanSoloStateForStack(s, stack) {
   return 'unmatched-isolated';
 }
 
+// =============================================================================
+// Routing (subnet) solo — sibling of VLAN solo for the routing layer
+// =============================================================================
+// Mirrors the VLAN-solo model. When the user solos one or more subnets in the
+// subnet legend (or hovers a row to preview one), every entity on the canvas
+// gets a data-routing-solo state that CSS uses to dim non-participants.
+//
+// Per-element states (binary — routing has no "configured but unwired"
+// equivalent of VLAN's amber state; a subnet either is or isn't on a device):
+//   'matched'             entity participates in the soloed subnet           → normal
+//   'unmatched-adjacent'  entity doesn't, but a linked neighbor does          → dim
+//   'unmatched-isolated'  entity doesn't, no neighbor does either             → dim
+//   null                  no filter active                                    → normal
+//
+// "Participates" = (a) entity has an IP/VIP/interface that resolves into the
+// soloed subnet, OR (b) entity appears as a transit hop on an L3 ribbon for
+// that subnet. (b) keeps L2 transit switches lit — they carry the traffic
+// even though they don't terminate IP themselves.
+function effectiveSubnetSolo(s) {
+  const filter = (s.view?.subnetFilter || []).map(String);
+  const hover = s._subnetHover != null ? String(s._subnetHover) : null;
+  if (hover && !filter.includes(hover)) return [...filter, hover];
+  return filter;
+}
+
+function subnetSoloCtx(s) {
+  const filter = effectiveSubnetSolo(s);
+  if (!filter.length) return null;
+  if (s._subnetSoloCtx && s._subnetSoloCtx.filterKey === filter.join('|')) return s._subnetSoloCtx;
+  const filterSet = new Set(filter);
+  // Direct membership: anything whose own IP/interface/VIP lands in a soloed
+  // subnet. carrier holds entity ids (devices + stacks).
+  const carrier = new Set();
+  s.devices.forEach((d) => {
+    if (isReference(d)) return;
+    if (deviceSubnets(s, d).some((sn) => filterSet.has(String(sn.id)))) carrier.add(d.id);
+  });
+  (s.stacks || []).forEach((st) => {
+    if (stackSubnets(s, st).some((sn) => filterSet.has(String(sn.id)))) carrier.add(st.id);
+  });
+  // Transit participation: every L3 path of a soloed subnet contributes its
+  // transit hops, so L2 switches between source and gateway stay lit.
+  // Members of an expanded stack contribute the stack id too — the env
+  // wraps them and should follow.
+  const stackOfMember = new Map();
+  (s.stacks || []).forEach((st) => (st.members || []).forEach((mid) => stackOfMember.set(mid, st.id)));
+  computeL3Paths(s).forEach((p) => {
+    if (!filterSet.has(String(p.subnetId))) return;
+    p.ids.forEach((id) => {
+      carrier.add(id);
+      const stk = stackOfMember.get(id);
+      if (stk) carrier.add(stk);
+    });
+  });
+  // Adjacency over the link graph (devices + stack-as-virtual-node), used to
+  // separate "unmatched-isolated" from "unmatched-adjacent". Mirrors the
+  // adjacency built in computeL3Paths but indexed by id only.
+  const neighbors = new Map();
+  const ensure = (id) => { if (!neighbors.has(id)) neighbors.set(id, new Set()); };
+  s.devices.forEach((d) => ensure(d.id));
+  (s.stacks || []).forEach((st) => ensure(st.id));
+  (s.links || []).forEach((l) => {
+    if (!l.from || !l.to || l.from === l.to) return;
+    ensure(l.from); ensure(l.to);
+    neighbors.get(l.from).add(l.to);
+    neighbors.get(l.to).add(l.from);
+  });
+  (s.stacks || []).forEach((st) => {
+    (st.members || []).forEach((mid) => {
+      ensure(st.id); ensure(mid);
+      neighbors.get(st.id).add(mid);
+      neighbors.get(mid).add(st.id);
+    });
+  });
+  const ctx = { filter, filterKey: filter.join('|'), carrier, neighbors, stackOfMember };
+  s._subnetSoloCtx = ctx;
+  return ctx;
+}
+
+function subnetSoloStateForDevice(s, dev) {
+  const ctx = subnetSoloCtx(s);
+  if (!ctx) return null;
+  if (ctx.carrier.has(dev.id)) return 'matched';
+  // A member of a matched stack inherits the stack's state — otherwise an
+  // expanded VIP'd stack would light up while its switch members read as
+  // dim, contradicting the envelope around them.
+  const owningStack = ctx.stackOfMember.get(dev.id);
+  if (owningStack && ctx.carrier.has(owningStack)) return 'matched';
+  const adj = ctx.neighbors.get(dev.id);
+  if (adj) for (const nid of adj) if (ctx.carrier.has(nid)) return 'unmatched-adjacent';
+  return 'unmatched-isolated';
+}
+
+function subnetSoloStateForStack(s, stack) {
+  const ctx = subnetSoloCtx(s);
+  if (!ctx) return null;
+  if (ctx.carrier.has(stack.id)) return 'matched';
+  // Member-level match folds back up onto the stack so the envelope and
+  // collapsed icon stay in sync with their members.
+  if ((stack.members || []).some((mid) => ctx.carrier.has(mid))) return 'matched';
+  for (const mid of (stack.members || [])) {
+    const adj = ctx.neighbors.get(mid);
+    if (!adj) continue;
+    for (const nid of adj) if (ctx.carrier.has(nid)) return 'unmatched-adjacent';
+  }
+  return 'unmatched-isolated';
+}
+
+// Link-level routing-solo: matched when both endpoints participate in any
+// soloed subnet, dim otherwise. Stacks fold to their member ids transparently
+// — link.from/to already carry device ids so we resolve through the stack
+// relationship for collapsed-stack endpoints.
+function linkRoutingSoloDim(s, link) {
+  const ctx = subnetSoloCtx(s);
+  if (!ctx) return false;
+  const isMatched = (id) => {
+    if (!id) return false;
+    if (ctx.carrier.has(id)) return true;
+    const stk = ctx.stackOfMember.get(id);
+    return stk ? ctx.carrier.has(stk) : false;
+  };
+  return !(isMatched(link.from) && isMatched(link.to));
+}
+
 function portLabel(dev, portN) {
   const p = dev?.ports.find((pp) => String(pp.n) === String(portN));
   if (!p) return '?';
@@ -5471,6 +5620,7 @@ function drawLink(s, link) {
         }
         inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
       } else if (layer === 'routing') {
+        if (linkRoutingSoloDim(s, link)) g.classList.add('m002-link-rsolo-dim');
         inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
       } else {
         inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.8, gap: 5, lane, s, excludeIds: excl, hubInfo: forced });
@@ -5544,6 +5694,7 @@ function drawLink(s, link) {
     // m002-l3-paths layer floating above. Suppressing the LAG double-line
     // here avoids stacking it under the L3 ribbon and producing four
     // parallel highlights between two collapsed stacks.
+    if (linkRoutingSoloDim(s, link)) g.classList.add('m002-link-rsolo-dim');
     inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#2a2a36" stroke-dasharray="4 3"/>`;
   } else {
     inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8"/>`;
@@ -9100,6 +9251,8 @@ function render(s) {
   // VLAN-solo per-render context cache — drop so neighbor + carrier maps
   // rebuild against the current device/link snapshot.
   s._vlanSoloCtx = null;
+  // Same story for the routing-layer subnet-solo context.
+  s._subnetSoloCtx = null;
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
