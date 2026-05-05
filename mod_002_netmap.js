@@ -4116,9 +4116,13 @@ function findStackById(s, stackId) {
   return s.stacks.find((st) => st.id === stackId) || null;
 }
 // In logical layers (vlan/routing) the stack is always one entity. In Physical
-// the stack respects its `expanded` flag.
+// the stack respects its `expanded` flag. Routing-solo additionally force-
+// collapses stacks that don't participate in the soloed subnet — that override
+// is held in a transient set so it never mutates the persisted expanded flag,
+// which means the user's manual expand-state survives a filter cycle untouched.
 function isStackCollapsed(s, stack) {
   if (!stack) return false;
+  if (s?._soloCollapsedIds?.has(stack.id)) return true;
   return !stack.expanded;
 }
 // Where to anchor a link on this device — the device itself, or the stack icon
@@ -4712,7 +4716,16 @@ function updateStackLinkField(s, stackId, slId, field, value) {
 function toggleStackExpanded(s, stackId) {
   const st = findStackById(s, stackId);
   if (!st) return;
-  st.expanded = !st.expanded;
+  // If routing-solo had this stack force-collapsed, the user's click reads
+  // as "I want this open regardless" — drop the override and force-expand,
+  // skipping the underlying flip (st.expanded was still true when solo hid
+  // it, and a flip there would do the wrong thing on the next click cycle).
+  if (s._soloCollapsedIds?.has(stackId)) {
+    s._soloCollapsedIds.delete(stackId);
+    st.expanded = true;
+  } else {
+    st.expanded = !st.expanded;
+  }
   const devs = st.members.map((id) => s.devices.find((d) => d.id === id)).filter(Boolean);
   // Heal sub-grid positions left behind by older versions of this code
   // (v2.33.44–v2.33.49 transient stages, where the recenter-on-expand pass
@@ -5664,6 +5677,49 @@ function subnetSoloStateForStack(s, stack) {
     for (const nid of adj) if (ctx.carrier.has(nid)) return 'unmatched-adjacent';
   }
   return 'unmatched-isolated';
+}
+
+// Force-collapse stacks that don't participate in the soloed subnet so their
+// members stop cluttering the view — the L3 read becomes "only the boxes
+// that are part of this network are open". Driven off the PERSISTED filter
+// (s.view.subnetFilter) only, NOT the hover-inclusive effective filter, so
+// scrubbing through legend rows previews dimming without thrashing every
+// stack open and shut. Restores cleanly when the filter clears, when the
+// user un-solos the last subnet, or when leaving the routing layer — by
+// design the override lives in a transient set, not in persisted st.expanded,
+// so manual expand-state survives the cycle untouched.
+function applySubnetSoloStackCollapse(s) {
+  if (!s._soloCollapsedIds) s._soloCollapsedIds = new Set();
+  if (s.activeLayer !== 'routing') {
+    s._soloCollapsedIds.clear();
+    s._soloCollapseFilterKey = null;
+    return;
+  }
+  const filter = (s.view?.subnetFilter || []).map(String);
+  const key = filter.join('|');
+  // Only rebuild on actual filter change. Otherwise this fires on every
+  // render (drag, layer toggle, manual stack expand, etc) and would re-add
+  // a stack the user just manually expanded — fighting their click.
+  if (s._soloCollapseFilterKey === key) return;
+  s._soloCollapseFilterKey = key;
+  if (!filter.length) { s._soloCollapsedIds.clear(); return; }
+  const filterSet = new Set(filter);
+  const stackParticipates = (st) => {
+    if (stackSubnets(s, st).some((sn) => filterSet.has(String(sn.id)))) return true;
+    return (st.members || []).some((mid) => {
+      const m = s.devices.find((d) => d.id === mid);
+      if (!m) return false;
+      return deviceSubnets(s, m).some((sn) => filterSet.has(String(sn.id)));
+    });
+  };
+  const next = new Set();
+  (s.stacks || []).forEach((st) => {
+    if (!st || (st.members || []).length < 2) return;
+    if (!st.expanded) return; // already collapsed by user — no override needed
+    if (stackParticipates(st)) return;
+    next.add(st.id);
+  });
+  s._soloCollapsedIds = next;
 }
 
 // Link-level routing-solo: matched when both endpoints participate in any
@@ -9510,6 +9566,11 @@ function render(s) {
   s._vlanSoloCtx = null;
   // Same story for the routing-layer subnet-solo context.
   s._subnetSoloCtx = null;
+  // Recompute which stacks the routing-solo filter forces collapsed before
+  // anything reads isStackCollapsed below. Called every render so a filter
+  // change (legend click / clear / layer toggle / hydrate) immediately
+  // produces the right collapse-state without separate wiring per call site.
+  applySubnetSoloStackCollapse(s);
   s.gStacksBg.innerHTML = '';
   s.gDevices.innerHTML = '';
   s.gLinks.innerHTML = '';
