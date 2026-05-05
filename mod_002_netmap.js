@@ -455,9 +455,11 @@ function renderLegend(s) {
       if (idx >= 0) s.view.vlanFilter.splice(idx, 1);
       else s.view.vlanFilter.push(v);
       s._vlanHover = null;
-      render(s);
+      animateSoloToggle(s);
       schedSave(s);
     });
+    // Hover preview is intentionally instant — animating every mouseenter would
+    // make sweeping the legend strobe drain/build clones across the canvas.
     row.addEventListener('mouseenter', () => {
       const v = String(row.dataset.vsolo);
       if (s._vlanHover === v) return;
@@ -475,7 +477,7 @@ function renderLegend(s) {
     clearBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       s.view.vlanFilter = [];
-      render(s);
+      animateSoloToggle(s);
       schedSave(s);
     });
   }
@@ -567,9 +569,10 @@ function renderSubnetLegend(s) {
       if (idx >= 0) s.view.subnetFilter.splice(idx, 1);
       else s.view.subnetFilter.push(id);
       s._subnetHover = null;
-      render(s);
+      animateSoloToggle(s);
       schedSave(s);
     });
+    // Hover preview stays instant for the same reason as VLAN-solo above.
     row.addEventListener('mouseenter', () => {
       const id = String(row.dataset.ssolo);
       if (s._subnetHover === id) return;
@@ -585,7 +588,7 @@ function renderSubnetLegend(s) {
   body.querySelector('[data-sclear]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     s.view.subnetFilter = [];
-    render(s);
+    animateSoloToggle(s);
     schedSave(s);
   });
 }
@@ -1924,6 +1927,13 @@ function buildDOM(s) {
     // so its `before` snapshot still sees the OLD active-layer CSS context.
     // That's required for the persisting-element overlay-drain to freeze
     // the pre-transition look.
+    // Sequential timing — drain old layer fully, THEN build new layer. The
+    // parallel default cross-faded persisting-changed elements (e.g. non-L3
+    // devices dimming on entry into Routing) which read as "morph" instead
+    // of "swap"; sequential makes the layer change feel like a deliberate
+    // context shift. Generous easing on both halves — easeIn on drain so the
+    // exit accelerates into emptiness, easeOutCubic on build so the new look
+    // settles in instead of snapping.
     vfxAnimateView(s, () => {
       s.activeLayer = pill.dataset.layer;
       s.host.setAttribute('data-active-layer', s.activeLayer);
@@ -1972,6 +1982,12 @@ function buildDOM(s) {
         s._routingAutoExpanded = null;
       }
       render(s);
+    }, null, {
+      mode: 'sequential',
+      drainMs: VFX_LAYER_DRAIN_MS,
+      buildMs: VFX_LAYER_BUILD_MS,
+      drainEase: vfxEaseInQuad,
+      buildEase: vfxEaseOutCubic,
     });
   });
   s.activeLayer = 'physical';
@@ -8788,6 +8804,18 @@ function deletePort(s, deviceId, portN) {
 
 const VFX_DRAIN_MS = 620;
 
+// Sequential-mode presets — drain phase fully completes before build phase
+// starts, so persisting-changed elements never visually cross-fade. Two
+// flavours, each tuned to the scale of the change:
+//   layer   : full context shift (Physical ↔ VLAN ↔ Routing) — ceremonial,
+//             generous easing, clearly readable as "old goes away, new comes in"
+//   solo    : focus narrow/widen (VLAN-solo, Subnet-solo) — snappier, decisive,
+//             meant to feel like a hard refocus rather than a paradigm switch
+const VFX_LAYER_DRAIN_MS = 320;
+const VFX_LAYER_BUILD_MS = 380;
+const VFX_SOLO_DRAIN_MS  = 220;
+const VFX_SOLO_BUILD_MS  = 280;
+
 const VFX_GROUPS = [
   // Links (paths)
   { container: 'gLinks',    selector: '[data-link-id]',                       idAttr: 'data-link-id' },
@@ -8803,6 +8831,25 @@ const VFX_GROUPS = [
 ];
 
 function vfxEaseInOutQuad(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; }
+function vfxEaseInQuad(t)    { return t * t; }
+function vfxEaseOutQuad(t)   { return 1 - (1 - t) * (1 - t); }
+function vfxEaseOutCubic(t)  { return 1 - Math.pow(1 - t, 3); }
+
+// Solo-toggle entry point — VLAN solo, Subnet solo, and their CLEAR buttons
+// all funnel through here so they share one preset (snappier than layer
+// switches, but still sequential — the user reads "old fades out, new fades
+// in" instead of a cross-fade morph). Hover preview keeps the plain render
+// path because animating every mouseenter would strobe drain/build clones
+// across the canvas during a legend sweep.
+function animateSoloToggle(s) {
+  vfxAnimateView(s, () => render(s), null, {
+    mode: 'sequential',
+    drainMs: VFX_SOLO_DRAIN_MS,
+    buildMs: VFX_SOLO_BUILD_MS,
+    drainEase: vfxEaseInQuad,
+    buildEase: vfxEaseOutQuad,
+  });
+}
 
 function vfxSnapshot(s, freeze) {
   const map = new Map();
@@ -9412,7 +9459,21 @@ function vfxCentroid(snapshot) {
   return n > 0 ? { x: cx / n, y: cy / n } : null;
 }
 
-function vfxAnimateView(s, doRender, anchor) {
+// opts (all optional):
+//   mode        : 'parallel' (default — drain + build overlap on one timeline,
+//                  used by zone hops where the camera pan masks the cross-fade)
+//                 'sequential' — drain runs to completion FIRST, then build
+//                  starts. Eliminates the visual cross-fade that made
+//                  persisting-changed elements look like they "morphed"
+//                  instead of leaving + arriving. Required for view-mode
+//                  changes (Physical/VLAN/Routing) and Solo-toggles where
+//                  the user reads the transition as a deliberate switch.
+//   drainMs     : drain phase duration (default VFX_DRAIN_MS for parallel,
+//                  preset-specific for sequential — see VFX_LAYER_*/VFX_SOLO_*)
+//   buildMs     : build phase duration (sequential only)
+//   drainEase   : easing for drain progress (default vfxEaseInOutQuad)
+//   buildEase   : easing for build progress (default vfxEaseInOutQuad)
+function vfxAnimateView(s, doRender, anchor, opts) {
   if (!s.gExits) { doRender(); return; }
   // A prior transition may still be mid-flight: build elements carry inline
   // opacity / dasharray that would poison the next `before` snapshot's digest
@@ -9423,6 +9484,13 @@ function vfxAnimateView(s, doRender, anchor) {
   if (s._vfxFinish) s._vfxFinish();
   // Wipe any in-flight clones from a previous switch so we don't stack them.
   s.gExits.innerHTML = '';
+
+  const o = opts || {};
+  const sequential = o.mode === 'sequential';
+  const drainMs    = Math.max(1, o.drainMs ?? VFX_DRAIN_MS);
+  const buildMs    = Math.max(1, o.buildMs ?? VFX_DRAIN_MS);
+  const drainEase  = o.drainEase || vfxEaseInOutQuad;
+  const buildEase  = o.buildEase || vfxEaseInOutQuad;
   // BEFORE: freeze=true stamps the BRIGHT layer's look as inline styles on
   // the live elements so the about-to-be-cloned drain shapes survive the
   // layer flip without picking up the new layer's dim CSS treatment.
@@ -9530,10 +9598,16 @@ function vfxAnimateView(s, doRender, anchor) {
   // call it before snapshotting, ensuring the digest reads CSS-derived values
   // instead of mid-fade inline noise.
   let finished = false;
+  let drainsRemoved = false;
+  function removeDrainClones() {
+    if (drainsRemoved) return;
+    drainsRemoved = true;
+    for (const d of drains) d.clone.remove();
+  }
   function finish() {
     if (finished) return;
     finished = true;
-    for (const d of drains) d.clone.remove();
+    removeDrainClones();
     for (const b of builds) {
       vfxResetInlineParts(b.parts);
     }
@@ -9542,16 +9616,49 @@ function vfxAnimateView(s, doRender, anchor) {
   s._vfxFinish = finish;
 
   const start = performance.now();
-  function step(now) {
-    if (finished) return;
-    const t = Math.min(1, (now - start) / VFX_DRAIN_MS);
-    const e = vfxEaseInOutQuad(t);
-    for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
-    for (const b of builds) vfxApplyDrain(b.parts, 1 - e, 'build');
-    if (t < 1) { requestAnimationFrame(step); return; }
-    finish();
+  if (sequential) {
+    // Sequential timeline:
+    //   phase A (drain), 0..drainMs        — drain runs 0→1, builds stay at p=1 (empty)
+    //   phase B (build), drainMs..drain+buildMs — drains snap to finished + clones
+    //                                          removed, builds run 1→0
+    // Net effect: the old element fully vanishes BEFORE the new element begins
+    // to materialise. Persisting-changed elements (e.g. a non-L3 device dimming
+    // when entering Routing) read as a clean swap instead of a cross-fade morph.
+    const totalMs = drainMs + buildMs;
+    function step(now) {
+      if (finished) return;
+      const elapsed = now - start;
+      if (elapsed < drainMs) {
+        const e = drainEase(Math.min(1, elapsed / drainMs));
+        for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
+        // Builds remain at p=1 (set in frame-0 paint above) — no per-frame cost.
+        requestAnimationFrame(step);
+        return;
+      }
+      // Crossed into build phase. Snap drains to fully drained + drop clones
+      // exactly once so they don't keep eating per-frame work or paint.
+      if (!drainsRemoved) {
+        for (const d of drains) vfxApplyDrain(d.parts, 1, 'drain');
+        removeDrainClones();
+      }
+      if (elapsed >= totalMs) { finish(); return; }
+      const e = buildEase(Math.min(1, (elapsed - drainMs) / buildMs));
+      for (const b of builds) vfxApplyDrain(b.parts, 1 - e, 'build');
+      requestAnimationFrame(step);
+    }
+    requestAnimationFrame(step);
+  } else {
+    function step(now) {
+      if (finished) return;
+      const t = Math.min(1, (now - start) / drainMs);
+      const e = drainEase(t);
+      for (const d of drains) vfxApplyDrain(d.parts, e, 'drain');
+      for (const b of builds) vfxApplyDrain(b.parts, 1 - e, 'build');
+      if (t < 1) { requestAnimationFrame(step); return; }
+      finish();
+    }
+    requestAnimationFrame(step);
   }
-  requestAnimationFrame(step);
 }
 
 // =============================================================================
