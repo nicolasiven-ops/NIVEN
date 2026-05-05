@@ -2015,6 +2015,32 @@ function buildDOM(s) {
   // The dblclick handler above still gets the *bg* exit because [data-detail-stop]
   // sits on both ports and the device, so neither single-click bubbles into bg.
   detailOverlay?.addEventListener('click', (e) => {
+    // 0. Pagination click — prev/next on the endpoint-row overflow control.
+    //    Stamps live on the inner button <g>; the closest() picks them up
+    //    even when the click lands on the glyph or hit-rect inside.
+    const pagEl = e.target.closest('[data-detail-pag-action]');
+    if (pagEl && s.detailDeviceId && !pagEl.classList.contains('is-disabled')) {
+      const action = pagEl.dataset.detailPagAction;
+      const cur = s.detailEndpointPage || 0;
+      // Re-derive the page count from the device — the click handler is
+      // the source of truth for page bounds, the markup just renders what
+      // the frame computed.
+      const dev = s.devices.find((d) => d.id === s.detailDeviceId);
+      if (!dev) return;
+      const accessConn = (dev.ports || [])
+        .map((p) => classifyDetailPort(s, dev, p.n))
+        .filter((info) => info.kind === 'access' && info.peer);
+      const uniquePeers = new Set(accessConn.map((info) => info.peer.id));
+      const pages = Math.max(1, Math.ceil(uniquePeers.size / ENDPOINT_PAGE_SIZE));
+      let next = cur;
+      if (action === 'prev') next = Math.max(0, cur - 1);
+      else if (action === 'next') next = Math.min(pages - 1, cur + 1);
+      if (next !== cur) {
+        s.detailEndpointPage = next;
+        renderDetailView(s);
+      }
+      return;
+    }
     // 1. Peer-tile click — Position-Swap hop to the peer device. Peer
     //    tiles still carry data-detail-peer-id (centre tile carries
     //    data-detail-center instead) so a closest() on this attribute
@@ -2023,6 +2049,14 @@ function buildDOM(s) {
     if (peerEl && s.detailDeviceId) {
       const peerId = peerEl.dataset.detailPeerId;
       hopToPeer(s, peerId, peerEl);
+      return;
+    }
+    // 1b. Endpoint-tile click — no-op for v1. The stamp exists so a future
+    //     iteration can hook a behaviour without touching the routing
+    //     skeleton; explicit early return keeps the click from bubbling
+    //     into the centre-tile fallback (which would re-select the centre
+    //     and confuse the user about what they just clicked).
+    if (e.target.closest('[data-detail-endpoint-id]') && s.detailDeviceId) {
       return;
     }
     // 2. Peer-link click — select the underlying link (same behaviour as
@@ -9870,6 +9904,11 @@ function enterDetailView(s, deviceId) {
   }
   s._viewBeforeDetail = { x: s.view.x, y: s.view.y, zoom: s.view.zoom };
   s.detailDeviceId = deviceId;
+  // Reset endpoint pagination on every fresh detail-view entry so the user
+  // always sees page 1 when opening a new device. (Hops also reset — see
+  // hopToPeer.) The frame computation clamps to a valid range, so a stale
+  // value here is recoverable, but explicit reset is clearer.
+  s.detailEndpointPage = 0;
   const rect = s.svg.getBoundingClientRect();
   const targetZoom = DETAIL_TARGET_ZOOM;
   const targetX = rect.width / 2 - dev.x * targetZoom;
@@ -10001,6 +10040,16 @@ const DETAIL = {
   flipMs: 480,
 };
 
+// Endpoints (downstream end-devices reachable via access-kind ports) render
+// as full peer-style tiles below the centre, mirroring the uplink-peer row
+// above. ENDPOINT_PAGE_SIZE keeps the row visually calm when a switch hosts
+// many endpoints — surplus rolls onto subsequent pages reachable via the
+// prev/next pagination control. 6 hits the sweet spot: a small home network
+// (≤6 endpoints) gets one calm page, a 24-port switch gets 4 pages, and the
+// row is wide enough to feel substantial against the centre tile but narrow
+// enough not to overshoot the typical viewport.
+const ENDPOINT_PAGE_SIZE = 6;
+
 // Compact peer label that fits a small port box (e.g. SWITCH-02 → "S2",
 // ENDPOINT-01 → "E1", ROUTER-01 → "R1", JUMP → "J"). Falls back to first
 // initial when the peer name has no numeric suffix.
@@ -10052,7 +10101,36 @@ function renderDetailView(s) {
 function computeDetailFrame(s, dev) {
   const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
   const uplinks = cls.filter((c) => c.info.kind === 'uplink');
-  const access  = cls.filter((c) => c.info.kind === 'access');
+
+  // Endpoint connections — access-kind ports that link to a peer (which the
+  // classifier guarantees is type==='endpoint'). Dedupe by peer.id so a
+  // multi-port LAG to the same endpoint produces ONE tile, not N. Sort by
+  // each endpoint group's lowest port number so the row reads in physical-
+  // port order. Free (unconnected) access ports are tracked separately as a
+  // count surfaced via the FREE indicator.
+  const endpointMap = new Map();
+  cls.filter((c) => c.info.kind === 'access' && c.info.peer).forEach((c) => {
+    const id = c.info.peer.id;
+    const existing = endpointMap.get(id);
+    if (existing) {
+      existing.ports.push(c);
+      existing.firstPortN = Math.min(existing.firstPortN, c.p.n);
+    } else {
+      endpointMap.set(id, { peer: c.info.peer, ports: [c], firstPortN: c.p.n });
+    }
+  });
+  const endpointOrder = Array.from(endpointMap.values())
+    .sort((a, b) => a.firstPortN - b.firstPortN);
+  const freePortCount = cls.filter((c) => c.info.kind === 'access' && !c.info.peer).length;
+
+  // Page-clamp — s.detailEndpointPage may be stale (port edits can shrink
+  // the page count below the current page). Clamp to a valid range first.
+  const endpointPageCount = Math.max(1, Math.ceil(endpointOrder.length / ENDPOINT_PAGE_SIZE));
+  const endpointPage = Math.max(0, Math.min(endpointPageCount - 1, s.detailEndpointPage || 0));
+  const endpointSlice = endpointOrder.slice(
+    endpointPage * ENDPOINT_PAGE_SIZE,
+    (endpointPage + 1) * ENDPOINT_PAGE_SIZE
+  );
 
   // Unique uplink peers, in port-order (so LAG'd ports group naturally).
   const peerOrder = [];
@@ -10065,28 +10143,30 @@ function computeDetailFrame(s, dev) {
   const D = DETAIL;
   const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
   const upCount = Math.min(D.maxCols, uplinks.length);
-  const acCols  = Math.min(D.maxCols, Math.max(1, access.length));
-  const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
   const upW     = rowW(upCount);
-  const acW     = access.length ? rowW(acCols) : 0;
 
   const peerCount = peerOrder.length;
   const peerRowW  = peerCount ? peerCount * D.tile.w + (peerCount - 1) * D.peerGap : 0;
   const centerW   = D.tile.w * D.centerScale;
   const centerH   = D.tile.h * D.centerScale;
 
-  const innerW = Math.max(centerW, peerRowW, upW, acW);
+  const endpointCount = endpointSlice.length;
+  const endpointRowW  = endpointCount ? endpointCount * D.tile.w + (endpointCount - 1) * D.peerGap : 0;
+  const showPagination   = endpointPageCount > 1;
+  const showFreePortText = freePortCount > 0;
+  const showOverflowRow  = showPagination || showFreePortText;
+
+  const innerW = Math.max(centerW, peerRowW, upW, endpointRowW);
   const totalW = innerW + D.pad * 2;
 
-  const STUB_LEN = (D.vgap - 8) * 5;
-  const stubPad  = STUB_LEN + 12;
   const upPad    = D.pad;
-  const dnPad    = access.length ? Math.max(D.pad, stubPad) : D.pad;
+  const dnPad    = D.pad;
 
   const peerRowH = peerCount ? D.tile.h + D.peerLinkGap : 0;
   const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
-  const acRowsH  = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
-  const totalH   = upPad + peerRowH + upRowH + centerH + acRowsH + dnPad;
+  const endpointRowH = endpointCount ? D.peerLinkGap + D.tile.h : 0;
+  const overflowRowH = showOverflowRow ? 28 : 0;
+  const totalH   = upPad + peerRowH + upRowH + centerH + endpointRowH + overflowRowH + dnPad;
 
   const cx = totalW / 2;
   const peerRowTopY = upPad;
@@ -10094,9 +10174,13 @@ function computeDetailFrame(s, dev) {
   const upY      = peerRowTopY + peerRowH;
   const centerTopY = upY + upRowH;
   const centerY = centerTopY + centerH / 2;
-  const acStartY = centerTopY + centerH + D.vgap;
+  const centerBottomY = centerTopY + centerH;
+  const endpointTopY = centerBottomY + (endpointCount ? D.peerLinkGap : 0);
+  const endpointCenterY = endpointTopY + D.tile.h / 2;
+  const endpointBottomY = endpointTopY + (endpointCount ? D.tile.h : 0);
+  const overflowY = (endpointCount ? endpointBottomY : centerBottomY) + 18;
 
-  // Tile slots: centre first, peers in left-to-right order.
+  // Tile slots: centre first, peers, then endpoints (current page only).
   const tilePositions = new Map();
   tilePositions.set(dev.id, {
     deviceId: dev.id,
@@ -10118,16 +10202,38 @@ function computeDetailFrame(s, dev) {
       });
     });
   }
+  if (endpointCount) {
+    const startX = cx - endpointRowW / 2;
+    endpointSlice.forEach((entry, i) => {
+      const ecx = startX + D.tile.w / 2 + i * (D.tile.w + D.peerGap);
+      tilePositions.set(entry.peer.id, {
+        deviceId: entry.peer.id,
+        role: 'endpoint',
+        x: ecx,
+        y: endpointCenterY,
+        scale: 1,
+        portN: entry.firstPortN,
+      });
+    });
+  }
+
+  const STUB_LEN = (D.vgap - 8) * 5;
 
   return {
     centerDev: dev,
-    cls, uplinks, access,
+    cls, uplinks,
     peerOrder,
+    endpointOrder, endpointSlice, endpointPage, endpointPageCount,
+    freePortCount, showPagination, showFreePortText,
     tilePositions,
     totalW, totalH,
-    cx, upY, acStartY,
-    upW, acRows,
+    cx, upY, centerBottomY, endpointTopY, endpointRowW, overflowY,
+    upW,
     STUB_LEN,
+    // Backward-compat fields — renderDetailPortsMarkup short-circuits on
+    // empty access; keeps callers stable if any future code path still
+    // reads these.
+    access: [], acRows: 0, acStartY: 0,
   };
 }
 
@@ -10146,6 +10252,7 @@ function syncDetailFrame(s, body, frame) {
         <g class="m002-detail-links-group"></g>
         <g class="m002-detail-tiles-group"></g>
         <g class="m002-detail-ports-group"></g>
+        <g class="m002-detail-overflow-group"></g>
       </svg>
     `;
     svg = body.querySelector('.m002-detail-svg');
@@ -10193,6 +10300,10 @@ function syncDetailFrame(s, body, frame) {
           <text class="m002-detail-tile-name" x="0" y="${-h/2 + 42}" text-anchor="middle"></text>
           <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}"></text>
           <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end"></text>
+          <g class="m002-detail-endpoint-badge" transform="translate(0 ${-h/2})">
+            <rect x="-20" y="-9" width="40" height="14" rx="2"/>
+            <text x="0" y="2" text-anchor="middle"></text>
+          </g>
         </g>
       `;
       tilesGroup.appendChild(tile);
@@ -10200,30 +10311,44 @@ function syncDetailFrame(s, body, frame) {
       existing.set(id, tile);
     }
     // Update role classes
-    tile.classList.toggle('is-center', pos.role === 'center');
-    tile.classList.toggle('is-peer',   pos.role === 'peer');
+    tile.classList.toggle('is-center',   pos.role === 'center');
+    tile.classList.toggle('is-peer',     pos.role === 'peer');
+    tile.classList.toggle('is-endpoint', pos.role === 'endpoint');
     // Selection state: centre is "selected" unless a port-modal is open
-    // for it; peers are selected when matching s.selected.
+    // for it; peers/endpoints are selected when matching s.selected.
     const isSelected = pos.role === 'center'
       ? (!s.portModalOpen || s.portModalOpen.deviceId !== id)
       : (s.selected?.kind === 'device' && s.selected.id === id);
     tile.classList.toggle('is-selected', isSelected);
-    // Click-routing stamps. Peers carry data-detail-peer-id; the centre
-    // carries data-detail-center. Both stamps survive role flips because
+    // Click-routing stamps. Peers carry data-detail-peer-id (triggers a hop);
+    // endpoints carry data-detail-endpoint-id (no-op for now per the v1
+    // design — placeholder for future click affordances); centre carries
+    // data-detail-center. Both stamps survive role flips because
     // syncDetailFrame is called BEFORE the slot positions are written, so
     // the click handler reads the new role from the stamp, not the slot.
+    delete tile.dataset.detailCenter;
+    delete tile.dataset.detailPeerId;
+    delete tile.dataset.detailEndpointId;
     if (pos.role === 'center') {
       tile.dataset.detailCenter = '1';
-      delete tile.dataset.detailPeerId;
+    } else if (pos.role === 'endpoint') {
+      tile.dataset.detailEndpointId = id;
     } else {
       tile.dataset.detailPeerId = id;
-      delete tile.dataset.detailCenter;
     }
     tile.style.setProperty('--accent', dt.accent);
     tile.querySelector('.m002-dev-type').textContent = dt.label;
     tile.querySelector('.m002-detail-tile-name').textContent = dev.name || '';
     tile.querySelector('.m002-dev-notes').textContent = truncate(dev.notes || '', 18) || '—';
     tile.querySelector('.m002-dev-ip').textContent = dev.ip || '';
+    // Endpoint port-number badge — populated only for endpoint role; the
+    // CSS hides the badge for non-endpoint roles, so writing/clearing here
+    // keeps DOM stable as a tile flips role across hops.
+    const badgeText = tile.querySelector('.m002-detail-endpoint-badge text');
+    if (badgeText) {
+      badgeText.textContent = (pos.role === 'endpoint' && Number.isFinite(pos.portN))
+        ? `P${pos.portN}` : '';
+    }
   }
   // Remove tiles no longer in scope (peer was uplinked from old centre,
   // but isn't an uplink of the new centre).
@@ -10233,10 +10358,12 @@ function syncDetailFrame(s, body, frame) {
 
   // Ports + links: cheap; rebuild from scratch each call. Their entry
   // animations replay via the .m002-detail-overlay-show CSS rules.
-  const portsGroup = svg.querySelector('.m002-detail-ports-group');
-  const linksGroup = svg.querySelector('.m002-detail-links-group');
+  const portsGroup    = svg.querySelector('.m002-detail-ports-group');
+  const linksGroup    = svg.querySelector('.m002-detail-links-group');
+  const overflowGroup = svg.querySelector('.m002-detail-overflow-group');
   portsGroup.innerHTML = renderDetailPortsMarkup(s, frame);
-  linksGroup.innerHTML = renderDetailLinksMarkup(s, frame);
+  linksGroup.innerHTML = renderDetailLinksMarkup(s, frame) + renderDetailEndpointLinksMarkup(s, frame);
+  if (overflowGroup) overflowGroup.innerHTML = renderDetailOverflowMarkup(s, frame);
 
   return { newIds };
 }
@@ -10431,6 +10558,91 @@ function renderDetailLinksMarkup(s, frame) {
   return out.join('');
 }
 
+// Endpoint links — mirror of peer-link rendering, but bottom-up. Each
+// endpoint tile in the visible page gets one wire originating from the
+// centre's bottom edge (x clamped to the centre silhouette so the wire
+// always emerges from the device, not from empty space) and ending at
+// the endpoint tile's top edge with a Z-bend through the midpoint. When
+// an endpoint is reached via multiple ports (LAG), the wire follows the
+// lowest port number's link object — that's the same port the endpoint
+// badge labels.
+function renderDetailEndpointLinksMarkup(s, frame) {
+  if (!frame.endpointSlice || !frame.endpointSlice.length) return '';
+  const D = DETAIL;
+  const t = typeOf(frame.centerDev.type);
+  const cx = frame.cx;
+  const centerHalfW = (D.tile.w * D.centerScale) / 2;
+  // Inset the wire-origin clamp so wires don't kiss the rounded corners
+  // of the centre tile — 14px feels like the wire emerges from the body,
+  // not the perimeter.
+  const inset = 14;
+  const out = [];
+  frame.endpointSlice.forEach((entry) => {
+    const peer = entry.peer;
+    const tilePos = frame.tilePositions.get(peer.id);
+    if (!tilePos) return;
+    const firstC = entry.ports[0];
+    const linkObj = firstC ? firstC.info.link : null;
+    if (!linkObj) return;
+    const tileCx = tilePos.x;
+    const wireOriginX = Math.max(cx - centerHalfW + inset, Math.min(cx + centerHalfW - inset, tileCx));
+    const wireOriginY = frame.centerBottomY;
+    const tileTopY = tilePos.y - D.tile.h / 2;
+    const midY = (wireOriginY + tileTopY) / 2;
+    const d = `M ${wireOriginX} ${wireOriginY} V ${midY} H ${tileCx} V ${tileTopY}`;
+    const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
+    const firstV = (firstC.p.vlans || [])[0];
+    const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
+    out.push(
+      `<g class="m002-link m002-detail-peer-link m002-detail-endpoint-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
+        <path class="m002-link-hit" d="${d}"/>
+        <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
+      </g>`
+    );
+  });
+  return out.join('');
+}
+
+// Overflow row — pagination control (when endpoints span multiple pages)
+// and the FREE-port indicator (when the centre has unconnected access
+// ports). Both are rebuilt every render; they're cheap and need to react
+// to s.detailEndpointPage edits without preserving DOM identity.
+function renderDetailOverflowMarkup(s, frame) {
+  if (!frame.showPagination && !frame.showFreePortText) return '';
+  const cx = frame.cx;
+  const y = frame.overflowY;
+  const out = [];
+
+  if (frame.showPagination) {
+    const canPrev = frame.endpointPage > 0;
+    const canNext = frame.endpointPage < frame.endpointPageCount - 1;
+    out.push(`
+      <g class="m002-detail-pagination" data-detail-stop="1">
+        <g class="m002-detail-pag-btn ${canPrev ? '' : 'is-disabled'}" data-detail-pag-action="prev" transform="translate(${cx - 60} ${y})">
+          <rect class="m002-detail-pag-hit" x="-13" y="-11" width="26" height="22" rx="2"/>
+          <text class="m002-detail-pag-glyph" x="0" y="4" text-anchor="middle">‹</text>
+        </g>
+        <text class="m002-detail-pag-indicator" x="${cx}" y="${y + 4}" text-anchor="middle">${frame.endpointPage + 1} / ${frame.endpointPageCount}</text>
+        <g class="m002-detail-pag-btn ${canNext ? '' : 'is-disabled'}" data-detail-pag-action="next" transform="translate(${cx + 60} ${y})">
+          <rect class="m002-detail-pag-hit" x="-13" y="-11" width="26" height="22" rx="2"/>
+          <text class="m002-detail-pag-glyph" x="0" y="4" text-anchor="middle">›</text>
+        </g>
+      </g>
+    `);
+  }
+
+  if (frame.showFreePortText) {
+    // Push FREE indicator clear of the pagination control when both are
+    // present; otherwise centre it.
+    const fpX = frame.showPagination ? cx + 150 : cx;
+    out.push(`
+      <text class="m002-detail-free-ports" x="${fpX}" y="${y + 4}" text-anchor="middle">FREE · ${frame.freePortCount}</text>
+    `);
+  }
+
+  return out.join('');
+}
+
 // Legacy entry-point kept for the few external callers still wired to the
 // old name; delegates to computeDetailFrame and projects out the four
 // fields the legacy callers actually used.
@@ -10565,6 +10777,9 @@ function hopToPeer(s, peerId, fromEl) {
   const performSyncAndFlip = () => {
     // Update state — focus + selection + title.
     s.detailDeviceId = peerId;
+    // Endpoints belong to the previous centre; reset paging so the new centre
+    // (which might have a different endpoint count entirely) opens on page 1.
+    s.detailEndpointPage = 0;
     if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
       select(s, 'device', peerId);
     }

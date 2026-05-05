@@ -1191,10 +1191,122 @@ input.m002-field-conflict,
   letter-spacing:.5px;
 }
 
+/* ============================================================================
+   Endpoint tiles (v2.35) — downstream end-devices reachable via access
+   ports. Same shape, size, and FLIP machinery as peer tiles, but positioned
+   below the centre and visually distinguished by a small "P{n}" port badge
+   sitting on the top edge (where the uplink wire enters from the centre).
+
+   Pop-in cascade is offset 40ms after the peer wave so the eye reads top
+   then bottom rather than both populations arriving simultaneously.
+   ============================================================================ */
+.m002-detail-overlay:not(.m002-detail-overlay-show) .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  transform:scale(0.6);
+  opacity:0;
+}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 720ms forwards;
+}
+.m002-detail-overlay-settled .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  animation:none!important;
+  transform:none!important;
+  opacity:1!important;
+}
+.m002-detail-tile.is-endpoint.is-selected .m002-detail-tile-bg{stroke-width:2;}
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  animation:m002-detail-port-suck 280ms cubic-bezier(0.4,0,1,1) 100ms forwards!important;
+  pointer-events:none;
+}
+
+/* Endpoint port-number badge — sits on the top edge of the tile where the
+   uplink wire enters. Hidden by default (so the same tile DOM survives
+   role flips into peer/centre slots without ghost text); shown only when
+   the tile is in the endpoint role. */
+.m002-detail-endpoint-badge{opacity:0;pointer-events:none;}
+.m002-detail-tile.is-endpoint .m002-detail-endpoint-badge{opacity:1;}
+.m002-detail-endpoint-badge rect{
+  fill:#0a0a10;
+  stroke:var(--accent);
+  stroke-width:1;
+}
+.m002-detail-endpoint-badge text{
+  font-family:'JetBrains Mono','Share Tech Mono',monospace;
+  font-size:10px;
+  letter-spacing:1px;
+  fill:#cfd2d8;
+  font-weight:600;
+}
+
+/* Endpoint link — wire from the centre's bottom edge to the endpoint
+   tile's top. Reuses the peer-link visual class for stroke styling and
+   inherits the entry fade; just needs the show-class entry hookup since
+   it's tagged with the same .m002-detail-peer-link class as uplinks. The
+   timing is the same wave (the show-rule already covers it). */
+
+/* Overflow row — pagination control + free-port indicator below the
+   endpoint row. Faded in slightly after the endpoint tiles land so the
+   row reads as "tiles first, controls afterwards". */
+.m002-detail-overlay .m002-detail-pagination,
+.m002-detail-overlay .m002-detail-free-ports{opacity:0;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-pagination,
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-free-ports{
+  animation:m002-detail-stub-fade 320ms ease-out forwards;
+  animation-delay:880ms;
+}
+.m002-detail-overlay-settled .m002-detail-pagination,
+.m002-detail-overlay-settled .m002-detail-free-ports{
+  animation:none!important;
+  opacity:1!important;
+}
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-pagination,
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-free-ports{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+
+.m002-detail-pag-btn{cursor:pointer;}
+.m002-detail-pag-btn .m002-detail-pag-hit{
+  fill:transparent;
+  stroke:#1a1a22;
+  stroke-width:1;
+  transition:fill .15s,stroke .15s;
+}
+.m002-detail-pag-btn:hover .m002-detail-pag-hit{
+  fill:rgba(255,0,60,0.06);
+  stroke:#ff003c;
+}
+.m002-detail-pag-btn.is-disabled{cursor:default;opacity:0.35;}
+.m002-detail-pag-btn.is-disabled:hover .m002-detail-pag-hit{
+  fill:transparent;
+  stroke:#1a1a22;
+}
+.m002-detail-pag-glyph{
+  font-family:'JetBrains Mono','Share Tech Mono',monospace;
+  font-size:14px;
+  fill:#cfd2d8;
+  font-weight:600;
+  pointer-events:none;
+}
+.m002-detail-pag-btn:hover .m002-detail-pag-glyph{fill:#ff003c;}
+.m002-detail-pag-indicator{
+  font-family:'JetBrains Mono','Share Tech Mono',monospace;
+  font-size:11px;
+  letter-spacing:1.6px;
+  fill:#9aa0a8;
+  font-weight:600;
+}
+.m002-detail-free-ports{
+  font-family:'JetBrains Mono','Share Tech Mono',monospace;
+  font-size:10px;
+  letter-spacing:1.8px;
+  fill:#5a5f6e;
+  font-weight:600;
+}
+
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port-inner{animation:none!important;}
-  .m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-link,.m002-detail-tile-inner{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-free-ports,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-free-ports{animation:none!important;}
+  .m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-link,.m002-detail-tile-inner,.m002-detail-pagination,.m002-detail-free-ports{transform:none!important;opacity:1!important;}
   .m002-detail-tile{transition:none!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
