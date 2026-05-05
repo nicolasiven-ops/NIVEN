@@ -1999,7 +1999,10 @@ function buildDOM(s) {
   // The dblclick handler above still gets the *bg* exit because [data-detail-stop]
   // sits on both ports and the device, so neither single-click bubbles into bg.
   detailOverlay?.addEventListener('click', (e) => {
-    // 1. Peer-tile click — Streetview hop to the peer device.
+    // 1. Peer-tile click — Position-Swap hop to the peer device. Peer
+    //    tiles still carry data-detail-peer-id (centre tile carries
+    //    data-detail-center instead) so a closest() on this attribute
+    //    cleanly differentiates a hop click from a centre re-focus.
     const peerEl = e.target.closest('[data-detail-peer-id]');
     if (peerEl && s.detailDeviceId) {
       const peerId = peerEl.dataset.detailPeerId;
@@ -2016,7 +2019,7 @@ function buildDOM(s) {
       detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
       linkEl.classList.add('m002-selected');
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
-      detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
+      detailOverlay.querySelector('.m002-detail-tile.is-center')?.classList.remove('is-selected');
       select(s, 'link', linkId);
       return;
     }
@@ -2029,17 +2032,17 @@ function buildDOM(s) {
       if (!Number.isFinite(portN)) return;
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
       detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
-      detailOverlay.querySelector('.m002-detail-device')?.classList.remove('is-selected');
+      detailOverlay.querySelector('.m002-detail-tile.is-center')?.classList.remove('is-selected');
       portEl.classList.add('is-selected');
       openPortModal(s, s.detailDeviceId, portN);
       return;
     }
-    // 4. Central-device click — drop port focus, reselect the central
+    // 4. Central-tile click — drop port focus, reselect the central
     //    element so the inspector shows device-level info.
-    if (e.target.closest('.m002-detail-device') && s.detailDeviceId) {
+    if (e.target.closest('[data-detail-center]') && s.detailDeviceId) {
       detailOverlay.querySelectorAll('.m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
       detailOverlay.querySelectorAll('.m002-detail-peer-link.m002-selected').forEach((el) => el.classList.remove('m002-selected'));
-      detailOverlay.querySelector('.m002-detail-device')?.classList.add('is-selected');
+      detailOverlay.querySelector('.m002-detail-tile.is-center')?.classList.add('is-selected');
       if (s.portModalOpen) closePortModal(s);
     }
   });
@@ -8728,7 +8731,7 @@ function closePortModal(s) {
   // the user came in via ESC or the back button rather than clicking the
   // central element. Drop the port highlight, restore the device's.
   s.host?.querySelectorAll('.m002-detail-overlay .m002-detail-port.is-selected').forEach((el) => el.classList.remove('is-selected'));
-  s.host?.querySelector('.m002-detail-overlay .m002-detail-device')?.classList.add('is-selected');
+  s.host?.querySelector('.m002-detail-overlay .m002-detail-tile.is-center')?.classList.add('is-selected');
   // Re-render the inspector for the underlying device. If the user has since
   // selected something else, openInspector picks the right body for that.
   if (s.selected) openInspector(s);
@@ -9773,15 +9776,25 @@ function classifyDetailPort(s, dev, portN) {
   return { kind: isUplink ? 'uplink' : 'access', occupied: true, peer, link };
 }
 
+// Unified tile dimensions. Every visible device in the Detail-View — the
+// central element AND every uplink peer — uses the same intrinsic 144×96
+// markup so a Position-Swap hop can animate the SAME DOM node between
+// slots without crossfading content. The center slot scales the tile up
+// via CSS to read as the "current focus"; peer slots stay 1×.
 const DETAIL = {
   port: { w: 44, h: 52 },
   gap: 6,
-  device: { w: 720, h: 180 },
-  // Peer-tile size and spacing for the row of "neighbour switches" rendered
-  // above the central element. Same dimensions as a grid device tile so the
-  // CSS classes (.m002-dev-bg / -type / -name / -notes / -ip) inherit
-  // identical typography and proportions — the user gets the same
-  // "this is a switch" visual language inside the detail view.
+  // Tile geometry — center and peers share these intrinsic dimensions.
+  // Scale factor differentiates the role: center renders at 1.875× (270×
+  // 180, matching the previous central element's height), peers at 1×
+  // (144×96, matching the previous peer-tile size).
+  tile: { w: 144, h: 96 },
+  centerScale: 1.875,
+  // Backwards-compat alias: a few grep-y references were kept for the
+  // legacy device-only call sites that still survive (e.g. computeDetail
+  // Layout in archived code paths). The .h field is the only thing
+  // queried; .w is unused now that tiles are uniform.
+  device: { w: 270, h: 180 },
   peer: { w: 144, h: 96 },
   peerGap: 28,
   // Vertical breathing room between the peer-tile row and the uplink-port
@@ -9791,6 +9804,12 @@ const DETAIL = {
   vgap: 32,
   pad: 48,
   maxCols: 24,
+  // FLIP transition timing for the position-swap hop. 480ms reads as a
+  // deliberate move (faster than the legacy 600ms WAAPI fly because the
+  // user's eye no longer has to bridge a fade-out/respawn gap); 0ms is
+  // applied via .m002-no-transition for the "set old position back"
+  // (INVERT) phase.
+  flipMs: 480,
 };
 
 // Compact peer label that fits a small port box (e.g. SWITCH-02 → "S2",
@@ -9803,6 +9822,25 @@ function abbrPeer(peer) {
   return head + (m ? m[1].replace(/^0+/, '') || m[1] : '');
 }
 
+// =============================================================================
+// Detail-View frame — managed-DOM rendering with persistent tiles.
+//   computeDetailFrame(s, dev)   — pure: returns positions for tiles, ports,
+//                                  links, and total SVG dimensions for `dev`
+//                                  as the centre.
+//   syncDetailFrame(s, frame)    — diff: ensures the SVG structure exists,
+//                                  creates new tile <g>s for first-time peers,
+//                                  removes tiles no longer in scope, leaves
+//                                  surviving tiles' DOM nodes untouched
+//                                  (their text content + selection class
+//                                  state get refreshed), rebuilds ports +
+//                                  links from scratch.
+//   applyDetailLayout(s, frame, opts)
+//                                — writes --layout-x/-y/-scale onto each
+//                                  tile so CSS positions it. With opts.flip,
+//                                  pre-captured oldRects drive the inverse
+//                                  transform that lets a paired rAF clear
+//                                  produce a smooth Position-Swap motion.
+// =============================================================================
 function renderDetailView(s) {
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (!overlay) return;
@@ -9813,65 +9851,21 @@ function renderDetailView(s) {
   if (titleEl) titleEl.textContent = `// ${t.label} · ${dev.name || '—'}`;
   const body = overlay.querySelector('.m002-detail-body');
   if (!body) return;
-  body.innerHTML = renderDetailBody(s, dev, t);
+  const frame = computeDetailFrame(s, dev);
+  syncDetailFrame(s, body, frame);
+  applyDetailLayout(s, frame, { animate: false });
 }
 
-// Mirror the layout calc inside renderDetailBody — but as a pure dimension
-// computation, no SVG markup. Lets the hop choreography pre-compute where
-// the new central device tile WILL be on screen after the body re-renders
-// for `dev`, so the WAAPI fly can land the survivor at exactly that future
-// position (no jump between morph-landing and central-element-render). The
-// peer-count / port-count of the target device shifts totalW + devY, which
-// in turn shifts the SVG's flex-centred screen position; landing at the
-// OLD device's position would leave a 10–60px gap.
-function computeDetailLayout(s, dev) {
-  const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
-  const uplinks = cls.filter((c) => c.info.kind === 'uplink');
-  const access  = cls.filter((c) => c.info.kind === 'access');
-  const peerOrder = [];
-  const peerSeen = new Set();
-  uplinks.forEach((c) => {
-    const peer = c.info.peer;
-    if (peer && !peerSeen.has(peer.id)) { peerSeen.add(peer.id); peerOrder.push(peer); }
-  });
-  const D = DETAIL;
-  const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
-  const upCount = Math.min(D.maxCols, uplinks.length);
-  const acCols  = Math.min(D.maxCols, Math.max(1, access.length));
-  const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
-  const upW     = rowW(upCount);
-  const acW     = access.length ? rowW(acCols) : 0;
-  const peerCount = peerOrder.length;
-  const peerRowW  = peerCount ? peerCount * D.peer.w + (peerCount - 1) * D.peerGap : 0;
-  const innerW  = Math.max(D.device.w, peerRowW, upW, acW);
-  const totalW  = innerW + D.pad * 2;
-  const STUB_LEN = (D.vgap - 8) * 5;
-  const stubPad  = STUB_LEN + 12;
-  const upPad    = D.pad;
-  const dnPad    = access.length  ? Math.max(D.pad, stubPad) : D.pad;
-  const peerRowH = peerCount ? D.peer.h + D.peerLinkGap : 0;
-  const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
-  const acRowsH  = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
-  const totalH   = upPad + peerRowH + upRowH + D.device.h + acRowsH + dnPad;
-  const cx       = totalW / 2;
-  const upY      = upPad + peerRowH;
-  const devY     = upY + upRowH;
-  return {
-    totalW, totalH,
-    cxUser: cx,
-    cyUserDevice: devY + D.device.h / 2,
-  };
-}
-
-function renderDetailBody(s, dev, t) {
+// Pure layout computation. Returns everything any consumer (sync, hop,
+// stand-alone external readers) might need. `tilePositions` is the source
+// of truth for slot assignment — its first entry is the centre, the rest
+// are the peer row in left-to-right display order.
+function computeDetailFrame(s, dev) {
   const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
   const uplinks = cls.filter((c) => c.info.kind === 'uplink');
   const access  = cls.filter((c) => c.info.kind === 'access');
 
-  // Unique peer devices among the uplinks, in port-order — the leftmost
-  // uplink port's peer becomes the leftmost peer-tile, which keeps the
-  // connecting links from criss-crossing in the common case (LAG'd ports go
-  // to the same peer, so they group naturally).
+  // Unique uplink peers, in port-order (so LAG'd ports group naturally).
   const peerOrder = [];
   const peerSeen = new Set();
   uplinks.forEach((c) => {
@@ -9886,55 +9880,246 @@ function renderDetailBody(s, dev, t) {
   const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
   const upW     = rowW(upCount);
   const acW     = access.length ? rowW(acCols) : 0;
-  const peerCount = peerOrder.length;
-  const peerRowW  = peerCount ? peerCount * D.peer.w + (peerCount - 1) * D.peerGap : 0;
-  const innerW  = Math.max(D.device.w, peerRowW, upW, acW);
-  const totalW  = innerW + D.pad * 2;
 
-  // Downward stub length for access ports (which still terminate at unrendered
-  // endpoints). Uplink ports no longer carry an upward stub — the connection
-  // is drawn explicitly as a link path to the peer-tile above.
+  const peerCount = peerOrder.length;
+  const peerRowW  = peerCount ? peerCount * D.tile.w + (peerCount - 1) * D.peerGap : 0;
+  const centerW   = D.tile.w * D.centerScale;
+  const centerH   = D.tile.h * D.centerScale;
+
+  const innerW = Math.max(centerW, peerRowW, upW, acW);
+  const totalW = innerW + D.pad * 2;
+
   const STUB_LEN = (D.vgap - 8) * 5;
   const stubPad  = STUB_LEN + 12;
   const upPad    = D.pad;
-  const dnPad    = access.length  ? Math.max(D.pad, stubPad) : D.pad;
+  const dnPad    = access.length ? Math.max(D.pad, stubPad) : D.pad;
 
-  const peerRowH = peerCount ? D.peer.h + D.peerLinkGap : 0;
+  const peerRowH = peerCount ? D.tile.h + D.peerLinkGap : 0;
   const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
   const acRowsH  = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
-  const totalH   = upPad + peerRowH + upRowH + D.device.h + acRowsH + dnPad;
+  const totalH   = upPad + peerRowH + upRowH + centerH + acRowsH + dnPad;
 
-  const cx     = totalW / 2;
-  const devX   = cx - D.device.w / 2;
+  const cx = totalW / 2;
   const peerRowTopY = upPad;
-  const peerCenterY = peerRowTopY + D.peer.h / 2;
-  const upY    = peerRowTopY + peerRowH;
-  const devY   = upY + upRowH;
-  const acStartY = devY + D.device.h + D.vgap;
+  const peerCenterY = peerRowTopY + D.tile.h / 2;
+  const upY      = peerRowTopY + peerRowH;
+  const centerTopY = upY + upRowH;
+  const centerY = centerTopY + centerH / 2;
+  const acStartY = centerTopY + centerH + D.vgap;
 
-  // Peer-tile center positions, keyed by peer.id, so the link router can
-  // resolve "which tile does this uplink point at" in O(1).
-  const peerPos = new Map();
+  // Tile slots: centre first, peers in left-to-right order.
+  const tilePositions = new Map();
+  tilePositions.set(dev.id, {
+    deviceId: dev.id,
+    role: 'center',
+    x: cx,
+    y: centerY,
+    scale: D.centerScale,
+  });
   if (peerCount) {
     const startX = cx - peerRowW / 2;
     peerOrder.forEach((peer, i) => {
-      const pcx = startX + D.peer.w / 2 + i * (D.peer.w + D.peerGap);
-      peerPos.set(peer.id, { cx: pcx, cy: peerCenterY });
+      const pcx = startX + D.tile.w / 2 + i * (D.tile.w + D.peerGap);
+      tilePositions.set(peer.id, {
+        deviceId: peer.id,
+        role: 'peer',
+        x: pcx,
+        y: peerCenterY,
+        scale: 1,
+      });
     });
   }
 
-  // Per-port enter delay (animation cascade). Ports now arrive synchronised
-  // with the peer-tile row above (peer-tile delay = 680ms in CSS), instead of
-  // waiting for the central element's horizontal expansion to finish — the
-  // user perceived "ports trail the navigation switches" when the gap was
-  // 380ms+, even though v2.33.45 had pulled the CSS default-delay down. This
-  // JS constant overrides the CSS default via inline --enter-delay style, so
-  // *this* number is what actually controls when ports pop. Stubs derive
-  // their delay from the parent port via a CSS calc() so they always come
-  // last on a port.
+  return {
+    centerDev: dev,
+    cls, uplinks, access,
+    peerOrder,
+    tilePositions,
+    totalW, totalH,
+    cx, upY, acStartY,
+    upW, acRows,
+    STUB_LEN,
+  };
+}
+
+// Tile DOM lifecycle. Surviving tiles keep their <g> node; removed tiles
+// are detached; new tiles are created in the tiles-group. Returns the
+// list of new tile-ids (so the hop can opt them into a fade-in instead of
+// a FLIP transition).
+function syncDetailFrame(s, body, frame) {
+  // Ensure structural skeleton — built once per body reuse, kept across
+  // re-renders + hops so tiles persist.
+  let svg = body.querySelector('.m002-detail-svg');
+  if (!svg) {
+    body.innerHTML = `
+      <svg class="m002-detail-svg" preserveAspectRatio="xMidYMid meet">
+        <defs class="m002-detail-defs"></defs>
+        <g class="m002-detail-links-group"></g>
+        <g class="m002-detail-tiles-group"></g>
+        <g class="m002-detail-ports-group"></g>
+      </svg>
+    `;
+    svg = body.querySelector('.m002-detail-svg');
+  }
+  svg.setAttribute('viewBox', `0 0 ${frame.totalW} ${frame.totalH}`);
+  svg.setAttribute('width',  frame.totalW);
+  svg.setAttribute('height', frame.totalH);
+
+  // Defs (gradient stubs) reflect the current centre's accent.
+  const t = typeOf(frame.centerDev.type);
+  const defs = svg.querySelector('.m002-detail-defs');
+  defs.innerHTML = `
+    <linearGradient id="m002-stub-up" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="${t.accent}" stop-opacity="0"/>
+      <stop offset="1" stop-color="${t.accent}" stop-opacity="0.55"/>
+    </linearGradient>
+    <linearGradient id="m002-stub-down" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0" stop-color="${t.accent}" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="${t.accent}" stop-opacity="0"/>
+    </linearGradient>
+  `;
+
+  // Tile diff
+  const tilesGroup = svg.querySelector('.m002-detail-tiles-group');
+  const existing = new Map();
+  tilesGroup.querySelectorAll('.m002-detail-tile').forEach((el) => {
+    existing.set(el.dataset.detailTileId, el);
+  });
+  const newIds = [];
+  for (const [id, pos] of frame.tilePositions) {
+    const dev = s.devices.find((d) => d.id === id);
+    if (!dev) continue;
+    const dt = typeOf(dev.type);
+    let tile = existing.get(id);
+    if (!tile) {
+      tile = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+      tile.setAttribute('class', 'm002-detail-tile m002-detail-fresh');
+      tile.dataset.detailTileId = id;
+      tile.dataset.detailStop = '1';
+      const w = DETAIL.tile.w, h = DETAIL.tile.h;
+      tile.innerHTML = `
+        <g class="m002-detail-tile-inner">
+          <rect class="m002-detail-tile-bg m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
+          <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}"></text>
+          <text class="m002-detail-tile-name" x="0" y="${-h/2 + 42}" text-anchor="middle"></text>
+          <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}"></text>
+          <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end"></text>
+        </g>
+      `;
+      tilesGroup.appendChild(tile);
+      newIds.push(id);
+      existing.set(id, tile);
+    }
+    // Update role classes
+    tile.classList.toggle('is-center', pos.role === 'center');
+    tile.classList.toggle('is-peer',   pos.role === 'peer');
+    // Selection state: centre is "selected" unless a port-modal is open
+    // for it; peers are selected when matching s.selected.
+    const isSelected = pos.role === 'center'
+      ? (!s.portModalOpen || s.portModalOpen.deviceId !== id)
+      : (s.selected?.kind === 'device' && s.selected.id === id);
+    tile.classList.toggle('is-selected', isSelected);
+    // Click-routing stamps. Peers carry data-detail-peer-id; the centre
+    // carries data-detail-center. Both stamps survive role flips because
+    // syncDetailFrame is called BEFORE the slot positions are written, so
+    // the click handler reads the new role from the stamp, not the slot.
+    if (pos.role === 'center') {
+      tile.dataset.detailCenter = '1';
+      delete tile.dataset.detailPeerId;
+    } else {
+      tile.dataset.detailPeerId = id;
+      delete tile.dataset.detailCenter;
+    }
+    tile.style.setProperty('--accent', dt.accent);
+    tile.querySelector('.m002-dev-type').textContent = dt.label;
+    tile.querySelector('.m002-detail-tile-name').textContent = dev.name || '';
+    tile.querySelector('.m002-dev-notes').textContent = truncate(dev.notes || '', 18) || '—';
+    tile.querySelector('.m002-dev-ip').textContent = dev.ip || '';
+  }
+  // Remove tiles no longer in scope (peer was uplinked from old centre,
+  // but isn't an uplink of the new centre).
+  existing.forEach((tile, id) => {
+    if (!frame.tilePositions.has(id)) tile.remove();
+  });
+
+  // Ports + links: cheap; rebuild from scratch each call. Their entry
+  // animations replay via the .m002-detail-overlay-show CSS rules.
+  const portsGroup = svg.querySelector('.m002-detail-ports-group');
+  const linksGroup = svg.querySelector('.m002-detail-links-group');
+  portsGroup.innerHTML = renderDetailPortsMarkup(s, frame);
+  linksGroup.innerHTML = renderDetailLinksMarkup(s, frame);
+
+  return { newIds };
+}
+
+// Apply tile positions via CSS variables. With opts.flip set to a Map of
+// pre-hop bounding rects, performs the FLIP invert: each surviving tile
+// gets --flip-dx/-dy/-scale set so it visually appears at its old screen
+// position, with .m002-no-transition forced; a paired rAF then clears the
+// FLIP vars and removes .m002-no-transition, kicking off the smooth
+// transition to the new position. Tiles flagged as `freshIds` skip the
+// invert (they're new — let them appear at their final position).
+function applyDetailLayout(s, frame, opts = {}) {
+  const tilesGroup = s.host.querySelector('.m002-detail-tiles-group');
+  if (!tilesGroup) return;
+  const tiles = tilesGroup.querySelectorAll('.m002-detail-tile');
+  // Pass 1 — write new layout for every tile (no animation, no transition
+  // for the brief moment we're computing the FLIP delta).
+  tiles.forEach((tile) => {
+    const pos = frame.tilePositions.get(tile.dataset.detailTileId);
+    if (!pos) return;
+    if (opts.flip) tile.classList.add('m002-no-transition');
+    tile.style.setProperty('--layout-x', pos.x + 'px');
+    tile.style.setProperty('--layout-y', pos.y + 'px');
+    tile.style.setProperty('--layout-scale', pos.scale);
+  });
+  if (!opts.flip) return;
+  // Pass 2 — for each tile that existed before, compute the inverse
+  // transform that brings it visually back to its old position.
+  tiles.forEach((tile) => {
+    const id = tile.dataset.detailTileId;
+    if (opts.freshIds && opts.freshIds.includes(id)) return;
+    const oldRect = opts.flip.get(id);
+    if (!oldRect) return;
+    const newRect = tile.getBoundingClientRect();
+    const dx = (oldRect.left + oldRect.width  / 2) - (newRect.left + newRect.width  / 2);
+    const dy = (oldRect.top  + oldRect.height / 2) - (newRect.top  + newRect.height / 2);
+    const ds = newRect.width > 0 ? oldRect.width / newRect.width : 1;
+    tile.style.setProperty('--flip-dx', dx + 'px');
+    tile.style.setProperty('--flip-dy', dy + 'px');
+    tile.style.setProperty('--flip-scale', ds);
+  });
+  // Pass 3 — rAF: enable transition, clear FLIP vars. The double rAF
+  // guards against browsers batching style writes within a single frame
+  // and skipping the transition entirely.
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => {
+      tiles.forEach((tile) => {
+        tile.classList.remove('m002-no-transition');
+        tile.style.removeProperty('--flip-dx');
+        tile.style.removeProperty('--flip-dy');
+        tile.style.removeProperty('--flip-scale');
+      });
+    });
+  });
+}
+
+// ============================================================================
+// Ports + links markup. Pure-string builders; called by syncDetailFrame to
+// rebuild the ports-group / links-group around the current centre. They no
+// longer carry the centre device's <g> (that's a tile now), so the markup
+// shrunk significantly compared to the legacy renderDetailBody.
+// ============================================================================
+function renderDetailPortsMarkup(s, frame) {
+  const D = DETAIL;
+  const t = typeOf(frame.centerDev.type);
+  const cx = frame.cx;
+
+  // Per-port enter delay (animation cascade).
   const PORT_BASE_DELAY = 700;
   const PORT_STAGGER_MS = 25;
   let portIndex = 0;
+  const STUB_LEN = frame.STUB_LEN;
 
   const portSvg = (entry, x, y, dir /* 'up' | 'down' */) => {
     const { p, info } = entry;
@@ -9945,9 +10130,6 @@ function renderDetailBody(s, dev, t) {
     const dash   = occ ? '' : ' stroke-dasharray="4 3"';
     const peerAbbr = (occ && info.peer) ? abbrPeer(info.peer) : '';
 
-    // Empty ports: show port name (truncated) instead of the index. No
-    // number — the index is implicit from grid position; the name is the
-    // user-meaningful identifier ("GE0/0/12").
     let labelSvg = '';
     if (occ) {
       const numY = peerAbbr ? D.port.h / 2 + 2 : D.port.h / 2 + 8;
@@ -9958,11 +10140,6 @@ function renderDetailBody(s, dev, t) {
       labelSvg += `<text class="m002-detail-port-name" x="${D.port.w / 2}" y="${D.port.h / 2 + 4}" text-anchor="middle">${escSvg(trimmed)}</text>`;
     }
 
-    // Stub: only on occupied access ports — those terminate at endpoints
-    // we don't render, so the gradient stub stands in for the unseen peer.
-    // Uplink ports get a real <path> link to a real peer-tile instead, so
-    // the upward stub is intentionally suppressed here to avoid drawing
-    // two visuals for the same connection.
     let stubSvg = '';
     if (occ && dir === 'down') {
       const stubW = 1.4;
@@ -9972,11 +10149,6 @@ function renderDetailBody(s, dev, t) {
 
     const enterDelay = PORT_BASE_DELAY + portIndex * PORT_STAGGER_MS;
     portIndex++;
-    // Inner-wrapper holds the visual content. We animate the inner group's
-    // transform (scale) without touching the outer's SVG `transform="translate"`,
-    // which is the only thing keeping the port at its grid position. Without
-    // this split, a CSS scale on the outer group would clobber the translate
-    // and the port would render at (0,0).
     const outerStyle = `--accent:${t.accent};--enter-delay:${enterDelay}ms;`;
     const innerStyle = `transform-origin:${D.port.w / 2}px ${D.port.h / 2}px;`;
 
@@ -9992,140 +10164,73 @@ function renderDetailBody(s, dev, t) {
     `;
   };
 
-  // Inline gradient defs for the port stubs — one fades from transparent at
-  // the page edge to solid where it meets the port; the other reverses. The
-  // stop-color uses the device's accent so the stubs visually tie to the
-  // central element.
-  let inner = `
-    <defs>
-      <linearGradient id="m002-stub-up" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0" stop-color="${t.accent}" stop-opacity="0"/>
-        <stop offset="1" stop-color="${t.accent}" stop-opacity="0.55"/>
-      </linearGradient>
-      <linearGradient id="m002-stub-down" x1="0" x2="0" y1="0" y2="1">
-        <stop offset="0" stop-color="${t.accent}" stop-opacity="0.55"/>
-        <stop offset="1" stop-color="${t.accent}" stop-opacity="0"/>
-      </linearGradient>
-    </defs>
-  `;
-
-  // Device box (centered). Marked .is-selected by default since entering the
-  // detail view selects the device — the click handler shifts the class to
-  // the active port when one is clicked, and back to the device on element
-  // click. Without this the central element looks dormant on entry.
-  // The inner <g> exists so CSS can apply a scale animation around the
-  // device's center on entry without fighting the parent's translate().
-  const nameY = dev.ip ? D.device.h / 2 + 4 : D.device.h / 2 + 10;
-  const ipY   = D.device.h / 2 + 36;
-  const devSelected = !s.portModalOpen || s.portModalOpen.deviceId !== dev.id;
-  const devInnerStyle = `transform-origin:${D.device.w / 2}px ${D.device.h / 2}px;`;
-  inner += `
-    <g class="m002-detail-device ${devSelected ? 'is-selected' : ''}" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
-      <g class="m002-detail-device-inner" style="${devInnerStyle}">
-        <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>
-        <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
-        ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
-      </g>
-    </g>
-  `;
-
-  // Peer-link paths — drawn before the peer-tiles and before the uplink ports
-  // so both visual endpoints (the tile bottom-edge and the port top-edge)
-  // paint over the line termini. Each occupied uplink port resolves to one
-  // peer-tile; multiple ports → same peer (LAG) produce parallel lines that
-  // converge at the same tile-bottom, which reads naturally as "this is a
-  // bonded pair". The path is a simple Z (down → across → down) — no
-  // obstacle avoidance needed because the detail-view layout is fixed and
-  // nothing else lives in the gap between tile-row and port-row.
-  const peerLinkSvgs = [];
-  if (uplinks.length) {
-    const portStartX = cx - upW / 2;
-    uplinks.slice(0, D.maxCols).forEach((c, i) => {
-      const peer = c.info.peer;
-      const linkObj = c.info.link;
-      const tilePos = peer ? peerPos.get(peer.id) : null;
-      if (!peer || !tilePos || !linkObj) return;
-      const portCx = portStartX + i * (D.port.w + D.gap) + D.port.w / 2;
-      const portTopY = upY;
-      const tileBottomY = tilePos.cy + D.peer.h / 2;
-      const tileCx = tilePos.cx;
-      const midY = (tileBottomY + portTopY) / 2;
-      const d = `M ${portCx} ${portTopY} V ${midY} H ${tileCx} V ${tileBottomY}`;
-      const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
-      // Stripe colour: VLAN-tinted if the port carries one, otherwise the
-      // device's accent — same precedence as the port stripe right below.
-      const firstV = (c.p.vlans || [])[0];
-      const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
-      // Two layered <path>s — invisible thick hit-area + visible thin line —
-      // mirrors how the grid does it (.m002-link-hit + .m002-link-line),
-      // so existing CSS for hover / selected lights up automatically.
-      peerLinkSvgs.push(
-        `<g class="m002-link m002-detail-peer-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
-          <path class="m002-link-hit" d="${d}"/>
-          <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
-        </g>`
-      );
+  const D2 = DETAIL;
+  const rowW = (n) => n <= 0 ? 0 : n * D2.port.w + (n - 1) * D2.gap;
+  let out = '';
+  if (frame.uplinks.length) {
+    const startX = cx - frame.upW / 2;
+    frame.uplinks.slice(0, D2.maxCols).forEach((c, i) => {
+      out += portSvg(c, startX + i * (D2.port.w + D2.gap), frame.upY, 'up');
     });
   }
-  inner += peerLinkSvgs.join('');
-
-  // Peer-tile row — one tile per unique uplink-peer device. The markup
-  // mirrors drawDevice() for a regular grid device so the existing
-  // .m002-dev-bg / -type / -name / -notes / -ip CSS picks them up
-  // unchanged, including the per-type accent via the --accent custom
-  // property. Inner wrapper exists for the hop morph (WAAPI on
-  // .m002-detail-peer-inner translates + scales without disturbing the
-  // outer's SVG translate that places the tile in the row).
-  if (peerCount) {
-    peerOrder.forEach((peer) => {
-      const pos = peerPos.get(peer.id);
-      const pt = typeOf(peer.type);
-      const w = D.peer.w, h = D.peer.h;
-      const isSel = s.selected?.kind === 'device' && s.selected.id === peer.id;
-      const ipText = peer.ip ? escSvg(peer.ip) : '';
-      const notesText = escSvg(truncate(peer.notes || '', 18) || '—');
-      inner += `
-        <g class="m002-detail-peer ${isSel ? 'is-selected' : ''}" data-detail-peer-id="${escAttr(peer.id)}" data-detail-stop="1" transform="translate(${pos.cx} ${pos.cy})" style="--accent:${pt.accent}">
-          <g class="m002-detail-peer-inner">
-            <rect class="m002-dev-bg" x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="3"/>
-            <text class="m002-dev-name" x="0" y="${-h / 2 + 30}" text-anchor="middle">${escSvg(peer.name || '')}</text>
-            <text class="m002-dev-notes" x="${-w / 2 + 10}" y="${h / 2 - 10}">${notesText}</text>
-            ${ipText ? `<text class="m002-dev-ip" x="${w / 2 - 10}" y="${h / 2 - 10}" text-anchor="end">${ipText}</text>` : ''}
-          </g>
-        </g>
-      `;
-    });
-  }
-
-  // Uplink row (centered above device)
-  if (uplinks.length) {
-    const startX = cx - upW / 2;
-    uplinks.slice(0, D.maxCols).forEach((c, i) => {
-      inner += portSvg(c, startX + i * (D.port.w + D.gap), upY, 'up');
-    });
-  }
-
-  // Access grid (multi-row, centered) below device
-  if (access.length) {
-    for (let r = 0; r < acRows; r++) {
-      const slice = access.slice(r * D.maxCols, (r + 1) * D.maxCols);
+  if (frame.access.length) {
+    for (let r = 0; r < frame.acRows; r++) {
+      const slice = frame.access.slice(r * D2.maxCols, (r + 1) * D2.maxCols);
       const startX = cx - rowW(slice.length) / 2;
       slice.forEach((c, i) => {
-        inner += portSvg(c, startX + i * (D.port.w + D.gap), acStartY + r * (D.port.h + D.gap), 'down');
+        out += portSvg(c, startX + i * (D2.port.w + D2.gap), frame.acStartY + r * (D2.port.h + D2.gap), 'down');
       });
     }
   }
-
-  // Render at intrinsic viewBox size (1 unit = 1 CSS px) so the element keeps
-  // the dimensions designed in DETAIL.* — without this the SVG would stretch
-  // to fill the body via CSS width:100% and the visible element would not
-  // shrink when DETAIL.device.w shrinks.
-  return `
-    <svg class="m002-detail-svg" viewBox="0 0 ${totalW} ${totalH}" width="${totalW}" height="${totalH}" preserveAspectRatio="xMidYMid meet">
-      ${inner}
-    </svg>
-  `;
+  return out;
 }
+
+function renderDetailLinksMarkup(s, frame) {
+  if (!frame.uplinks.length) return '';
+  const D = DETAIL;
+  const t = typeOf(frame.centerDev.type);
+  const cx = frame.cx;
+  const portStartX = cx - frame.upW / 2;
+  const out = [];
+  frame.uplinks.slice(0, D.maxCols).forEach((c, i) => {
+    const peer = c.info.peer;
+    const linkObj = c.info.link;
+    if (!peer || !linkObj) return;
+    const tilePos = frame.tilePositions.get(peer.id);
+    if (!tilePos) return;
+    const portCx = portStartX + i * (D.port.w + D.gap) + D.port.w / 2;
+    const portTopY = frame.upY;
+    const tileBottomY = tilePos.y + D.tile.h / 2;
+    const tileCx = tilePos.x;
+    const midY = (tileBottomY + portTopY) / 2;
+    const d = `M ${portCx} ${portTopY} V ${midY} H ${tileCx} V ${tileBottomY}`;
+    const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
+    const firstV = (c.p.vlans || [])[0];
+    const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
+    out.push(
+      `<g class="m002-link m002-detail-peer-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
+        <path class="m002-link-hit" d="${d}"/>
+        <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
+      </g>`
+    );
+  });
+  return out.join('');
+}
+
+// Legacy entry-point kept for the few external callers still wired to the
+// old name; delegates to computeDetailFrame and projects out the four
+// fields the legacy callers actually used.
+function computeDetailLayout(s, dev) {
+  const f = computeDetailFrame(s, dev);
+  const centerPos = f.tilePositions.get(dev.id);
+  return {
+    totalW: f.totalW,
+    totalH: f.totalH,
+    cxUser: f.cx,
+    cyUserDevice: centerPos ? centerPos.y : 0,
+  };
+}
+
 
 // Smooth viewport tween for enter/exitDetailView. Cancels any running tween.
 // Does NOT call schedSave — the user didn't intend to move the map.
@@ -10155,35 +10260,36 @@ function animateView(s, target, durationMs) {
 }
 
 // =============================================================================
-// HOP — Streetview-style navigation between switches inside Detail View.
-// Click a peer-tile in the row above the central element and the view
-// "hops" to that peer:
-//   Phase 1 (HOP_FADE_MS) — every port + every other peer-tile + the central
-//     device + every connecting link fades away; the clicked peer-tile stays
-//     visible.
-//   Phase 2 (HOP_FLY_MS) — the surviving peer-tile flies down to the centre
-//     and scales up to roughly the central element's height, "becoming" the
-//     new central element.
-//   Phase 3 — detailDeviceId swaps to the peer, the body re-renders, and the
-//     standard entry choreography replays automatically (the new device tile
-//     emerges at the centre, the new neighbour-row + links + ports cascade
-//     in around it).
-// The camera tween runs in parallel so when the user exits later, exit still
-// returns them to the original pre-detail viewport (s._viewBeforeDetail is
-// NOT overwritten on hop).
+// HOP — Position-Swap navigation between switches inside Detail View.
+//
+// Architecture (rewritten in v2.34):
+//   The detail-view tile-group is a managed DOM tree where every visible
+//   device — centre + each direct uplink-peer — has its own persistent
+//   <g class="m002-detail-tile" data-detail-tile-id="…">. Slot membership
+//   (centre vs. peer-row) is purely a CSS-class + position decision; the
+//   underlying DOM node survives the hop. That lets us animate via FLIP
+//   (First-Last-Invert-Play) so the user sees the SAME element fly into
+//   the centre and the SAME old centre-tile fly out into the peer row,
+//   with no fade/respawn artefact in between.
+//
+// Sequence:
+//   1. Capture every tile's getBoundingClientRect (FIRST).
+//   2. Update s.detailDeviceId, sync DOM (LAST):
+//      - new uplink-peers of the new centre get fresh tile <g>s,
+//      - stale tiles (peers of the old centre that no longer connect) are
+//        removed,
+//      - persistent tiles' role/class flips, text content refreshes,
+//      - ports + links rebuild around the new centre.
+//   3. Write new --layout-x/-y/-scale on every tile.
+//   4. For each surviving tile, set --flip-dx/-dy/-scale equal to the
+//      inverse of its position-delta and force .m002-no-transition so the
+//      browser snaps it visually back to its OLD position (INVERT).
+//   5. rAF×2 — clear --flip-* and remove .m002-no-transition; the CSS
+//      transition kicks in and the tile glides to its new slot (PLAY).
+//
+// s._viewBeforeDetail is NOT touched here — exiting always returns to the
+// original pre-detail viewport, regardless of how many hops happened.
 // =============================================================================
-// HOP_FADE_MS — must match the longest exit animation (170ms delay +
-// 340ms collapse) defined in the CSS .m002-detail-hop reverse-pop block.
-// HOP_FLY_MS — survivor fly-in. Bumped to 600ms with an ease-in-out cubic
-// curve (cubic-bezier(0.65,0,0.35,1)) so the survivor's flight reads as a
-// deliberate translation rather than a quick toss. The "post-hop" entry
-// then doesn't have point→line lead-in any more (post-hop CSS overrides
-// it to a horizontal-only expansion from 270 to 720px), so the longer fly
-// doesn't add a black pause — it lands and the central element widens
-// out from the survivor's footprint immediately.
-const HOP_FADE_MS = 510;
-const HOP_FLY_MS  = 600;
-
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
   if (s._detailHopActive) return;
@@ -10191,136 +10297,72 @@ function hopToPeer(s, peerId, fromEl) {
   if (!peer) return;
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (!overlay) return;
-  const tileEl = fromEl || overlay.querySelector(`[data-detail-peer-id="${peerId}"]`);
-  if (!tileEl) return;
 
   s._detailHopActive = true;
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
 
+  // NOTE — we deliberately do NOT remove .m002-detail-overlay-settled here.
+  // The settled rule pins .m002-detail-tile-inner / -tile-bg via !important
+  // but does NOT touch the outer .m002-detail-tile (which is what the FLIP
+  // transitions). Keeping settled active during the hop has two upsides:
+  //   1. Surviving tiles' inners stay frozen — no risk of the show-class
+  //      animation rules restarting from frame 0 just because the
+  //      animation property momentarily changed.
+  //   2. Newly-created tiles arrive at identity immediately (the settled
+  //      rule overrides their initial-state CSS), so they don't briefly
+  //      flash a 0.005 emerge-point at their final slot.
+
   const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 
-  // Drop the settled override so transitions in .m002-detail-hop can take
-  // hold (settled forces transform:none / opacity:1 with !important).
-  overlay.classList.remove('m002-detail-overlay-settled');
-
-  // Geometry — translate the peer-tile centre to where the NEW central
-  // device WILL be on screen after the body re-renders. Computing against
-  // the OLD central device's position (deviceEl.getBoundingClientRect())
-  // would land the survivor at the OLD layout's central spot — but the
-  // new device's port count + peer count shifts totalW/devY, which shifts
-  // the SVG's flex-centred screen position by 10–60px. The user saw the
-  // morph land, then the new central element pop in at a slightly off
-  // position. Pre-computing the new layout fixes that mismatch.
-  const tileRect = tileEl.getBoundingClientRect();
-  const tileCx = tileRect.left + tileRect.width / 2;
-  const tileCy = tileRect.top  + tileRect.height / 2;
-  const screenScale = tileRect.width / DETAIL.peer.w;
-
-  const newLayout = computeDetailLayout(s, peer);
-  const bodyEl = overlay.querySelector('.m002-detail-body');
-  const bodyRect = bodyEl.getBoundingClientRect();
-  // The detail-body uses flex centring with max-width/-height:100% on the
-  // SVG, so the new SVG renders at min(natural, container) and is centred
-  // around (bodyCx, bodyCy). Same convention as the old SVG.
-  const newSvgScale = Math.min(
-    bodyRect.width  / newLayout.totalW,
-    bodyRect.height / newLayout.totalH,
-    1
-  );
-  const bodyCx = bodyRect.left + bodyRect.width  / 2;
-  const bodyCy = bodyRect.top  + bodyRect.height / 2;
-  const newSvgLeft = bodyCx - (newLayout.totalW * newSvgScale) / 2;
-  const newSvgTop  = bodyCy - (newLayout.totalH * newSvgScale) / 2;
-  const newDeviceCx = newSvgLeft + newLayout.cxUser       * newSvgScale;
-  const newDeviceCy = newSvgTop  + newLayout.cyUserDevice * newSvgScale;
-  const dxUser = (newDeviceCx - tileCx) / screenScale;
-  const dyUser = (newDeviceCy - tileCy) / screenScale;
-
-  // Target scale: uniform 1.875× — survivor lands at 270×180, matching the
-  // central device's height exactly and ~37% of its width. The new central
-  // device renders underneath starting at scale(0.375, 1) (= 270×180), then
-  // animates horizontally to scale(1, 1) over 250ms. Visual continuity is
-  // "survivor lands, becomes the new tile, the new tile widens to full".
-  // This replaces the v2.33.55 stretch-fly (scale 5x/1.875y) which produced
-  // distorted text content during the 5x horizontal stretch.
-  const targetScale = DETAIL.device.h / DETAIL.peer.h;
-
-  // Phase 1+2: classes + WAAPI morph on the surviving peer-tile.
-  overlay.classList.add('m002-detail-hop');
-  tileEl.classList.add('m002-detail-hopper');
-  // Boost the survivor's z-order so the morph happens over (not under) the
-  // fading device tile. SVG paints in document order, so move the element
-  // to the end of its parent.
-  const tileParent = tileEl.parentNode;
-  if (tileParent && tileEl.nextSibling) tileParent.appendChild(tileEl);
-
-  const inner = tileEl.querySelector('.m002-detail-peer-inner');
-
-  const launchHop = () => {
-    if (reduceMotion || !inner || typeof inner.animate !== 'function') {
-      // No morph — still complete the hop after a token delay.
-      finishHop();
-      return;
-    }
-    const anim = inner.animate(
-      [
-        { transform: 'translate(0px, 0px) scale(1)' },
-        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScale})` },
-      ],
-      { duration: HOP_FLY_MS, easing: 'cubic-bezier(0.65,0,0.35,1)', fill: 'forwards' }
-    );
-    if (anim.finished && typeof anim.finished.then === 'function') {
-      anim.finished.then(finishHop, finishHop);
-    } else {
-      anim.onfinish = finishHop;
-      setTimeout(finishHop, HOP_FLY_MS + 80); // safety net
-    }
-  };
-
-  let finishedOnce = false;
-  function finishHop() {
-    if (finishedOnce) return;
-    finishedOnce = true;
-
-    // Swap focused device + camera (camera runs in parallel, doesn't gate UI).
-    s.detailDeviceId = peerId;
-    if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
-      select(s, 'device', peerId);
-    }
-    const rect = s.svg.getBoundingClientRect();
-    const targetZoom = DETAIL_TARGET_ZOOM;
-    const tx = rect.width  / 2 - peer.x * targetZoom;
-    const ty = rect.height / 2 - peer.y * targetZoom;
-    animateView(s, { x: tx, y: ty, zoom: targetZoom }, DETAIL_ANIM_MS);
-
-    // Re-render body — new DOM nodes match the .m002-detail-overlay-show
-    // animation rules, so the entry choreography replays automatically. We
-    // add .m002-detail-post-hop to override the cinematic point→line phase
-    // of the central element's emerge animation: after a hop the user has
-    // already seen the entry choreography once and is waiting for the new
-    // element to be there. The post-hop variant skips straight to the
-    // horizontal expansion (450ms), and pulls peer-tiles / ports / stubs /
-    // peer-links way forward so the new body is fully assembled ~700ms
-    // after fly-in — closing the half-second "black monitor" gap between
-    // the survivor tile landing and the new content materialising.
-    const t = typeOf(peer.type);
-    const titleEl = overlay.querySelector('.m002-detail-title');
-    if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
-    overlay.classList.remove('m002-detail-hop');
-    overlay.classList.add('m002-detail-post-hop');
-    renderDetailView(s);
-
-    s._detailSettleTimer = setTimeout(() => {
-      if (s.detailDeviceId === peerId) {
-        overlay.classList.add('m002-detail-overlay-settled');
-        overlay.classList.remove('m002-detail-post-hop');
-      }
-    }, 800);
-    s._detailHopActive = false;
+  // FIRST — capture every tile's screen-space bounding box.
+  const oldRects = new Map();
+  const tilesGroup = overlay.querySelector('.m002-detail-tiles-group');
+  if (tilesGroup) {
+    tilesGroup.querySelectorAll('.m002-detail-tile').forEach((el) => {
+      oldRects.set(el.dataset.detailTileId, el.getBoundingClientRect());
+    });
   }
 
-  // Wait HOP_FADE_MS for the surroundings to fade, then launch the morph.
-  setTimeout(launchHop, reduceMotion ? 0 : HOP_FADE_MS);
+  // Update state — focus + selection + title.
+  s.detailDeviceId = peerId;
+  if (!(s.selected?.kind === 'device' && s.selected.id === peerId)) {
+    select(s, 'device', peerId);
+  }
+  const t = typeOf(peer.type);
+  const titleEl = overlay.querySelector('.m002-detail-title');
+  if (titleEl) titleEl.textContent = `// ${t.label} · ${peer.name || '—'}`;
+
+  // LAST — sync DOM around the new centre. Tiles that survive the hop
+  // keep their <g> nodes; new peers get fresh ones; departed peers
+  // detach. Ports + links are rebuilt entirely (cheap).
+  const body = overlay.querySelector('.m002-detail-body');
+  const frame = computeDetailFrame(s, peer);
+  const { newIds } = syncDetailFrame(s, body, frame);
+
+  // INVERT + PLAY — write the new --layout-* on every tile, then for
+  // each tile that pre-existed compute the delta and write --flip-*
+  // (without transition). The double-rAF inside applyDetailLayout
+  // clears --flip-* and lets the CSS transition glide each tile to
+  // its new slot.
+  applyDetailLayout(s, frame, {
+    flip: reduceMotion ? null : oldRects,
+    freshIds: newIds,
+  });
+
+  // Camera tween runs in parallel — doesn't gate the tile FLIP.
+  const rect = s.svg.getBoundingClientRect();
+  const tx = rect.width  / 2 - peer.x * DETAIL_TARGET_ZOOM;
+  const ty = rect.height / 2 - peer.y * DETAIL_TARGET_ZOOM;
+  animateView(s, { x: tx, y: ty, zoom: DETAIL_TARGET_ZOOM }, DETAIL_ENTER_MS);
+
+  // Settle once the FLIP transition finishes — re-applies the
+  // animation:none/!important guard so subsequent live edits to the
+  // inspector don't re-trigger entry choreography.
+  const settleAfter = (reduceMotion ? 0 : DETAIL.flipMs) + 80;
+  s._detailSettleTimer = setTimeout(() => {
+    if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
+    s._detailHopActive = false;
+  }, settleAfter);
 }
 
 // =============================================================================

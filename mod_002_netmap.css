@@ -1114,10 +1114,106 @@ input.m002-field-conflict,
   animation:m002-detail-hopper-glow 250ms cubic-bezier(0.4,0,0.2,1) forwards !important;
 }
 
+/* ============================================================================
+   Unified detail-view tile architecture (v2.34 FLIP refactor).
+
+   Every visible device in the Detail-View — the central element AND every
+   uplink peer — is a single persistent .m002-detail-tile <g>. Slot
+   membership (centre vs. peer-row) is a CSS-class + position decision; the
+   underlying DOM node survives across hops. That lets us drive the
+   Position-Swap motion via FLIP (First-Last-Invert-Play): the same DOM
+   node literally translates from its old slot to its new one. No fade-out
+   / respawn artefact in between.
+
+   Layout transform is composed via CSS variables so JS can write layout
+   and FLIP-delta independently:
+     transform = translate(layout-x + flip-dx, layout-y + flip-dy)
+                 * scale(layout-scale * flip-scale)
+   --layout-* is the source-of-truth. --flip-* is set during the INVERT
+   phase to make the tile visually appear at its OLD position, then cleared
+   in a paired rAF to let the CSS transition glide it home (PLAY).
+   ============================================================================ */
+.m002-detail-tile{
+  cursor:pointer;
+  transform-origin:0 0;
+  transform:
+    translate(
+      calc(var(--layout-x,0px) + var(--flip-dx,0px)),
+      calc(var(--layout-y,0px) + var(--flip-dy,0px))
+    )
+    scale(calc(var(--layout-scale,1) * var(--flip-scale,1)));
+  transition:transform 480ms cubic-bezier(0.4,0,0.2,1);
+}
+.m002-detail-tile.m002-no-transition{transition:none;}
+
+/* Inner wrapper — carries the entry animation. transform-origin (0,0) is
+   the tile's geometric centre because the rect is drawn from -w/2..w/2. */
+.m002-detail-tile-inner{transform-origin:0 0;}
+
+/* Initial state — only applies BEFORE the overlay's show class lands.
+   Scoping to :not(.show) means tiles that survive a hop don't get yanked
+   back to a "point" when the show state momentarily fluctuates; once
+   shown, the animation + settled rules govern. */
+.m002-detail-overlay:not(.m002-detail-overlay-show) .m002-detail-tile.is-center .m002-detail-tile-inner{
+  transform:scale(0.005,0.02);
+  opacity:0;
+}
+.m002-detail-overlay:not(.m002-detail-overlay-show) .m002-detail-tile.is-peer .m002-detail-tile-inner{
+  transform:scale(0.6);
+  opacity:0;
+}
+
+/* Entry choreography. Centre tile keeps the cinematic point→line→expand
+   intro (m002-detail-elem-emerge keyframe — unchanged). Peers pop in
+   ~680ms later in the same wave the legacy peer-tiles used. */
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-center .m002-detail-tile-inner{
+  animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-center .m002-detail-tile-bg{
+  animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;
+}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-peer .m002-detail-tile-inner{
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 680ms forwards;
+}
+
+/* Settled — pins inner state so live edits to the inspector don't replay
+   the entry choreography. The OUTER tile transform stays driven by
+   --layout-* + --flip-*, so settled is fully compatible with the FLIP
+   hop (settled targets only the inner; the outer can still glide). */
+.m002-detail-overlay-settled .m002-detail-tile-inner{
+  animation:none!important;
+  transform:none!important;
+  opacity:1!important;
+}
+.m002-detail-overlay-settled .m002-detail-tile-bg{
+  animation:none!important;
+  fill:#0a0a10!important;
+}
+
+/* Hover + selection */
+.m002-detail-tile .m002-detail-tile-bg{transition:filter .15s,stroke-width .15s,stroke .15s;}
+.m002-detail-tile:hover .m002-detail-tile-bg{stroke-width:1.8;}
+.m002-detail-tile.is-peer.is-selected .m002-detail-tile-bg{stroke-width:2;}
+.m002-detail-tile.is-center.is-selected .m002-detail-tile-bg{
+  stroke-width:2.4;
+  filter:drop-shadow(0 0 4px var(--accent)) drop-shadow(0 0 14px var(--accent));
+}
+
+/* Tile name — slightly heavier than grid .m002-dev-name so it still reads
+   at the peer (1×) scale; the centre's 1.875× makes it large again. */
+.m002-detail-tile-name{
+  font-family:'Inter','Rajdhani',sans-serif;
+  font-size:18px;
+  font-weight:600;
+  fill:#f5f3ff;
+  letter-spacing:.5px;
+}
+
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link{animation:none!important;}
-  .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-inner,.m002-detail-peer-link{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-device-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-dev-bg,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner{animation:none!important;}
+  .m002-detail-device-inner,.m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-inner,.m002-detail-peer-link,.m002-detail-tile-inner{transform:none!important;opacity:1!important;}
+  .m002-detail-tile{transition:none!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
 
