@@ -9678,11 +9678,17 @@ function hopToPeer(s, peerId, fromEl) {
   const screenScale = tileRect.width / DETAIL.peer.w;
   const dxUser = (deviceCx - tileCx) / screenScale;
   const dyUser = (deviceCy - tileCy) / screenScale;
-  // Target scale: grow the peer-tile until its height matches roughly the
-  // central element's height. 144→ ~270 wide, 96→180 tall. Anything larger
-  // would mean the surviving tile briefly overshoots the central footprint
-  // before the new body re-renders, which reads as a visual hiccup.
-  const targetScale = DETAIL.device.h / DETAIL.peer.h;
+  // Target scale: stretch-fly. Non-uniform scale (X 5×, Y 1.875×) grows the
+  // peer-tile to match the central element's full 720×180 footprint exactly
+  // by the time it lands, so the new central element can render underneath
+  // at the same size without a "size pop" between survivor-disappears and
+  // central-element-appears. The peer-tile inner content (name text, type
+  // glyph, ×N badge) gets visibly stretched horizontally during the fly —
+  // accepted trade-off, the user is going to land on the new central tile
+  // for ~one frame anyway and the stretched mush flips to crisp content as
+  // soon as the body re-renders.
+  const targetScaleX = DETAIL.device.w / DETAIL.peer.w;
+  const targetScaleY = DETAIL.device.h / DETAIL.peer.h;
 
   // Phase 1+2: classes + WAAPI morph on the surviving peer-tile.
   overlay.classList.add('m002-detail-hop');
@@ -9703,8 +9709,8 @@ function hopToPeer(s, peerId, fromEl) {
     }
     const anim = inner.animate(
       [
-        { transform: 'translate(0px, 0px) scale(1)' },
-        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScale})` },
+        { transform: 'translate(0px, 0px) scale(1, 1)' },
+        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScaleX}, ${targetScaleY})` },
       ],
       { duration: HOP_FLY_MS, easing: 'cubic-bezier(0.4,0,0.2,1)', fill: 'forwards' }
     );

@@ -934,19 +934,24 @@
    "show me the new view, fast" moment, not a cinematic intro.
    Selectors triple-class the overlay (.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop)
    so they outweigh the standard entry rules in the cascade. */
-@keyframes m002-detail-elem-quick-emerge{
-  0%   {transform:scale(0.005,1); opacity:1;}
-  100% {transform:scale(1,1);     opacity:1;}
-}
-@keyframes m002-detail-elem-empty-quick{
-  0%   {fill:var(--accent);}
-  100% {fill:#0a0a10;}
+/* Stretch-fly companion: the survivor lands at the central element's full
+   footprint (scale 5x/1.875y in WAAPI), so the new central device-inner
+   can pop into place at scale(1,1) opacity:1 with no emerge animation —
+   it's already the right size at the right position. The substitution
+   from stretched-survivor to crisp-central-content happens in one frame
+   under the user's eye and reads as "the survivor became the new tile".
+   Animation is a 1ms identity keyframe with forwards fill so the base
+   .m002-detail-device-inner{transform:scale(0.005,0.02);opacity:0} state
+   gets cleanly overridden without any visible motion. */
+@keyframes m002-detail-elem-instant{
+  0%, 100% {transform:scale(1,1); opacity:1;}
 }
 .m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-device-inner{
-  animation:m002-detail-elem-quick-emerge 450ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
+  animation:m002-detail-elem-instant 1ms linear 0ms forwards;
 }
 .m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-dev-bg{
-  animation:m002-detail-elem-empty-quick 450ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
+  animation:none;
+  fill:#0a0a10;
 }
 .m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-port-inner{
   animation:m002-detail-port-pop 215ms cubic-bezier(0.34,1.4,0.5,1) 250ms forwards;
