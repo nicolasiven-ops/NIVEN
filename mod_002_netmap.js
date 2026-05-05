@@ -3761,20 +3761,9 @@ function drawDevice(s, dev) {
 
   const w = DEVICE_W, h = DEVICE_H;
   if (isReference(dev)) {
-    let arrow, target;
-    if (peer) {
-      const peerZone = (s.zones || []).find((z) => z.id === peer.zone);
-      arrow = '⇄ HUB';
-      target = peerZone ? `${peerZone.name} · ${peer.name}` : peer.name;
-    } else {
-      arrow = dev.refMode === 'map' ? '↗ MAP' : '→ ZONE';
-      target = referenceTargetLabel(s, dev);
-    }
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
       <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 30}">${escSvg(dev.name)}</text>
-      <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 24))}</text>
-      <text class="m002-dev-ref-hint" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">DBL</text>
     `;
   } else {
     // L3 routing-layer label: show interface count for routers/firewalls,
