@@ -934,20 +934,25 @@
    "show me the new view, fast" moment, not a cinematic intro.
    Selectors triple-class the overlay (.m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop)
    so they outweigh the standard entry rules in the cascade. */
-/* Stretch-fly companion: the survivor lands at the central element's full
-   footprint (scale 5x/1.875y in WAAPI), so the new central device-inner
-   can pop into place at scale(1,1) opacity:1 with no emerge animation —
-   it's already the right size at the right position. The substitution
-   from stretched-survivor to crisp-central-content happens in one frame
-   under the user's eye and reads as "the survivor became the new tile".
-   Animation is a 1ms identity keyframe with forwards fill so the base
-   .m002-detail-device-inner{transform:scale(0.005,0.02);opacity:0} state
-   gets cleanly overridden without any visible motion. */
-@keyframes m002-detail-elem-instant{
-  0%, 100% {transform:scale(1,1); opacity:1;}
+/* Post-hop horizontal expansion: the survivor flies to centre at uniform
+   1.875× scale and lands at 270×180 — exactly the central device's height
+   and ~37% of its width. The new central device-inner renders underneath
+   the survivor at scale(0.375, 1) = 270×180, perfectly matching the
+   survivor's footprint at the moment of DOM swap, then expands horizontally
+   to scale(1, 1) = 720×180 over 320ms. User sees: survivor lands, the
+   central element widens out from its footprint. transform-origin on the
+   inner is set per-render to the device-tile's centre (D.device.w/2,
+   D.device.h/2), so the expansion is symmetric left+right. The fill
+   animation is suppressed (animation:none + dark fill) so the rect doesn't
+   flash accent-colour during the widening — the survivor was already
+   showing the accent stroke and the new tile inherits the same visual
+   register. */
+@keyframes m002-detail-elem-widen{
+  0%   {transform:scale(0.375, 1); opacity:1;}
+  100% {transform:scale(1, 1);     opacity:1;}
 }
 .m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-device-inner{
-  animation:m002-detail-elem-instant 1ms linear 0ms forwards;
+  animation:m002-detail-elem-widen 320ms cubic-bezier(0.4,0,0.2,1) 0ms forwards;
 }
 .m002-detail-overlay.m002-detail-overlay-show.m002-detail-post-hop .m002-detail-dev-bg{
   animation:none;

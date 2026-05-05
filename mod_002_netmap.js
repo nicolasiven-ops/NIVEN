@@ -9326,6 +9326,53 @@ function renderDetailView(s) {
   body.innerHTML = renderDetailBody(s, dev, t);
 }
 
+// Mirror the layout calc inside renderDetailBody — but as a pure dimension
+// computation, no SVG markup. Lets the hop choreography pre-compute where
+// the new central device tile WILL be on screen after the body re-renders
+// for `dev`, so the WAAPI fly can land the survivor at exactly that future
+// position (no jump between morph-landing and central-element-render). The
+// peer-count / port-count of the target device shifts totalW + devY, which
+// in turn shifts the SVG's flex-centred screen position; landing at the
+// OLD device's position would leave a 10–60px gap.
+function computeDetailLayout(s, dev) {
+  const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
+  const uplinks = cls.filter((c) => c.info.kind === 'uplink');
+  const access  = cls.filter((c) => c.info.kind === 'access');
+  const peerOrder = [];
+  const peerSeen = new Set();
+  uplinks.forEach((c) => {
+    const peer = c.info.peer;
+    if (peer && !peerSeen.has(peer.id)) { peerSeen.add(peer.id); peerOrder.push(peer); }
+  });
+  const D = DETAIL;
+  const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
+  const upCount = Math.min(D.maxCols, uplinks.length);
+  const acCols  = Math.min(D.maxCols, Math.max(1, access.length));
+  const acRows  = Math.max(1, Math.ceil(access.length / D.maxCols));
+  const upW     = rowW(upCount);
+  const acW     = access.length ? rowW(acCols) : 0;
+  const peerCount = peerOrder.length;
+  const peerRowW  = peerCount ? peerCount * D.peer.w + (peerCount - 1) * D.peerGap : 0;
+  const innerW  = Math.max(D.device.w, peerRowW, upW, acW);
+  const totalW  = innerW + D.pad * 2;
+  const STUB_LEN = (D.vgap - 8) * 5;
+  const stubPad  = STUB_LEN + 12;
+  const upPad    = D.pad;
+  const dnPad    = access.length  ? Math.max(D.pad, stubPad) : D.pad;
+  const peerRowH = peerCount ? D.peer.h + D.peerLinkGap : 0;
+  const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
+  const acRowsH  = access.length  ? acRows * D.port.h + (acRows - 1) * D.gap + D.vgap : 0;
+  const totalH   = upPad + peerRowH + upRowH + D.device.h + acRowsH + dnPad;
+  const cx       = totalW / 2;
+  const upY      = upPad + peerRowH;
+  const devY     = upY + upRowH;
+  return {
+    totalW, totalH,
+    cxUser: cx,
+    cyUserDevice: devY + D.device.h / 2,
+  };
+}
+
 function renderDetailBody(s, dev, t) {
   const cls = (dev.ports || []).map((p) => ({ p, info: classifyDetailPort(s, dev, p.n) }));
   const uplinks = cls.filter((c) => c.info.kind === 'uplink');
@@ -9637,11 +9684,15 @@ function animateView(s, target, durationMs) {
 // =============================================================================
 // HOP_FADE_MS — must match the longest exit animation (170ms delay +
 // 340ms collapse) defined in the CSS .m002-detail-hop reverse-pop block.
-// HOP_FLY_MS — survivor fly-in. Kept short so the gap between exit and the
-// next entry choreography (which has its own 50ms lead-in + line phase)
-// doesn't read as a black pause.
+// HOP_FLY_MS — survivor fly-in. Bumped to 600ms with an ease-in-out cubic
+// curve (cubic-bezier(0.65,0,0.35,1)) so the survivor's flight reads as a
+// deliberate translation rather than a quick toss. The "post-hop" entry
+// then doesn't have point→line lead-in any more (post-hop CSS overrides
+// it to a horizontal-only expansion from 270 to 720px), so the longer fly
+// doesn't add a black pause — it lands and the central element widens
+// out from the survivor's footprint immediately.
 const HOP_FADE_MS = 510;
-const HOP_FLY_MS  = 300;
+const HOP_FLY_MS  = 600;
 
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
@@ -9652,8 +9703,6 @@ function hopToPeer(s, peerId, fromEl) {
   if (!overlay) return;
   const tileEl = fromEl || overlay.querySelector(`[data-detail-peer-id="${peerId}"]`);
   if (!tileEl) return;
-  const deviceEl = overlay.querySelector('.m002-detail-device');
-  if (!deviceEl) return;
 
   s._detailHopActive = true;
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
@@ -9664,31 +9713,47 @@ function hopToPeer(s, peerId, fromEl) {
   // hold (settled forces transform:none / opacity:1 with !important).
   overlay.classList.remove('m002-detail-overlay-settled');
 
-  // Geometry — translate the peer-tile centre to the central-device centre,
-  // expressed in the SVG's user coordinate system. CSS transforms on SVG
-  // elements use user units (not screen pixels), so we divide the screen-px
-  // delta by the SVG's effective scale. The peer-tile's screen width over
-  // its intrinsic width (DETAIL.peer.w = 144) gives that scale directly.
+  // Geometry — translate the peer-tile centre to where the NEW central
+  // device WILL be on screen after the body re-renders. Computing against
+  // the OLD central device's position (deviceEl.getBoundingClientRect())
+  // would land the survivor at the OLD layout's central spot — but the
+  // new device's port count + peer count shifts totalW/devY, which shifts
+  // the SVG's flex-centred screen position by 10–60px. The user saw the
+  // morph land, then the new central element pop in at a slightly off
+  // position. Pre-computing the new layout fixes that mismatch.
   const tileRect = tileEl.getBoundingClientRect();
-  const deviceRect = deviceEl.getBoundingClientRect();
   const tileCx = tileRect.left + tileRect.width / 2;
   const tileCy = tileRect.top  + tileRect.height / 2;
-  const deviceCx = deviceRect.left + deviceRect.width / 2;
-  const deviceCy = deviceRect.top  + deviceRect.height / 2;
   const screenScale = tileRect.width / DETAIL.peer.w;
-  const dxUser = (deviceCx - tileCx) / screenScale;
-  const dyUser = (deviceCy - tileCy) / screenScale;
-  // Target scale: stretch-fly. Non-uniform scale (X 5×, Y 1.875×) grows the
-  // peer-tile to match the central element's full 720×180 footprint exactly
-  // by the time it lands, so the new central element can render underneath
-  // at the same size without a "size pop" between survivor-disappears and
-  // central-element-appears. The peer-tile inner content (name text, type
-  // glyph, ×N badge) gets visibly stretched horizontally during the fly —
-  // accepted trade-off, the user is going to land on the new central tile
-  // for ~one frame anyway and the stretched mush flips to crisp content as
-  // soon as the body re-renders.
-  const targetScaleX = DETAIL.device.w / DETAIL.peer.w;
-  const targetScaleY = DETAIL.device.h / DETAIL.peer.h;
+
+  const newLayout = computeDetailLayout(s, peer);
+  const bodyEl = overlay.querySelector('.m002-detail-body');
+  const bodyRect = bodyEl.getBoundingClientRect();
+  // The detail-body uses flex centring with max-width/-height:100% on the
+  // SVG, so the new SVG renders at min(natural, container) and is centred
+  // around (bodyCx, bodyCy). Same convention as the old SVG.
+  const newSvgScale = Math.min(
+    bodyRect.width  / newLayout.totalW,
+    bodyRect.height / newLayout.totalH,
+    1
+  );
+  const bodyCx = bodyRect.left + bodyRect.width  / 2;
+  const bodyCy = bodyRect.top  + bodyRect.height / 2;
+  const newSvgLeft = bodyCx - (newLayout.totalW * newSvgScale) / 2;
+  const newSvgTop  = bodyCy - (newLayout.totalH * newSvgScale) / 2;
+  const newDeviceCx = newSvgLeft + newLayout.cxUser       * newSvgScale;
+  const newDeviceCy = newSvgTop  + newLayout.cyUserDevice * newSvgScale;
+  const dxUser = (newDeviceCx - tileCx) / screenScale;
+  const dyUser = (newDeviceCy - tileCy) / screenScale;
+
+  // Target scale: uniform 1.875× — survivor lands at 270×180, matching the
+  // central device's height exactly and ~37% of its width. The new central
+  // device renders underneath starting at scale(0.375, 1) (= 270×180), then
+  // animates horizontally to scale(1, 1) over 250ms. Visual continuity is
+  // "survivor lands, becomes the new tile, the new tile widens to full".
+  // This replaces the v2.33.55 stretch-fly (scale 5x/1.875y) which produced
+  // distorted text content during the 5x horizontal stretch.
+  const targetScale = DETAIL.device.h / DETAIL.peer.h;
 
   // Phase 1+2: classes + WAAPI morph on the surviving peer-tile.
   overlay.classList.add('m002-detail-hop');
@@ -9709,10 +9774,10 @@ function hopToPeer(s, peerId, fromEl) {
     }
     const anim = inner.animate(
       [
-        { transform: 'translate(0px, 0px) scale(1, 1)' },
-        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScaleX}, ${targetScaleY})` },
+        { transform: 'translate(0px, 0px) scale(1)' },
+        { transform: `translate(${dxUser}px, ${dyUser}px) scale(${targetScale})` },
       ],
-      { duration: HOP_FLY_MS, easing: 'cubic-bezier(0.4,0,0.2,1)', fill: 'forwards' }
+      { duration: HOP_FLY_MS, easing: 'cubic-bezier(0.65,0,0.35,1)', fill: 'forwards' }
     );
     if (anim.finished && typeof anim.finished.then === 'function') {
       anim.finished.then(finishHop, finishHop);
