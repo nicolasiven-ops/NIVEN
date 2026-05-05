@@ -4968,7 +4968,7 @@ function drawStackEnvelope(s, stack) {
     if (envVsState) cab.setAttribute('data-vlan-solo', envVsState);
     if (envRsState) cab.setAttribute('data-routing-solo', envRsState);
     const path = orthPath(a, b, off, s, [a.id, b.id]);
-    let inner = `<path class="m002-stack-cable" d="${path.d}"/>`;
+    let inner = `<path class="m002-stack-cable-hit" d="${path.d}"/><path class="m002-stack-cable" d="${path.d}"/>`;
     // Port labels on stacking cables only in Physical — VLAN/Routing layers
     // already speak via colour, the textual port stencil is just clutter there.
     if (s.activeLayer === 'physical') {

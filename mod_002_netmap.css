@@ -311,12 +311,13 @@
 .m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip .m002-dev-type,
 .m002-host[data-active-layer="routing"] .m002-device.m002-stack-member-vip[data-l3="true"] .m002-dev-type{fill:rgba(245,243,255,.65);opacity:1;}
 .m002-stack-cable{stroke:#5a5f6e;stroke-width:1.2;stroke-dasharray:5 4;fill:none;opacity:.75;}
+.m002-stack-cable-hit{stroke:transparent;stroke-width:18;fill:none;cursor:pointer;}
 .m002-stacklink:hover .m002-stack-cable{stroke:#9aa0a8;opacity:1;}
 .m002-stack-cable-label{font-size:9px;font-family:'JetBrains Mono','Share Tech Mono',monospace;fill:#9aa0a8;letter-spacing:1px;pointer-events:none;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3px;stroke-linejoin:round;stroke-linecap:round;}
 .m002-stacklink:hover .m002-stack-cable-label{fill:#9aa0a8;}
 
 .m002-link-line{stroke-width:1.4;fill:none;}
-.m002-link-hit{stroke:transparent;stroke-width:10;fill:none;cursor:pointer;}
+.m002-link-hit{stroke:transparent;stroke-width:18;fill:none;cursor:pointer;}
 /* Traffic-pulse on links incident to the current selection. The <path> is
    injected on-demand by applyIncidentFlow() — idle links never carry one.
    stroke-dashoffset is driven by startFlowTicker() (rAF) so the pulse runs
@@ -569,7 +570,7 @@ input.m002-field-conflict,
    between two collapsed stacks (or stack + device). A single faint dashed
    line; hover lifts it so it's clearly actionable. Click opens the LAG
    configurator. */
-.m002-link-agg .m002-link-hit{stroke-width:14;cursor:pointer;}
+.m002-link-agg .m002-link-hit{stroke-width:22;cursor:pointer;}
 .m002-link-agg-line{transition:stroke .15s,opacity .15s;}
 .m002-link-agg:hover .m002-link-agg-line{stroke:#9aa0a8;}
 .m002-link-agg-label{font-size:9px;font-family:'JetBrains Mono','Share Tech Mono',monospace;letter-spacing:1.5px;paint-order:stroke fill;stroke:#0a0a10;stroke-width:3.5px;stroke-linejoin:round;}
@@ -582,7 +583,7 @@ input.m002-field-conflict,
 .m002-agg-link-row{display:grid;grid-template-columns:1fr 18px 1fr;gap:6px;align-items:center;padding:3px 6px;background:#06060a;border:1px solid #1a1a22;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#9aa0a8;}
 .m002-agg-port{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
 .m002-agg-arrow{text-align:center;color:#5a5f6e;}
-.m002-link-bundle .m002-link-hit{stroke-width:18;}
+.m002-link-bundle .m002-link-hit{stroke-width:26;}
 
 .m002-vlan-chip-btn{display:inline-flex;align-items:center;justify-content:center;gap:4px;padding:2px 7px;min-width:26px;background:transparent;border:1px solid #2a2a36;color:#9aa0ae;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;font-weight:600;letter-spacing:.5px;cursor:pointer;transition:.15s;}
 .m002-vlan-chip-btn:hover{border-color:var(--vc);color:var(--vc);}
