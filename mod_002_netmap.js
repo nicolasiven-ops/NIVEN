@@ -5023,7 +5023,7 @@ function sourceSideForHub(srcPos, hubPos, _hubSide) {
 //            anchored at the same y/x so consecutive links visually meet).
 //   'b'    — symmetric: pin bP, move aP.
 //   'none' — never snap; always Z when misaligned.
-function pointsForAnchors(aP, aSide, bP, bSide, snapMode = 'avg') {
+function pointsForAnchors(aP, aSide, bP, bSide, snapMode = 'avg', bendCoord = null) {
   const aH = aSide === 'E' || aSide === 'W';
   const bH = bSide === 'E' || bSide === 'W';
   const oppHoriz = (aSide === 'E' && bSide === 'W') || (aSide === 'W' && bSide === 'E');
@@ -5042,7 +5042,10 @@ function pointsForAnchors(aP, aSide, bP, bSide, snapMode = 'avg') {
       else                       y = (aP.y + bP.y) / 2;
       return [{ x: aP.x, y }, { x: bP.x, y }];
     }
-    const mx = (aP.x + bP.x) / 2;
+    // Hub-merge approach lane: when bendCoord.x is set, every peer link bends
+    // at the same x just outside the hub edge so their vertical legs overlap
+    // into a single visible trunk before entering the hub.
+    const mx = (bendCoord && bendCoord.x !== undefined) ? bendCoord.x : (aP.x + bP.x) / 2;
     return [aP, { x: mx, y: aP.y }, { x: mx, y: bP.y }, bP];
   }
   if (oppVert) {
@@ -5053,7 +5056,7 @@ function pointsForAnchors(aP, aSide, bP, bSide, snapMode = 'avg') {
       else                       x = (aP.x + bP.x) / 2;
       return [{ x, y: aP.y }, { x, y: bP.y }];
     }
-    const my = (aP.y + bP.y) / 2;
+    const my = (bendCoord && bendCoord.y !== undefined) ? bendCoord.y : (aP.y + bP.y) / 2;
     return [aP, { x: aP.x, y: my }, { x: bP.x, y: my }, bP];
   }
   if (aSide === bSide) {
@@ -5172,12 +5175,26 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null, tr
                  : bTransit && !aTransit ? 'b'
                  : aTransit && bTransit  ? 'none'
                  : 'avg';
+  // Hub-merge approach lane: when this link is part of a hub-merge group,
+  // every peer link bends at a SHARED coord one GRID-step outside the hub's
+  // merge side. Their otherwise-independent Z-arms now stack onto the same
+  // trunk axis just before entering the hub — visually a single shared
+  // approach into the hub instead of N parallel corridors.
+  let bendCoord = null;
+  if (hubInfo) {
+    const hubPos = hubInfo.hubIsB ? b : a;
+    const hHalfW = DEVICE_W / 2, hHalfH = DEVICE_H / 2;
+    if      (hubInfo.hubSide === 'W') bendCoord = { x: hubPos.x - hHalfW - GRID };
+    else if (hubInfo.hubSide === 'E') bendCoord = { x: hubPos.x + hHalfW + GRID };
+    else if (hubInfo.hubSide === 'N') bendCoord = { y: hubPos.y - hHalfH - GRID };
+    else if (hubInfo.hubSide === 'S') bendCoord = { y: hubPos.y + hHalfH + GRID };
+  }
   // 1) Preferred pair first. Wins outright when clean — the facing-side
   // exit/entry rule beats a slightly cheaper bend count from a side that
   // doesn't visually face the other end.
   const prefAP = anchorAt(a, prefA, off);
   const prefBP = anchorAt(b, prefB, off);
-  const prefPts = pointsForAnchors(prefAP, prefA, prefBP, prefB, snapMode);
+  const prefPts = pointsForAnchors(prefAP, prefA, prefBP, prefB, snapMode, bendCoord);
   if (!pointsHitAny(prefPts, obstacles)) {
     const lbl = pointsLabel(prefPts);
     return {
@@ -5197,7 +5214,7 @@ function orthPath(a, b, off = 0, s = null, excludeIds = null, hubInfo = null, tr
       if (aS === prefA && bS === prefB) continue; // already tested
       const aP = anchorAt(a, aS, off);
       const bP = anchorAt(b, bS, off);
-      const pts = pointsForAnchors(aP, aS, bP, bS, snapMode);
+      const pts = pointsForAnchors(aP, aS, bP, bS, snapMode, bendCoord);
       if (pointsHitAny(pts, obstacles)) continue;
       const bends = pts.length - 2;
       if (best === null || bends < best.bends) best = { bends, pts };
