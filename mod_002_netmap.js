@@ -4828,13 +4828,13 @@ function pointsForAnchors(aP, aSide, bP, bSide) {
   const oppHoriz = (aSide === 'E' && bSide === 'W') || (aSide === 'W' && bSide === 'E');
   const oppVert  = (aSide === 'N' && bSide === 'S') || (aSide === 'S' && bSide === 'N');
   // Snap small misalignments to a shared coordinate so a near-aligned pair
-  // becomes a true straight line instead of a Z with two ~1px kinks. The
-  // snap stays inside both side-edges as long as the misalignment is ≤ a
-  // half-side-length — devices float free between grid cells, so a 1-3px
-  // y-drift between two row-mates was producing visible jogs.
-  const halfW = DEVICE_W / 2, halfH = DEVICE_H / 2;
+  // becomes a true straight line instead of a Z with two ~1px kinks. Tight
+  // snap window — one GRID step — caps each anchor's drift from its side
+  // midpoint at half a grid cell. Devices that drift further keep their
+  // Z so the anchor doesn't slide visibly toward a box corner.
+  const SNAP_TOL = GRID; // total misalignment tolerated; per-anchor shift is half this
   if (oppHoriz) {
-    if (Math.abs(aP.y - bP.y) <= halfH) {
+    if (Math.abs(aP.y - bP.y) <= SNAP_TOL) {
       const y = (aP.y + bP.y) / 2;
       return [{ x: aP.x, y }, { x: bP.x, y }];
     }
@@ -4842,7 +4842,7 @@ function pointsForAnchors(aP, aSide, bP, bSide) {
     return [aP, { x: mx, y: aP.y }, { x: mx, y: bP.y }, bP];
   }
   if (oppVert) {
-    if (Math.abs(aP.x - bP.x) <= halfW) {
+    if (Math.abs(aP.x - bP.x) <= SNAP_TOL) {
       const x = (aP.x + bP.x) / 2;
       return [{ x, y: aP.y }, { x, y: bP.y }];
     }
