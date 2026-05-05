@@ -8399,24 +8399,23 @@ function vfxBBoxCenterWorld(el) {
   return { x: m.a * cx + m.c * cy + m.e, y: m.b * cx + m.d * cy + m.f };
 }
 
-function vfxLocalToWorld(parentG, x, y) {
-  const t = parentG?.transform?.baseVal?.consolidate?.();
-  const m = t ? t.matrix : { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
-  return { x: m.a * x + m.c * y + m.e, y: m.b * x + m.d * y + m.f };
-}
-
 // For a shape, decide where the bright should remain at the end of the drain
 // (= where it grows from at the start of the build). Returns a "destination"
 // descriptor used by vfxApplyDrain to position the surviving dash.
 //   - kind 'four-mid' + w/h: closed-perimeter (rect) → 4 bright sections, one
 //                            per side, each centred on its side's midpoint;
 //                            symmetric, anchor-agnostic ("4 separate drains")
-//   - kind 'tail'           : open path → dash anchored at end (path end is
-//                             closer to anchor, OR L3 route in DRAIN phase)
-//   - kind 'head'           : open path → dash anchored at start (start
-//                             closer to anchor, OR L3 route in BUILD phase)
-//   - kind 'middle'         : symmetric drain (no anchor) — the cap-gap-cap
-//                             pattern from the centre
+//   - kind 'tail'           : open path → dash anchored at end (L3 route in
+//                             DRAIN phase — keeps the source→gateway flow)
+//   - kind 'head'           : open path → dash anchored at start (L3 route in
+//                             BUILD phase — keeps the source→gateway flow)
+//   - kind 'middle'         : symmetric drain — cap-gap-cap pattern.
+//                             BUILD: caps grow from both endpoints inward and
+//                             meet in the middle. DRAIN: gap opens in the
+//                             middle and grows outward, caps retreat to the
+//                             endpoints. Used for every regular link/path so
+//                             links always animate symmetrically — endpoints
+//                             → middle on build, middle → endpoints on drain.
 function vfxComputeDest(shapeEl, parentG, anchor, phase) {
   // L3 ribbons have an intrinsic source→gateway flow. The path is drawn in
   // that direction (start = source/target, end = gateway). On DRAIN the
@@ -8433,19 +8432,10 @@ function vfxComputeDest(shapeEl, parentG, anchor, phase) {
     if (w <= 0 || h <= 0) return { kind: 'middle' };
     return { kind: 'four-mid', w, h };
   }
-  if (!anchor) return { kind: 'middle' };
-  // path / line / polyline / polygon — work off endpoints
-  let L = 0, p0, p1;
-  try {
-    L = shapeEl.getTotalLength();
-    if (L > 0) { p0 = shapeEl.getPointAtLength(0); p1 = shapeEl.getPointAtLength(L); }
-  } catch (_) { /* ignore */ }
-  if (!p0 || !p1) return { kind: 'middle' };
-  const w0 = vfxLocalToWorld(parentG, p0.x, p0.y);
-  const w1 = vfxLocalToWorld(parentG, p1.x, p1.y);
-  const d0 = (w0.x - anchor.x) ** 2 + (w0.y - anchor.y) ** 2;
-  const d1 = (w1.x - anchor.x) ** 2 + (w1.y - anchor.y) ** 2;
-  return d0 < d1 ? { kind: 'head' } : { kind: 'tail' };
+  // path / line / polyline / polygon — links always animate symmetrically:
+  // build grows from both endpoints inward to the middle, drain empties the
+  // middle first and retreats outward to the endpoints.
+  return { kind: 'middle' };
 }
 
 function vfxCollectAnimatables(rootEl, anchor, phase) {
