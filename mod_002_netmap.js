@@ -3772,7 +3772,7 @@ function drawDevice(s, dev) {
     }
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label} · ${arrow}</text>
+      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${arrow}</text>
       <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
       <text class="m002-dev-ref-target" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(target, 24))}</text>
       <text class="m002-dev-ref-hint" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">DBL</text>
@@ -3789,8 +3789,7 @@ function drawDevice(s, dev) {
       : '';
     g.innerHTML = `
       <rect class="m002-dev-bg" x="${-w/2}" y="${-h/2}" width="${w}" height="${h}" rx="3"/>
-      <text class="m002-dev-type" x="${-w/2 + 10}" y="${-h/2 + 18}">${t.label}</text>
-      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(dev.name)}</text>
+      <text class="m002-dev-name" x="${-w/2 + 10}" y="${-h/2 + 30}">${escSvg(dev.name)}</text>
       <text class="m002-dev-notes" x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(truncate(dev.notes, 18) || '—')}</text>
       <text class="m002-dev-ip" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(dev.ip || '')}</text>
       <text class="m002-dev-l3" x="${w/2 - 10}" y="${h/2 - 10}" text-anchor="end">${escSvg(l3Label)}</text>
@@ -4604,8 +4603,7 @@ function drawCollapsedStack(s, stack) {
     <rect class="m002-stack-ghost" x="${-w/2 + 6}" y="${-h/2 - 6}" width="${w}" height="${h}" rx="3"/>
     <rect class="m002-stack-ghost" x="${-w/2 + 3}" y="${-h/2 - 3}" width="${w}" height="${h}" rx="3"/>
     <rect class="m002-dev-bg"      x="${-w/2}"     y="${-h/2}"     width="${w}" height="${h}" rx="3"/>
-    <text class="m002-dev-type"   x="${-w/2 + 10}" y="${-h/2 + 18}">STACK · ${t.label}</text>
-    <text class="m002-dev-name"   x="${-w/2 + 10}" y="${-h/2 + 40}">${escSvg(stack.name)}</text>
+    <text class="m002-dev-name m002-stack-name" x="${-w/2 + 10}" y="${-h/2 + 36}">${escSvg(stack.name)}</text>
     <text class="m002-stack-badge" x="${w/2 - 10}"  y="${-h/2 + 18}" text-anchor="end">×${memberCount}</text>
     <text class="m002-dev-notes"  x="${-w/2 + 10}" y="${h/2 - 10}">${escSvg(memberCount + ' members')}</text>
     ${gwBadge}
@@ -9486,7 +9484,6 @@ function renderDetailBody(s, dev, t) {
     <g class="m002-detail-device ${devSelected ? 'is-selected' : ''}" data-detail-stop="1" transform="translate(${devX} ${devY})" style="--accent:${t.accent}">
       <g class="m002-detail-device-inner" style="${devInnerStyle}">
         <rect class="m002-detail-dev-bg" width="${D.device.w}" height="${D.device.h}" fill="#0a0a10" stroke="${t.accent}" stroke-width="1.4" vector-effect="non-scaling-stroke"/>
-        <text class="m002-detail-dev-type" x="22" y="32">${t.label}</text>
         <text class="m002-detail-dev-name" x="${D.device.w / 2}" y="${nameY}" text-anchor="middle">${escSvg(dev.name || '')}</text>
         ${dev.ip ? `<text class="m002-detail-dev-ip" x="${D.device.w / 2}" y="${ipY}" text-anchor="middle">${escSvg(dev.ip)}</text>` : ''}
       </g>
@@ -9552,8 +9549,7 @@ function renderDetailBody(s, dev, t) {
         <g class="m002-detail-peer ${isSel ? 'is-selected' : ''}" data-detail-peer-id="${escAttr(peer.id)}" data-detail-stop="1" transform="translate(${pos.cx} ${pos.cy})" style="--accent:${pt.accent}">
           <g class="m002-detail-peer-inner">
             <rect class="m002-dev-bg" x="${-w / 2}" y="${-h / 2}" width="${w}" height="${h}" rx="3"/>
-            <text class="m002-dev-type" x="${-w / 2 + 10}" y="${-h / 2 + 18}">${pt.label}</text>
-            <text class="m002-dev-name" x="${-w / 2 + 10}" y="${-h / 2 + 40}">${escSvg(peer.name || '')}</text>
+            <text class="m002-dev-name" x="${-w / 2 + 10}" y="${-h / 2 + 30}">${escSvg(peer.name || '')}</text>
             <text class="m002-dev-notes" x="${-w / 2 + 10}" y="${h / 2 - 10}">${notesText}</text>
             ${ipText ? `<text class="m002-dev-ip" x="${w / 2 - 10}" y="${h / 2 - 10}" text-anchor="end">${ipText}</text>` : ''}
           </g>

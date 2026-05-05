@@ -237,6 +237,7 @@
 .m002-device.m002-autolink-target .m002-dev-bg{stroke-width:2;stroke-dasharray:none;filter:drop-shadow(0 0 5px var(--accent)) drop-shadow(0 0 12px var(--accent));}
 .m002-dev-type{font-size:9px;letter-spacing:1.6px;font-family:'JetBrains Mono','Share Tech Mono',monospace;fill:var(--accent);opacity:.85;}
 .m002-dev-name{font-size:14px;font-weight:600;fill:#f5f3ff;letter-spacing:.5px;}
+.m002-dev-name.m002-stack-name{font-size:18px;letter-spacing:.3px;}
 .m002-dev-ip{font-size:10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;fill:#7a7f8e;}
 .m002-dev-notes{font-size:10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;fill:#7a7f8e;font-style:italic;}
 .m002-device-ref .m002-dev-bg{stroke-dasharray:6 3;}
