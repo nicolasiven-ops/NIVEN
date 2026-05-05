@@ -683,10 +683,14 @@
    isn't tagged. Mirrors the configured-only amber state on devices/stacks
    ("declared but not wired through"). Opacity-only pulse (no drop-shadow)
    so the warning stays distinguishable from a genuinely amber-coloured VLAN
-   without bringing back the glow halos that were stripped in v2.33.26. */
+   without bringing back the glow halos that were stripped in v2.33.26.
+   Phase + duration mirror m002-vsolo-amber-pulse (devices/stacks): both peak
+   at the 50% mark so an asym link pulses *with* the configured-only device
+   it's attached to, not against it. Trough is intentionally deep (0.22) so
+   the cadence reads even at small zooms. */
 @keyframes m002-link-vsolo-asym-pulse {
-  0%, 100% { opacity: 1; }
-  50%      { opacity: 0.32; }
+  0%, 100% { opacity: 0.22; }
+  50%      { opacity: 1; }
 }
 .m002-host[data-active-layer="vlan"] .m002-link.m002-link-vsolo-asym,
 .m002-host[data-active-layer="vlan"] .m002-laglink.m002-link-vsolo-asym{animation:m002-link-vsolo-asym-pulse 2.4s ease-in-out infinite;}
