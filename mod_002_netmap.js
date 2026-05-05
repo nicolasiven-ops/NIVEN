@@ -854,6 +854,142 @@ function entityIps(s, id) {
   return dev.ip ? [dev.ip] : [];
 }
 
+// =============================================================================
+// Conflict validation
+// =============================================================================
+// Generic "this input doesn't make sense from a network perspective" guard.
+// Today catches duplicate IPs across non-L3 device addresses, router/firewall
+// interface IPs, and stack virtual-interface IPs — but the shape (locate-
+// conflict + reject-write + flag-field + pulse-tile) is reusable for future
+// validators (duplicate hostnames, overlapping subnets, VLAN clashes, ...).
+//
+// Conflict report shape:
+//   { ownerKind: 'device'|'stack', ownerId, ownerLabel, slotKind, slotLabel }
+//
+// `slotKey` strings disambiguate the editing slot from the conflict slot, so
+// editing an iface's existing IP (typing the same value back) does NOT report
+// a conflict against itself. Format: "dev:<id>" / "iface:<devId>:<ifId>" /
+// "vif:<stackId>:<vifId>".
+
+function ipSlotKey(kind, ...rest) { return [kind, ...rest].join(':'); }
+
+function* iterateIpSlots(s) {
+  for (const d of (s.devices || [])) {
+    if (isReference(d)) continue;
+    if (isL3Type(d.type)) {
+      for (const iface of (d.interfaces || [])) {
+        if (iface && iface.ip) {
+          yield {
+            key: ipSlotKey('iface', d.id, iface.id),
+            ip: String(iface.ip).trim(),
+            ownerKind: 'device', ownerId: d.id, ownerLabel: d.name || '',
+            slotKind: 'interface', slotLabel: iface.name || '',
+          };
+        }
+      }
+    } else if (d.ip) {
+      yield {
+        key: ipSlotKey('dev', d.id),
+        ip: String(d.ip).trim(),
+        ownerKind: 'device', ownerId: d.id, ownerLabel: d.name || '',
+        slotKind: 'device', slotLabel: '',
+      };
+    }
+  }
+  for (const st of (s.stacks || [])) {
+    for (const vif of (st.virtualInterfaces || [])) {
+      if (vif && vif.ip) {
+        yield {
+          key: ipSlotKey('vif', st.id, vif.id),
+          ip: String(vif.ip).trim(),
+          ownerKind: 'stack', ownerId: st.id, ownerLabel: st.name || '',
+          slotKind: 'vip', slotLabel: vif.name || '',
+        };
+      }
+    }
+  }
+}
+
+// Return the conflicting slot (or null) for a candidate IP. `excludeKey`
+// skips the editing slot itself so re-typing an already-stored value is a
+// no-op, not a self-collision. `ip` should already be passed through
+// normalizeIpInput; partial / empty values short-circuit to null.
+function findIpConflict(s, ip, excludeKey) {
+  const target = String(ip || '').trim();
+  if (!target) return null;
+  if (!/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(target)) return null;
+  for (const slot of iterateIpSlots(s)) {
+    if (slot.key === excludeKey) continue;
+    if (slot.ip === target) return slot;
+  }
+  return null;
+}
+
+// Trigger the red pulse on any on-canvas representation of an entity. Hits
+// the device tile, the collapsed-stack tile, the stack envelope, and the
+// stack cabinet — every element bound to that id gets the class so an
+// expanded stack flashes its envelope while a collapsed one flashes its tile.
+const _conflictPulseTimers = new Map();
+function pulseConflictEntity(s, entityId) {
+  if (!entityId || !s.gDevices) return;
+  const targets = new Set();
+  s.gDevices.querySelectorAll(`[data-device-id="${entityId}"]`).forEach((el) => targets.add(el));
+  s.gDevices.querySelectorAll(`[data-stack-id="${entityId}"]`).forEach((el) => targets.add(el));
+  s.gStacksBg?.querySelectorAll(`[data-stack-id="${entityId}"]`).forEach((el) => targets.add(el));
+  if (!targets.size) return;
+  targets.forEach((el) => {
+    el.classList.remove('m002-conflict-pulse');
+    void el.getBoundingClientRect();
+    el.classList.add('m002-conflict-pulse');
+  });
+  clearTimeout(_conflictPulseTimers.get(entityId));
+  _conflictPulseTimers.set(entityId, setTimeout(() => {
+    targets.forEach((el) => el.classList.remove('m002-conflict-pulse'));
+    _conflictPulseTimers.delete(entityId);
+  }, 1800));
+}
+
+function describeConflictTarget(conflict) {
+  const owner = conflict.ownerLabel || `unnamed ${conflict.ownerKind}`;
+  if (conflict.slotKind === 'interface' && conflict.slotLabel) return `${owner} · ${conflict.slotLabel}`;
+  if (conflict.slotKind === 'vip' && conflict.slotLabel) return `${owner} · ${conflict.slotLabel} (VIP)`;
+  if (conflict.slotKind === 'vip') return `${owner} (VIP)`;
+  return owner;
+}
+
+function clearFieldConflict(el) {
+  if (!el || !el.classList) return;
+  el.classList.remove('m002-field-conflict');
+  if (el.dataset && el.dataset.conflictWith) delete el.dataset.conflictWith;
+  if (el.title && el.title.startsWith('IP already in use')) el.removeAttribute('title');
+}
+
+function markFieldConflict(el, conflict) {
+  if (!el || !el.classList) return;
+  el.classList.add('m002-field-conflict');
+  el.title = `IP already in use by ${describeConflictTarget(conflict)} — input rejected`;
+}
+
+// Single entry-point for IP-edit handlers: returns true when the value should
+// be REJECTED (caller skips its mutation/save path). On rejection: marks the
+// field red, pulses the conflicting tile on first detection (and again only
+// on a target-change). Empty/partial inputs always pass through (return false
+// + clear field marker) so live typing remains usable.
+function rejectIpEditOnConflict(s, el, slotKey, candidateIp) {
+  const conflict = findIpConflict(s, candidateIp, slotKey);
+  if (!conflict) {
+    clearFieldConflict(el);
+    return false;
+  }
+  const prev = el.dataset.conflictWith || '';
+  markFieldConflict(el, conflict);
+  if (conflict.ownerId !== prev) {
+    el.dataset.conflictWith = conflict.ownerId;
+    pulseConflictEntity(s, conflict.ownerId);
+  }
+  return true;
+}
+
 // Gateway IPs configured on an entity. Source of truth is the entity's
 // routes[] table — every entry whose destination is the default route
 // (0.0.0.0/0) contributes its next-hop. Routers, endpoints, and stacks
@@ -6196,6 +6332,7 @@ function bindL3Sections(s, dev, body) {
       const apply = (rerender) => {
         const f = el.dataset.ifF;
         const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
+        if (f === 'ip' && rejectIpEditOnConflict(s, el, ipSlotKey('iface', dev.id, iface.id), val)) return;
         if (f === 'prefix') {
           iface.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -6346,6 +6483,7 @@ function bindStackVipSection(s, stack, body) {
       const apply = (rerender) => {
         const f = el.dataset.vifF;
         const val = f === 'ip' ? normalizeIpInput(el.value) : el.value;
+        if (f === 'ip' && rejectIpEditOnConflict(s, el, ipSlotKey('vif', stack.id, vif.id), val)) return;
         if (f === 'prefix') {
           vif.prefix = Math.max(0, Math.min(32, Number(val)));
         } else {
@@ -7039,13 +7177,20 @@ function openInspector(s) {
       <button type="button" class="m002-insp-del" data-del>DELETE NODE</button>
     `;
     body.querySelectorAll('[data-f]').forEach((el) => {
-      el.addEventListener('input', () => updateDeviceField(s, dev, el));
+      el.addEventListener('input', () => {
+        if (el.dataset.f === 'ip' && el.tagName === 'INPUT') {
+          const candidate = normalizeIpInput(el.value);
+          if (rejectIpEditOnConflict(s, el, ipSlotKey('dev', dev.id), candidate)) return;
+        }
+        updateDeviceField(s, dev, el);
+      });
       el.addEventListener('change', () => {
         // IP fields: write the normalized form back into the input so the
         // user sees the correction (e.g. "10.0.0.05" → "10.0.0.5") on blur.
         if (el.dataset.f === 'ip' && el.tagName === 'INPUT') {
           const fixed = normalizeIpInput(el.value);
           if (fixed !== el.value) el.value = fixed;
+          if (rejectIpEditOnConflict(s, el, ipSlotKey('dev', dev.id), fixed)) return;
         }
         updateDeviceField(s, dev, el);
         // Commit-only refresh for the port count: rebuilds the port table to

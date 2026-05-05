@@ -509,6 +509,31 @@
   to  {filter:drop-shadow(0 0 12px #ff003c) drop-shadow(0 0 30px #ff003c);}
 }
 
+/* Conflict signaling — generic input-rejection visuals shared by every
+   "doesn't make sense from a network perspective" guard (today: duplicate
+   IPs; later: duplicate hostnames, overlapping subnets, ...).
+   The field stays red as long as its value collides with another slot;
+   the pulse fires for ~1.8s on the offending tile so the user can spot the
+   conflicting element on the canvas at a glance. */
+.m002-field-conflict,
+input.m002-field-conflict,
+.m002-iface-row input.m002-field-conflict,
+.m002-route-row input.m002-field-conflict{
+  border-color:#ff003c !important;
+  color:#ff5a78 !important;
+  background:rgba(255,0,60,0.10) !important;
+  animation:m002-conflict-field-pulse 1.4s ease-in-out infinite;
+}
+@keyframes m002-conflict-field-pulse{
+  0%,100%{box-shadow:0 0 4px rgba(255,0,60,0.50), inset 0 0 0 1px rgba(255,0,60,0.20);}
+  50%   {box-shadow:0 0 14px rgba(255,0,60,0.95), inset 0 0 0 1px rgba(255,0,60,0.45);}
+}
+.m002-conflict-pulse{animation:m002-conflict-tile-pulse 0.55s ease-in-out 3 alternate;}
+@keyframes m002-conflict-tile-pulse{
+  from{filter:drop-shadow(0 0 6px #ff003c) drop-shadow(0 0 16px rgba(255,0,60,0.65));}
+  to  {filter:drop-shadow(0 0 16px #ff003c) drop-shadow(0 0 36px rgba(255,0,60,0.95));}
+}
+
 .m002-lagtable-head{display:grid;grid-template-columns:60px 50px 1fr;gap:6px;align-items:center;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;color:#5a5f6e;letter-spacing:1.4px;padding:2px 4px;}
 .m002-lagtable-row{display:grid;grid-template-columns:60px 50px 1fr;gap:6px;align-items:center;cursor:pointer;padding:3px 4px;border:1px solid transparent;border-radius:2px;}
 .m002-lagtable-row:hover{background:rgba(255,0,60,0.06);border-color:#ff003c;}
