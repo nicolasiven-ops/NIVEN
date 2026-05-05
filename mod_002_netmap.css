@@ -473,6 +473,16 @@
 .m002-insp-details>.m002-field{padding:0 10px;}
 .m002-insp-details>.m002-field:first-of-type{padding-top:8px;}
 .m002-insp-details>.m002-field:last-of-type{padding-bottom:10px;}
+/* VLANs collapsible — same framed scaffolding as //DETAILS, with the picker
+   getting body-padding so chips don't hug the inner border. */
+.m002-insp-vlans{margin:2px 0 6px;border:1px solid #1a1a22;background:rgba(10,10,16,0.6);}
+.m002-insp-vlans>summary{cursor:pointer;padding:6px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:1.6px;list-style:none;user-select:none;transition:.15s;}
+.m002-insp-vlans>summary::-webkit-details-marker{display:none;}
+.m002-insp-vlans>summary::before{content:'▸ ';color:#5a5f6e;}
+.m002-insp-vlans[open]>summary{color:#ff003c;border-bottom:1px solid #1a1a22;}
+.m002-insp-vlans[open]>summary::before{content:'▾ ';color:#ff003c;}
+.m002-insp-vlans>summary:hover{color:#ff003c;}
+.m002-insp-vlans>.m002-vlan-picker{padding:8px 10px;}
 .m002-port-actions{display:flex;flex-direction:column;gap:6px;margin-top:4px;}
 .m002-action{display:flex;align-items:center;justify-content:center;gap:8px;background:transparent;border:1px solid #1a1a22;color:#e8e8ee;padding:7px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:11px;letter-spacing:1.5px;cursor:pointer;transition:.15s;}
 .m002-action:hover{border-color:#9aa0a8;}
@@ -616,13 +626,19 @@
 .m002-subnet-legend-auto{background:transparent;border:1px dashed #2a2a36;color:#7a7f8e;padding:3px 8px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:9px;letter-spacing:1.5px;cursor:pointer;align-self:flex-start;}
 .m002-subnet-legend-auto:hover{border-color:#35ff7a;color:#35ff7a;}
 
-/* L3 inspector — interfaces + routes table */
-.m002-insp-l3{margin-top:4px;border-top:1px solid #1a1a22;padding-top:8px;}
-.m002-insp-l3 > summary{font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:2px;cursor:pointer;padding:4px 0;list-style:none;}
+/* L3 inspector — interfaces + routes table.
+   Same framed scaffolding as .m002-insp-details (border + faint BG +
+   summary-toggle row), but green accent on [open] because L3 reads as the
+   routing layer color. */
+.m002-insp-l3{margin:2px 0 6px;border:1px solid #1a1a22;background:rgba(10,10,16,0.6);}
+.m002-insp-l3 > summary{cursor:pointer;padding:6px 10px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:1.6px;list-style:none;user-select:none;transition:.15s;}
 .m002-insp-l3 > summary::-webkit-details-marker{display:none;}
 .m002-insp-l3 > summary::before{content:'▸ ';color:#5a5f6e;}
+.m002-insp-l3[open] > summary{color:#35ff7a;border-bottom:1px solid #1a1a22;}
 .m002-insp-l3[open] > summary::before{content:'▾ ';color:#35ff7a;}
-.m002-l3-block{margin-top:8px;}
+.m002-insp-l3 > summary:hover{color:#35ff7a;}
+.m002-l3-block{padding:8px 10px;}
+.m002-l3-block + .m002-l3-block{padding-top:0;}
 .m002-l3-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;font-family:'JetBrains Mono','Share Tech Mono',monospace;font-size:10px;color:#a0a6b4;letter-spacing:1.5px;}
 .m002-l3-head-actions{display:flex;gap:4px;}
 .m002-iface-list,.m002-route-list{display:flex;flex-direction:column;gap:3px;}

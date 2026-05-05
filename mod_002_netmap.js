@@ -6835,10 +6835,10 @@ function openInspector(s) {
         </div>
         ${renderRoutesBlockHTML(s, dev)}
       </details>`}
-      <div class="m002-field">
-        <span>VLANS</span>
+      <details class="m002-insp-vlans"${s.inspectorVlansOpen !== false ? ' open' : ''}>
+        <summary>// VLANS</summary>
         <div class="m002-vlan-picker" data-vlan-target="device:${escAttr(dev.id)}"></div>
-      </div>
+      </details>
       <div class="m002-ports-block">
         <div class="m002-ports-head">PORT TABLE (${dev.ports.length})</div>
         <div class="m002-ports-prefix" data-prefix-display${dev.portPrefix ? '' : ' hidden'}>
@@ -6888,11 +6888,14 @@ function openInspector(s) {
         if (el.dataset.f === 'ports') openInspector(s);
       });
     });
-    // Persist the //DETAILS open/closed state across inspector re-renders so
-    // a +/− click (or any other rerender) doesn't surprise the user by
-    // collapsing the panel they had just expanded.
+    // Persist the //DETAILS / //VLANS open/closed state across inspector
+    // re-renders so a +/− click (or any other rerender) doesn't surprise the
+    // user by collapsing the panel they had just expanded.
     body.querySelector('.m002-insp-details')?.addEventListener('toggle', (e) => {
       s.inspectorDetailsOpen = e.target.open;
+    });
+    body.querySelector('.m002-insp-vlans')?.addEventListener('toggle', (e) => {
+      s.inspectorVlansOpen = e.target.open;
     });
     // Port-count buttons: 24 / 48 quick-presets and ± steppers. Each routes
     // through updateDeviceField('ports') with a synthetic element so the
@@ -7223,10 +7226,10 @@ function openInspector(s) {
           ${stack.expanded ? '▴ COLLAPSE' : '▾ EXPAND'}
         </button>
       </div>
-      <div class="m002-field">
-        <span>VLANS</span>
+      <details class="m002-insp-vlans"${s.inspectorVlansOpen !== false ? ' open' : ''}>
+        <summary>// VLANS</summary>
         <div class="m002-vlan-picker" data-vlan-target="stack:${escAttr(stack.id)}"></div>
-      </div>
+      </details>
       ${vipsHTML}
       ${lagsHTML}
       ${stackLinksHTML}
@@ -7262,6 +7265,9 @@ function openInspector(s) {
     body.querySelector('[data-stk="toggle"]').addEventListener('click', () => {
       toggleStackExpanded(s, stack.id);
       openInspector(s);
+    });
+    body.querySelector('.m002-insp-vlans')?.addEventListener('toggle', (e) => {
+      s.inspectorVlansOpen = e.target.open;
     });
     body.querySelectorAll('[data-stk-rm]').forEach((b) => {
       b.addEventListener('click', () => {
