@@ -914,6 +914,18 @@ input.m002-field-conflict,
   60%  {transform:scale(1.08);opacity:1;}
   100% {transform:scale(1);   opacity:1;}
 }
+/* Gentler variant for hop-in. The 60%-overshoot in port-pop reads as a
+   "boing" snap when 24 ports do it within a 280ms window — combined with
+   a 12ms stagger that's so tight the wave is invisible, the user
+   reported "ich kann nicht mal sagen, ob da überhaupt eine Animation
+   abgespielt wird". port-glide-in starts at scale(0.88) instead of 0.6
+   (smaller initial = subtler grow), no overshoot, smoother sustained
+   easing. The hop-in CSS rule pairs it with a 1.5× stagger multiplier so
+   the per-port wave is actually perceivable. */
+@keyframes m002-detail-port-glide-in{
+  0%   {transform:scale(0.88); opacity:0;}
+  100% {transform:scale(1);    opacity:1;}
+}
 @keyframes m002-detail-stub-fade{
   0%   {opacity:0;}
   100% {opacity:1;}
@@ -1021,16 +1033,20 @@ input.m002-field-conflict,
    stub + peer-link fade in slightly behind the ports (peer-link last so
    the line draws between two visible endpoints). */
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-port .m002-detail-port-inner{
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.2,0.5,1) forwards!important;
-  animation-delay:calc(var(--enter-delay,700ms) - 700ms)!important;
+  animation:m002-detail-port-glide-in 380ms cubic-bezier(0.16,1,0.3,1) forwards!important;
+  /* Stagger ×1.5 vs the initial entry: PORT_STAGGER_MS is 12ms in JS, so the
+     raw cascade is i × 12ms. Multiplied to 18ms here so the wave reads as a
+     wave instead of a near-simultaneous batch. Initial entry is unaffected
+     because that path uses the var directly without the multiplier. */
+  animation-delay:calc((var(--enter-delay,700ms) - 700ms) * 1.5)!important;
 }
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-stub{
-  animation:m002-detail-stub-fade 240ms ease-out forwards!important;
-  animation-delay:120ms!important;
+  animation:m002-detail-stub-fade 320ms cubic-bezier(0.16,1,0.3,1) forwards!important;
+  animation-delay:200ms!important;
 }
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-peer-link{
-  animation:m002-detail-stub-fade 280ms ease-out forwards!important;
-  animation-delay:160ms!important;
+  animation:m002-detail-stub-fade 360ms cubic-bezier(0.16,1,0.3,1) forwards!important;
+  animation-delay:260ms!important;
 }
 /* Tile-inner / tile-bg freeze during hop. Higher specificity (0,5,0) than
    the show entry rules (0,4,0) so these win without needing !important on

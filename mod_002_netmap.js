@@ -10736,7 +10736,14 @@ function animateView(s, target, durationMs) {
 //                     port-pop handoff (both end/start at scale 0.6
 //                     opacity 0) look like no animation at all.
 const HOP_OUT_MS = 200;
-const HOP_IN_MS  = 280;
+// HOP_IN_MS — covers the LONGEST port-cascade so the settle timer doesn't
+// pin port-inner to identity (via .m002-detail-overlay-settled !important)
+// while late-staggered ports are still animating in. With up to 24 ports at
+// the v2.34.4-bumped 18ms hop-in stagger (PORT_STAGGER_MS × 1.5) plus the
+// 380ms port-glide-in duration: 23 × 18 + 380 = 794ms. 820 leaves a small
+// margin without forcing the user to wait too long for the centre tile to
+// be re-clickable.
+const HOP_IN_MS  = 820;
 
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
