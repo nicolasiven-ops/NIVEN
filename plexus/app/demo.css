@@ -88,6 +88,11 @@ body.plexus-demo {
   font-size: 0.74rem;
   letter-spacing: 0.14em;
   white-space: nowrap;
+  /* Reset native <button> chrome so the trigger looks like the <a> links */
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  font-family: inherit;
 }
 
 .demo-link:hover {
