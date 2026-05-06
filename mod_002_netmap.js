@@ -10837,16 +10837,30 @@ function hopToPeer(s, peerId, fromEl) {
     // Phase 3 — wait for FLIP to complete, THEN add hop-in so the new
     // ports/stubs/peer-links pop / fade in deliberately. Settle one
     // animation-pass later.
+    //
+    // setTimeout fires at any point within a frame, but the class toggle
+    // that follows triggers a style-recalc + animation-timeline-setup for
+    // 24+ ports + stubs + peer-links — heavy work the browser tries to
+    // squeeze into the partial frame remaining after setTimeout fires.
+    // That landed as a recurring hitch "an der gleichen Stelle" right at
+    // FLIP-end. Pairing setTimeout with requestAnimationFrame defers the
+    // class change to the next clean frame boundary, giving the browser a
+    // full frame to do the setup work. Combined with the will-change hint
+    // pre-promoted during hop-out (CSS), the layer creation cost is also
+    // out of the way before hop-in lands.
     setTimeout(() => {
       if (s.detailDeviceId !== peerId) return;
-      overlay.classList.add('m002-detail-hop-in');
-      s._detailSettleTimer = setTimeout(() => {
-        if (s.detailDeviceId === peerId) {
-          overlay.classList.add('m002-detail-overlay-settled');
-          overlay.classList.remove('m002-detail-hop-in');
-        }
-        s._detailHopActive = false;
-      }, HOP_IN_MS + 100);
+      requestAnimationFrame(() => {
+        if (s.detailDeviceId !== peerId) return;
+        overlay.classList.add('m002-detail-hop-in');
+        s._detailSettleTimer = setTimeout(() => {
+          if (s.detailDeviceId === peerId) {
+            overlay.classList.add('m002-detail-overlay-settled');
+            overlay.classList.remove('m002-detail-hop-in');
+          }
+          s._detailHopActive = false;
+        }, HOP_IN_MS + 100);
+      });
     }, DETAIL.flipMs);
   };
 
