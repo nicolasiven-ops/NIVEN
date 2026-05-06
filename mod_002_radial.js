@@ -90,6 +90,28 @@ function donutArcPath(cx, cy, rIn, rOut, startDeg, endDeg) {
           A ${rIn} ${rIn} 0 ${large} 0 ${eIn.x} ${eIn.y} Z`;
 }
 
+// Glyph + label placement inside a 4-cardinal segment. Default is the radial
+// stack (glyph closer to inner edge, label closer to outer edge). On E/W with
+// long labels (PHYSICAL, ROUTING) the side-by-side layout bleeds past the
+// outer radius — switch those to a vertical stack at the wedge midline so the
+// text stays inside the donut.
+function radialLabelPositions(cx, cy, centerDeg, label) {
+  const isHorizontal = (centerDeg === 0 || centerDeg === 180);
+  if (isHorizontal && (label?.length ?? 0) > 5) {
+    const mid = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2, centerDeg);
+    return {
+      glyph: { x: mid.x, y: mid.y - 2 },
+      label: { x: mid.x, y: mid.y + 14 },
+    };
+  }
+  const g = polarXY(cx, cy, RADIAL_INNER_R + 22, centerDeg);
+  const l = polarXY(cx, cy, RADIAL_OUTER_R - 18, centerDeg);
+  return {
+    glyph: { x: g.x, y: g.y + 8 },
+    label: { x: l.x, y: l.y + 4 },
+  };
+}
+
 // --- Public API ------------------------------------------------------------
 
 export function openRadialMenu(s, clientX, clientY) {
@@ -288,15 +310,12 @@ function renderRadialPrimary() {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
     const end   = seg.center + half - RADIAL_GAP_DEG / 2;
     const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
-    // Glyph closer to inner edge, label closer to outer edge — radial reading
-    // order from centre outward stays consistent across all four directions.
-    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
-    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    const pos = radialLabelPositions(cx, cy, seg.center, seg.label);
     segs += `
       <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
         <path class="m002-rad-seg-path" d="${path}"/>
-        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
-        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
       </g>`;
   });
   // Animation overlay: a centre dot, two vertical lines, and two semicircle
@@ -374,13 +393,12 @@ function renderRadialMove() {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
     const end   = seg.center + half - RADIAL_GAP_DEG / 2;
     const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
-    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
-    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    const pos = radialLabelPositions(cx, cy, seg.center, seg.label);
     segs += `
       <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
         <path class="m002-rad-seg-path" d="${path}"/>
-        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
-        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
       </g>`;
   });
   return `
@@ -406,13 +424,12 @@ function renderRadialTool() {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
     const end   = seg.center + half - RADIAL_GAP_DEG / 2;
     const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
-    const glyphPos = polarXY(cx, cy, RADIAL_INNER_R + 22, seg.center);
-    const labelPos = polarXY(cx, cy, RADIAL_OUTER_R - 18, seg.center);
+    const pos = radialLabelPositions(cx, cy, seg.center, seg.label);
     segs += `
       <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
         <path class="m002-rad-seg-path" d="${path}"/>
-        <text class="m002-rad-seg-glyph" x="${glyphPos.x}" y="${glyphPos.y + 8}" text-anchor="middle">${seg.glyph}</text>
-        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${seg.label}</text>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
       </g>`;
   });
   return `
