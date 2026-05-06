@@ -287,7 +287,7 @@
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]{opacity:.18;filter:saturate(0) brightness(.55);}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-bg{stroke:#3a3a44;fill:transparent;pointer-events:all;}
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"] .m002-stack-env-label{fill:#5a5f6e;}
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.45;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-l3="false"]:hover{opacity:.9;filter:saturate(.85) brightness(.95);}
 /* Stack-member devices: dimmed white in physical/vlan, but in routing the
    IP-bearing members glow in their own accent (override below). */
 .m002-device.m002-stack-member{filter:none;}
@@ -690,7 +690,7 @@ input.m002-field-conflict,
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"],
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]{opacity:.18;filter:saturate(0) brightness(.55);}
 .m002-host[data-active-layer="routing"] .m002-device[data-l3="false"]:hover,
-.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.45;}
+.m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-l3="false"]:hover{opacity:.9;filter:saturate(.85) brightness(.95);}
 /* VLAN solo dim — two diagnostic tiers:
    - unmatched (isolated OR adjacent): no VLAN configured here → fade to grey
    - configured-only: VLAN at device level but no port carries it → amber
@@ -762,7 +762,7 @@ input.m002-field-conflict,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-isolated"]:hover,
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="unmatched-adjacent"]:hover,
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-isolated"]:hover,
-.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
+.m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="unmatched-adjacent"]:hover{opacity:.9 !important;filter:saturate(.85) brightness(.95) !important;}
 .m002-host[data-active-layer="vlan"] .m002-device[data-vlan-solo="configured-only"],
 .m002-host[data-active-layer="vlan"] .m002-stack-collapsed[data-vlan-solo="configured-only"],
 .m002-host[data-active-layer="vlan"] .m002-stack-envelope[data-vlan-solo="configured-only"]{animation:m002-vsolo-amber-pulse 2.4s ease-in-out infinite;}
@@ -791,7 +791,7 @@ input.m002-field-conflict,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-isolated"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-collapsed[data-routing-solo="unmatched-adjacent"]:hover,
 .m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-isolated"]:hover,
-.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-adjacent"]:hover{opacity:.45 !important;}
+.m002-host[data-active-layer="routing"] .m002-stack-envelope[data-routing-solo="unmatched-adjacent"]:hover{opacity:.9 !important;filter:saturate(.85) brightness(.95) !important;}
 /* Stacking cables ride along with their parent envelope's solo state. */
 .m002-host[data-active-layer="routing"] .m002-stacklink{transition:opacity .6s ease-out;}
 .m002-host[data-active-layer="routing"] .m002-stacklink[data-routing-solo="unmatched-isolated"],
