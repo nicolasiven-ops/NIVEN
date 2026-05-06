@@ -14,6 +14,15 @@
 </head>
 <body class="plexus-demo">
 
+  <!-- Custom cursor (mirrors N.IVEN hub) -->
+  <div class="cursor" aria-hidden="true">
+    <span class="cur-bracket br-tl"></span>
+    <span class="cur-bracket br-tr"></span>
+    <span class="cur-bracket br-bl"></span>
+    <span class="cur-bracket br-br"></span>
+  </div>
+  <div class="cursor-dot" aria-hidden="true"></div>
+
   <!-- Demo banner (fixed top strip) -->
   <div class="demo-banner">
     <div class="demo-banner-left">
@@ -29,6 +38,35 @@
 
   <!-- Plexus mount point -->
   <div id="module-stage" class="demo-stage"></div>
+
+  <!-- Custom cursor logic (mirrors N.IVEN hub) -->
+  <script>
+    (() => {
+      const cursor = document.querySelector('.cursor');
+      const dot = document.querySelector('.cursor-dot');
+      if (!cursor || !dot) return;
+      if (!matchMedia('(hover: hover) and (pointer: fine)').matches) return;
+
+      let visible = false;
+      window.addEventListener('mousemove', (e) => {
+        const t = `translate3d(${e.clientX}px, ${e.clientY}px, 0) translate(-50%, -50%)`;
+        dot.style.transform = t;
+        cursor.style.transform = t;
+        if (!visible) {
+          cursor.style.opacity = '1';
+          dot.style.opacity = '1';
+          visible = true;
+        }
+      });
+      window.addEventListener('mouseleave', () => {
+        cursor.style.opacity = '0';
+        dot.style.opacity = '0';
+        visible = false;
+      });
+      window.addEventListener('mousedown', () => cursor.classList.add('down'));
+      window.addEventListener('mouseup',   () => cursor.classList.remove('down'));
+    })();
+  </script>
 
   <!-- Boot order: registry first, then Plexus registers itself, then we mount -->
   <script src="/module-runtime.js"></script>
