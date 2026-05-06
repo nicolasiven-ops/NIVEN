@@ -115,6 +115,184 @@ body.plexus-demo {
   overflow: hidden;
 }
 
+/* === Banner state visibility (unlicensed vs licensed) === */
+.demo-banner .lbl-licensed { display: none; }
+.demo-banner.licensed .lbl-unlicensed { display: none; }
+.demo-banner.licensed .lbl-licensed { display: inline-flex; align-items: center; gap: 0.4rem; }
+
+/* Buy button hides in licensed mode (only on the banner itself) */
+.demo-banner.licensed .demo-buy { display: none; }
+
+/* In licensed mode the dot stays the same, the label color shifts to give
+   a clearly-different look from the demo-yellow vibe. */
+.demo-banner.licensed .demo-label.lbl-licensed {
+  color: var(--demo-glow);
+  font-weight: 700;
+}
+
+/* The license trigger shows different text per state — handled via lbl-* spans. */
+#license-trigger { font: inherit; cursor: pointer; }
+#license-trigger .lbl-unlicensed,
+#license-trigger .lbl-licensed { display: none; }
+.demo-banner.unlicensed #license-trigger .lbl-unlicensed { display: inline; }
+.demo-banner.licensed   #license-trigger .lbl-licensed   { display: inline; }
+
+/* === License modal === */
+.license-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  background: rgba(7, 7, 12, 0.85);
+  backdrop-filter: blur(8px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.license-modal[hidden] { display: none; }
+
+.license-modal .lbl-licensed { display: none; }
+.license-modal.licensed .lbl-unlicensed { display: none; }
+.license-modal.licensed .lbl-licensed { display: block; }
+
+.license-panel {
+  position: relative;
+  background: #0a0a12;
+  border: 1px solid var(--demo-border);
+  padding: 2rem 1.8rem;
+  max-width: 460px;
+  width: 100%;
+  font-family: 'Share Tech Mono', monospace;
+  letter-spacing: 0.06em;
+  box-shadow: 0 0 32px rgba(255, 0, 60, 0.22);
+  color: var(--demo-text);
+}
+
+.license-panel .corner {
+  position: absolute;
+  width: 14px;
+  height: 14px;
+  border: 1px solid var(--demo-red);
+  pointer-events: none;
+}
+.license-panel .corner.tl { top: -1px; left: -1px;     border-right: none; border-bottom: none; }
+.license-panel .corner.tr { top: -1px; right: -1px;    border-left: none;  border-bottom: none; }
+.license-panel .corner.bl { bottom: -1px; left: -1px;  border-right: none; border-top: none; }
+.license-panel .corner.br { bottom: -1px; right: -1px; border-left: none;  border-top: none; }
+
+.license-panel h2 {
+  font-family: 'Orbitron', sans-serif;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: 0.22em;
+  color: var(--demo-red);
+  margin-bottom: 1.2rem;
+  text-transform: uppercase;
+}
+
+.license-status {
+  color: var(--demo-text);
+  font-size: 0.85rem;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  margin-bottom: 1.4rem;
+  line-height: 1.5;
+}
+
+.license-label {
+  display: block;
+  margin-bottom: 0.6rem;
+}
+
+.license-label > span {
+  display: block;
+  font-size: 0.7rem;
+  letter-spacing: 0.2em;
+  color: var(--demo-dim);
+  margin-bottom: 0.4rem;
+  text-transform: uppercase;
+}
+
+#license-input {
+  width: 100%;
+  background: rgba(7, 7, 12, 0.6);
+  border: 1px solid var(--demo-border);
+  color: var(--demo-text);
+  font-family: 'Share Tech Mono', monospace;
+  padding: 0.8rem 0.9rem;
+  font-size: 0.92rem;
+  letter-spacing: 0.12em;
+  outline: none;
+  transition: border-color 0.18s, box-shadow 0.18s;
+}
+#license-input:focus {
+  border-color: var(--demo-red);
+  box-shadow: 0 0 14px rgba(255, 0, 60, 0.3);
+}
+
+.license-error {
+  color: var(--demo-red);
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  margin-top: 0.5rem;
+  text-transform: none;
+}
+
+.license-actions {
+  display: flex;
+  gap: 0.5rem;
+  margin-top: 1.4rem;
+}
+
+.lic-btn {
+  flex: 1;
+  background: transparent;
+  border: 1px solid var(--demo-border);
+  color: var(--demo-text);
+  padding: 0.7rem 1rem;
+  font-family: 'Share Tech Mono', monospace;
+  font-size: 0.82rem;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+  transition: all 0.18s ease;
+}
+.lic-btn.primary {
+  background: var(--demo-red);
+  color: #07070c;
+  border-color: var(--demo-red);
+  box-shadow: 0 0 14px rgba(255, 0, 60, 0.4);
+  font-weight: 700;
+}
+.lic-btn.primary:hover {
+  background: var(--demo-glow);
+  box-shadow: 0 0 22px rgba(255, 0, 60, 0.6);
+}
+.lic-btn.ghost { color: var(--demo-dim); }
+.lic-btn.ghost:hover { color: var(--demo-text); border-color: var(--demo-text); }
+.lic-btn.danger {
+  color: var(--demo-red);
+  border-color: var(--demo-red);
+}
+.lic-btn.danger:hover {
+  background: rgba(255, 0, 60, 0.1);
+  box-shadow: 0 0 12px rgba(255, 0, 60, 0.3);
+}
+
+.license-fine {
+  text-align: center;
+  margin-top: 1.4rem;
+  color: var(--demo-dim);
+  font-size: 0.74rem;
+  letter-spacing: 0.1em;
+  text-transform: none;
+}
+.license-fine a {
+  color: var(--demo-red);
+  text-decoration: none;
+}
+.license-fine a:hover { text-shadow: 0 0 8px rgba(255, 0, 60, 0.5); }
+
 /* === Custom cursor (mirrors N.IVEN hub) === */
 @media (hover: hover) and (pointer: fine) {
   body, a, button { cursor: none; }

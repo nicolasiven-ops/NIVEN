@@ -1624,6 +1624,9 @@ function applyStyle(s, styleId) {
 function createState(stage, ctx) {
   return {
     stage, sb: ctx.sb, project: ctx.project, code: ctx.code, exit: ctx.exit,
+    // Licensed (paid) standalone mode — persists maps to localStorage instead
+    // of Supabase. Set by /plexus/app/ when a verified license key is present.
+    localPersist: !!ctx.license,
     prefs: loadPrefs(),
     // Maps come from Supabase. Each entry mirrors a row's id+name; the heavy
     // map content lives in the table's `data` jsonb and is loaded on demand
@@ -10943,8 +10946,15 @@ async function createMap(s) {
   const name = (prompt('New map name:', `Map ${s.maps.length + 1}`) || '').trim();
   if (!name) return;
   await saveNow(s);
-  if (!s.sb) {
-    // Offline: in-memory only.
+  if (s.localPersist) {
+    // Licensed: persist to localStorage via schedSave / saveNow.
+    const id = 'lic_' + rid();
+    s.maps.push({ id, name });
+    s.activeMapId = id;
+    hydrateMapData(s, {});
+    schedSave(s);
+  } else if (!s.sb) {
+    // Offline / unlicensed demo: in-memory only.
     const id = 'local_' + rid();
     s.maps.push({ id, name });
     s.activeMapId = id;
@@ -10972,6 +10982,11 @@ async function renameCurrentMap(s) {
   if (!name) return;
   m.name = name;
   refreshMapBar(s);
+  if (s.localPersist) {
+    schedSave(s); // saveNow → syncLicensedStore picks up the new name
+    toast(s, `Map renamed: ${name}`);
+    return;
+  }
   if (!s.sb || String(m.id).startsWith('local_')) {
     toast(s, `Map renamed: ${name}`);
     return;
@@ -10986,7 +11001,7 @@ async function deleteCurrentMap(s) {
   const m = s.maps.find((mm) => mm.id === s.activeMapId);
   if (!m) return;
   if (!confirm(`Delete map "${m.name}"? This cannot be undone.`)) return;
-  if (s.sb && !String(m.id).startsWith('local_')) {
+  if (!s.localPersist && s.sb && !String(m.id).startsWith('local_')) {
     const { error } = await s.sb.from('m002_maps').delete().eq('id', m.id);
     if (error) { console.warn('[m002] delete failed', error); toast(s, 'Delete failed'); return; }
   }
@@ -10999,6 +11014,7 @@ async function deleteCurrentMap(s) {
   refreshMapBar(s);
   refreshZoneBar(s);
   rememberActiveMap(s);
+  if (s.localPersist) schedSave(s); // sync the deletion to localStorage
   toast(s, `Map "${deletedName}" deleted`);
 }
 
@@ -11023,6 +11039,20 @@ function importMapFromFile(s, file) {
       const data = JSON.parse(reader.result);
       const name = (data.name || file.name.replace(/\.json$/i, '')).slice(0, 60);
       await saveNow(s); // flush current before swap
+      if (s.localPersist) {
+        const id = 'lic_' + rid();
+        s.maps.push({ id, name });
+        s.activeMapId = id;
+        hydrateMapData(s, data);
+        schedSave(s);
+        applyView(s);
+        render(s);
+        refreshMapBar(s);
+        refreshZoneBar(s);
+        rememberActiveMap(s);
+        toast(s, `Imported "${name}"`);
+        return;
+      }
       if (!s.sb) {
         const id = 'local_' + rid();
         s.maps.push({ id, name });

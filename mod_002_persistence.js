@@ -22,6 +22,43 @@ const LEGACY_META   = (s) => `niven:m002:meta:${s.project?.id || s.code}`;
 const LEGACY_MAP    = (mapId) => `niven:m002:map:${mapId}`;
 const LEGACY_SINGLE = (s) => `niven:m002:${s.project?.id || s.code}`;
 
+// Licensed (paid) mode: maps persist to localStorage instead of Supabase.
+// Triggered when state.localPersist is true (set in createState from ctx.license).
+const LICENSED_STORE_KEY = 'plexus:licensed:store';
+
+function readLicensedStore() {
+  try {
+    const raw = localStorage.getItem(LICENSED_STORE_KEY);
+    if (!raw) return { maps: [], activeMapId: null };
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return { maps: [], activeMapId: null };
+    if (!Array.isArray(parsed.maps)) parsed.maps = [];
+    return parsed;
+  } catch { return { maps: [], activeMapId: null }; }
+}
+
+function writeLicensedStore(store) {
+  try { localStorage.setItem(LICENSED_STORE_KEY, JSON.stringify(store)); }
+  catch (e) { console.warn('[m002] licensed store write failed', e); }
+}
+
+// Sync the entire state (maps list + active map data) to the licensed store.
+// Called on every saveNow when localPersist is true — ensures rename/delete
+// of maps in s.maps are reflected without needing per-op store edits.
+function syncLicensedStore(s) {
+  const activeData = snapshotMapData(s);
+  const existing = readLicensedStore();
+  const newStore = {
+    maps: s.maps.map((m) => {
+      if (m.id === s.activeMapId) return { id: m.id, name: m.name, data: activeData };
+      const prev = existing.maps.find((sm) => sm.id === m.id);
+      return { id: m.id, name: m.name, data: prev?.data ?? {} };
+    }),
+    activeMapId: s.activeMapId,
+  };
+  writeLicensedStore(newStore);
+}
+
 // Local copy of DEFAULT_VIEW. MUST stay in sync with the constant of the
 // same name in mod_002_netmap.js. Duplicated here so this module has zero
 // circular imports back into the main module.
@@ -61,6 +98,12 @@ export function snapshotMapData(s) {
 
 export async function saveNow(s) {
   if (!s.activeMapId || s.suspendSaves) return;
+  // Licensed mode (paid demo, no Supabase) — persist whole state to localStorage.
+  if (!s.sb && s.localPersist) {
+    syncLicensedStore(s);
+    s.dirty = false;
+    return;
+  }
   // Local-only maps (offline mode) — nothing to push.
   if (!s.sb || String(s.activeMapId).startsWith('local_')) { s.dirty = false; return; }
   const data = snapshotMapData(s);
@@ -80,6 +123,8 @@ export async function saveNow(s) {
 // --- Load flow --------------------------------------------------------------
 
 export async function loadFromServer(s) {
+  // Licensed mode: load from localStorage. No supabase calls.
+  if (!s.sb && s.localPersist) { loadFromLicensedStore(s); return; }
   if (!s.sb) { initFreshMapLocal(s); _toast(s, 'SYNC OFFLINE — local only'); return; }
   s.suspendSaves = true;
   try {
@@ -110,6 +155,13 @@ export async function loadFromServer(s) {
 }
 
 export async function loadMapData(s, mapId) {
+  // Licensed mode: pull data for the requested map from localStorage.
+  if (!s.sb && s.localPersist) {
+    const store = readLicensedStore();
+    const m = store.maps.find((x) => x.id === mapId);
+    hydrateMapData(s, m?.data || {});
+    return;
+  }
   if (!s.sb || String(mapId).startsWith('local_')) { hydrateMapData(s, {}); return; }
   s.suspendSaves = true;
   try {
@@ -211,6 +263,29 @@ function initFreshMapLocal(s) {
   s.maps = [{ id, name: 'Main (offline)' }];
   s.activeMapId = id;
   hydrateMapData(s, {});
+}
+
+// Licensed boot: hydrate from localStorage; create a fresh "Main" if empty.
+function loadFromLicensedStore(s) {
+  s.suspendSaves = true;
+  try {
+    const store = readLicensedStore();
+    if (!store.maps || store.maps.length === 0) {
+      const id = 'lic_' + rid();
+      s.maps = [{ id, name: 'Main' }];
+      s.activeMapId = id;
+      hydrateMapData(s, {});
+      writeLicensedStore({ maps: [{ id, name: 'Main', data: {} }], activeMapId: id });
+      return;
+    }
+    s.maps = store.maps.map((m) => ({ id: m.id, name: m.name }));
+    const remembered = store.activeMapId;
+    const activeRow = (remembered && store.maps.find((m) => m.id === remembered)) || store.maps[0];
+    s.activeMapId = activeRow.id;
+    hydrateMapData(s, activeRow.data || {});
+  } finally {
+    s.suspendSaves = false;
+  }
 }
 
 // --- Active-map persistence (localStorage hint) -----------------------------
