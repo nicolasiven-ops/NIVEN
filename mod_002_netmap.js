@@ -6057,6 +6057,11 @@ function drawLink(s, link) {
           const asym = tunUnion.some((v) => filter.includes(v));
           g.classList.add(asym ? 'm002-link-vsolo-asym' : 'm002-link-vsolo-dim');
         }
+        // LAG-pair already speaks via lagDoubleLineHTML at the bottom — no
+        // plain centerline / dim placeholder; otherwise the user sees three
+        // parallel lines (centerline + 2 lag-lines) instead of a clean
+        // double-line. Stripes (per soloed VLAN) and the count badge stay
+        // because they carry information the double-line can't.
         if (drawn.length > 0) {
           const gap = 6;
           drawn.forEach((v, i) => {
@@ -6067,13 +6072,9 @@ function drawLink(s, link) {
             inner += `<text class="m002-link-label m002-link-stripe-label" x="${p.lx}" y="${p.ly - 4}" style="fill:${c};color:${c}" text-anchor="middle">${escSvg(v)}</text>`;
           });
         } else if (vlans.length === 0) {
-          inner += `<path class="m002-link-line m002-link-dim" d="${base.d}" stroke="#3a3a44"/>`;
           inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#5a5f6e" text-anchor="middle">0x</text>`;
-        } else {
-          inner += `<path class="m002-link-line" d="${base.d}" stroke="#9aa0a8" stroke-width="2.4"/>`;
-          if (!isFiltered) {
-            inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
-          }
+        } else if (!isFiltered) {
+          inner += `<text class="m002-link-vlan-count" x="${base.lx}" y="${base.ly - 4}" fill="#9aa0a8" text-anchor="middle">${vlans.length}x</text>`;
         }
         inner += lagDoubleLineHTML(aPos, bPos, { stroke: '#9aa0a8', width: 1.4, gap: 5, lane, s, excludeIds: excl, hubInfo: forced, transit });
       } else if (layer === 'routing') {
