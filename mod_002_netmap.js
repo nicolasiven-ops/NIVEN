@@ -8494,9 +8494,9 @@ function openInspector(s) {
         cb.addEventListener('change', () => {
           const ports = [...sideEl.querySelectorAll('[data-side-port]:checked')]
             .map((c) => ({ deviceId: c.dataset.sidePortDev, portN: Number(c.dataset.sidePort) }));
-          if (ports.length < 2) {
+          if (ports.length < 1) {
             cb.checked = !cb.checked;
-            toast(s, 'LAG needs at least 2 ports');
+            toast(s, 'LAG needs at least 1 port');
             return;
           }
           snapshot(s);
@@ -9253,7 +9253,7 @@ function openLagModal(s, stackId, lagId) {
     const ports = [...body.querySelectorAll('input[type=checkbox][data-port]:checked')]
       .map((c) => ({ deviceId: c.dataset.portDev, portN: Number(c.dataset.port) }));
     if (!name) { toast(s, 'LAG needs a name'); return; }
-    if (ports.length < 2) { toast(s, 'LAG needs at least 2 ports'); return; }
+    if (ports.length < 1) { toast(s, 'LAG needs at least 1 port'); return; }
     snapshot(s);
     if (editing) {
       editing.name = name;
