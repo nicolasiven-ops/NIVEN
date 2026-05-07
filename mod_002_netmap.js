@@ -10518,10 +10518,15 @@ function syncDetailFrame(s, body, frame) {
       newIds.push(id);
       existing.set(id, tile);
     }
-    // Update role classes
-    tile.classList.toggle('is-center',   pos.role === 'center');
-    tile.classList.toggle('is-peer',     pos.role === 'peer');
-    tile.classList.toggle('is-endpoint', pos.role === 'endpoint');
+    // Update role classes. is-peer is set for both regular uplink peers
+    // AND stack-peers so they share the entry pop-in animation +
+    // hover/selection styling; is-stack-peer is an additional marker so
+    // future per-role styling (e.g. a different selection halo for stack
+    // siblings) can hook in without losing the shared animation.
+    tile.classList.toggle('is-center',     pos.role === 'center');
+    tile.classList.toggle('is-peer',       pos.role === 'peer' || pos.role === 'stack-peer');
+    tile.classList.toggle('is-stack-peer', pos.role === 'stack-peer');
+    tile.classList.toggle('is-endpoint',   pos.role === 'endpoint');
     // Selection state: centre is "selected" unless a port-modal is open
     // for it; peers/endpoints are selected when matching s.selected.
     const isSelected = pos.role === 'center'
