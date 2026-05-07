@@ -1493,6 +1493,7 @@ async function mount(stage, ctx) {
       getDeviceTypes: () => DEVICE_TYPES,
       cloneDevice, moveDeviceToZone, connectFromDevice, deleteRef,
       cloneStack, splitStack, moveStackToZone, deleteStack,
+      createLagFromLink,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -3991,6 +3992,52 @@ function moveStackToZone(s, stackId, zoneId) {
   render(s);
   toast(s, `Moved ${st.name} → ${z.name}`);
   schedSave(s);
+}
+
+// Promote a single link into a LAG. LAGs only live on stacks, so each side of
+// the link contributes a LAG only if its endpoint is a stack member. Both
+// stacked → genuine LAG-pair (counterpart pointers wired both ways). Mirrors
+// the inspector's "CREATE LAG-PAIR" button (line ~7100) but driven from the
+// link's right-click ring with a single gesture.
+function createLagFromLink(s, linkId) {
+  const link = s.links.find((l) => l.id === linkId);
+  if (!link) return;
+  const stkA = findStack(s, link.from);
+  const stkB = findStack(s, link.to);
+  if (!stkA && !stkB) {
+    toast(s, 'LAG benötigt mind. einen Stack-Member');
+    return;
+  }
+  if (!link.fromPort || !link.toPort) {
+    toast(s, 'Link braucht Port-Info auf beiden Seiten');
+    return;
+  }
+  snapshot(s);
+  const lagA = stkA ? resolveOrCreateLag(stkA, '__new', '') : null;
+  const lagB = stkB ? resolveOrCreateLag(stkB, '__new', '') : null;
+  if (lagA) {
+    const portN = Number(link.fromPort);
+    if (!lagA.ports.some((p) => p.deviceId === link.from && Number(p.portN) === portN)) {
+      lagA.ports.push({ deviceId: link.from, portN });
+    }
+  }
+  if (lagB) {
+    const portN = Number(link.toPort);
+    if (!lagB.ports.some((p) => p.deviceId === link.to && Number(p.portN) === portN)) {
+      lagB.ports.push({ deviceId: link.to, portN });
+    }
+  }
+  if (lagA && lagB && stkA && stkB) {
+    lagA.counterpart = { stackId: stkB.id, lagId: lagB.id };
+    lagB.counterpart = { stackId: stkA.id, lagId: lagA.id };
+  }
+  render(s);
+  schedSave(s);
+  if (lagA && stkA)      select(s, 'lag', `${stkA.id}|${lagA.id}`);
+  else if (lagB && stkB) select(s, 'lag', `${stkB.id}|${lagB.id}`);
+  toast(s, lagA && lagB
+    ? `LAG-Pair: ${lagA.name} ⇄ ${lagB.name}`
+    : `LAG ${(lagA || lagB).name} angelegt`);
 }
 
 // Resolve a reference's target into a display label. Returns "(no target)" if

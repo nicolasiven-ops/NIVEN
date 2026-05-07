@@ -66,10 +66,12 @@ const RADIAL_STACK = [
   { id: 'st-move',   dir: 'W', center: 180, label: 'MOVE',   glyph: '↦' },
 ];
 
-// LINK ring — only DELETE is meaningful as a quick gesture for a link. Other
-// cardinals stay empty by design (an asymmetric ring is the honest signal).
+// LINK ring — DELETE south, LAG north (promote this link's ports into a
+// LAG on each stacked side; both stacked → LAG-pair with counterparts).
+// East/West stay empty — nothing else fits a single-link gesture.
 const RADIAL_LINK = [
-  { id: 'lk-delete', dir: 'S', center: 90, label: 'DELETE', glyph: '×' },
+  { id: 'lk-lag',    dir: 'N', center: -90, label: 'LAG',    glyph: '║' },
+  { id: 'lk-delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×' },
 ];
 
 // --- Dependency injection --------------------------------------------------
@@ -99,6 +101,8 @@ const _deps = {
   splitStack:        () => {},
   moveStackToZone:   () => {},
   deleteStack:       () => {},
+  // Link-radial callbacks.
+  createLagFromLink: () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -437,6 +441,12 @@ function handleRadialAction(s, action) {
     if (target) _deps.deleteRef(s, target);
     return;
   }
+  if (action === 'lk-lag') {
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target?.kind === 'link') _deps.createLagFromLink(s, target.id);
+    return;
+  }
 }
 
 function showRadialDeviceSubmenu(s) {
@@ -689,12 +699,13 @@ function renderRadialStack() {
 }
 
 function renderRadialLink() {
-  // Single-segment ring for links — only DELETE is meaningful as a quick
-  // gesture, so the other three cardinals stay empty by design.
+  // Sparse ring for links — only LAG (N) and DELETE (S) make sense as quick
+  // gestures. Slots are sized to the 4-way grid even though only two are
+  // filled, so they sit cleanly at the cardinals instead of stretching.
   const cx = RADIAL_OUTER_R;
   const cy = RADIAL_OUTER_R;
   const size = RADIAL_OUTER_R * 2;
-  const half = (360 / 4) / 2; // 4-way slot geometry, only one filled
+  const half = (360 / 4) / 2; // 4-way slot geometry; E/W stay empty
   let segs = '';
   RADIAL_LINK.forEach((seg) => {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
