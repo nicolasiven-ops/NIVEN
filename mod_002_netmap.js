@@ -572,6 +572,9 @@ function renderSubnetLegend(s) {
       if (idx >= 0) s.view.subnetFilter.splice(idx, 1);
       else s.view.subnetFilter.push(id);
       s._subnetHover = null;
+      // Manual legend-solo — clear the from-selection gate so the next
+      // canvas-deselect doesn't wipe what the user just set themselves.
+      s._subnetSoloFromSelection = false;
       animateSoloToggle(s);
       schedSave(s);
     });
@@ -591,6 +594,7 @@ function renderSubnetLegend(s) {
   body.querySelector('[data-sclear]')?.addEventListener('click', (e) => {
     e.stopPropagation();
     s.view.subnetFilter = [];
+    s._subnetSoloFromSelection = false;
     animateSoloToggle(s);
     schedSave(s);
   });
@@ -6210,6 +6214,82 @@ function linkRoutingSoloDim(s, link) {
   return !(isMatched(link.from) && isMatched(link.to));
 }
 
+// Canvas-driven super-solo: clicking an L3 entity in the routing layer is a
+// shortcut for soloing every subnet that entity participates in. Folds the
+// selection back into the existing subnet-solo machinery (carrier/dim/stack-
+// collapse all derive from s.view.subnetFilter), so the visual contract is
+// identical to a manual legend solo — only the trigger differs.
+//
+// Stack-member quirk: a member of a VIP-bearing stack inherits the stack's L3
+// identity (deviceSubnets returns [] in that case to keep ribbons keyed off
+// the VIP, not per-member IPs). Same inheritance applies here so clicking a
+// member tile inside an expanded VIP stack solos the same subnets the stack
+// envelope would. Pure-L2 stacks (no VIPs, no L3 members with their own IPs)
+// fall back to scanning members so a hub-stack click still resolves to its
+// members' subnets instead of producing an empty filter.
+function superSoloSubnetIdsFor(s, kind, id) {
+  if (kind === 'device') {
+    const dev = (s.devices || []).find((d) => d.id === id);
+    if (!dev) return [];
+    const stack = findStack(s, id);
+    if (stack && stackHasVip(stack)) {
+      return stackSubnets(s, stack).map((sn) => String(sn.id));
+    }
+    return deviceSubnets(s, dev).map((sn) => String(sn.id));
+  }
+  if (kind === 'stack') {
+    const st = findStackById(s, id);
+    if (!st) return [];
+    const direct = stackSubnets(s, st).map((sn) => String(sn.id));
+    if (direct.length || stackHasVip(st)) return direct;
+    const out = [];
+    const seen = new Set();
+    (st.members || []).forEach((mid) => {
+      const m = (s.devices || []).find((d) => d.id === mid);
+      if (!m) return;
+      deviceSubnets(s, m).forEach((sn) => {
+        const sid = String(sn.id);
+        if (!seen.has(sid)) { seen.add(sid); out.push(sid); }
+      });
+    });
+    return out;
+  }
+  return [];
+}
+
+// Hook for select(): in the routing layer, push the freshly-selected entity's
+// subnets into s.view.subnetFilter. Marks _subnetSoloFromSelection so the
+// matching deselect() knows it owns the filter (manual legend-solo keeps the
+// flag false and survives a deselect untouched).
+function applyCanvasSuperSolo(s, kind, id) {
+  if (s.activeLayer !== 'routing') return;
+  if (kind !== 'device' && kind !== 'stack') return;
+  if (!s.view || typeof s.view !== 'object') s.view = { ...DEFAULT_VIEW };
+  const next = superSoloSubnetIdsFor(s, kind, id);
+  const prev = (s.view.subnetFilter || []).map(String);
+  const same = prev.length === next.length && prev.every((x, i) => x === next[i]);
+  s.view.subnetFilter = next;
+  s._subnetSoloFromSelection = true;
+  s._subnetHover = null;
+  if (!same) {
+    render(s);
+    schedSave(s);
+  }
+}
+
+// Hook for deselect(): tears down a from-selection super-solo. The flag is
+// the gate so we never wipe a filter the user set themselves via the legend.
+function clearCanvasSuperSolo(s) {
+  if (!s._subnetSoloFromSelection) return;
+  s._subnetSoloFromSelection = false;
+  if (!s.view) return;
+  if (!Array.isArray(s.view.subnetFilter) || !s.view.subnetFilter.length) return;
+  s.view.subnetFilter = [];
+  s._subnetHover = null;
+  render(s);
+  schedSave(s);
+}
+
 function portLabel(dev, portN) {
   const p = dev?.ports.find((pp) => String(pp.n) === String(portN));
   if (!p) return '?';
@@ -6656,6 +6736,11 @@ function select(s, kind, id, options = {}) {
   if (s.portModalOpen) s.portModalOpen = null;
   s.selected = { kind, id };
   markSelected(s);
+  // Routing-layer super-solo: selecting a device/stack auto-solos its
+  // subnets so the canvas reads as "everything wired into the same network
+  // as this thing". Re-renders only on actual filter delta — re-clicking
+  // the same tile is a cheap no-op.
+  applyCanvasSuperSolo(s, kind, id);
   openInspector(s);
   if (s.prefs?.autoRecenter && !options.skipRecenter) recenterOnSelection(s, kind, id);
 }
@@ -6695,6 +6780,9 @@ function deselect(s) {
   // canvas. applyIncidentFlow() with no selection set is a no-op apart
   // from the cleanup pass at its top.
   applyIncidentFlow(s);
+  // Tear down a canvas-set super-solo. Manual legend-solo keeps the gate
+  // flag false, so this stays a no-op for filters the user set themselves.
+  clearCanvasSuperSolo(s);
   showInspectorEmpty(s);
 }
 
