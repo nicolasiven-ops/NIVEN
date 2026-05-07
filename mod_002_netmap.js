@@ -1492,7 +1492,8 @@ async function mount(stage, ctx) {
       spawnDeviceAt, switchZone, escAttr, escSvg,
       getDeviceTypes: () => DEVICE_TYPES,
       cloneDevice, moveDeviceToZone, connectFromDevice, deleteRef,
-      cloneStack, splitStack, moveStackToZone, deleteStack,
+      cloneStack, splitStack, moveStackToZone,
+      deleteStack: deleteStackWithMembers,
       createLagFromLink,
     });
   } catch (e) {
@@ -4098,6 +4099,42 @@ function moveStackToZone(s, stackId, zoneId) {
   render(s);
   toast(s, `Moved ${st.name} → ${z.name}`);
   schedSave(s);
+}
+
+// Destructive stack delete used by the stack-radial DELETE slot. Drops the
+// stack envelope AND every member device with all their links — versus the
+// existing deleteStack() (and DEL-key / inspector path), which only dissolves
+// the envelope and leaves members alive (effectively a SPLIT). Mirrors the
+// per-device cleanup from deleteRef('device') for each member: clears couple
+// pointers on remote JUMPs, drops links touching the member, and prunes
+// stack-LAG port refs that pointed at it.
+function deleteStackWithMembers(s, stackId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  const stName = st.name;
+  const memberIds = [...(st.members || [])];
+  snapshot(s);
+  // Drop the stack envelope first (also kills its own LAGs / counterpart
+  // pointers held by other stacks). Members at this point are still in
+  // s.devices and get cleaned up below.
+  dropStackAndItsLags(s, st);
+  memberIds.forEach((id) => {
+    // Break couple pointers held by remote JUMPs that referenced this member.
+    s.devices.forEach((d) => { if (isReference(d) && d.coupleId === id) d.coupleId = null; });
+    s.devices = s.devices.filter((d) => d.id !== id);
+    s.links = s.links.filter((l) => l.from !== id && l.to !== id);
+    // Other stacks may have stack-LAGs referencing the dead member's port.
+    s.stacks.forEach((stk) => {
+      (stk.lags || []).forEach((lag) => {
+        lag.ports = (lag.ports || []).filter((p) => p.deviceId !== id);
+      });
+      stk.lags = (stk.lags || []).filter((lag) => lag.ports.length > 0);
+    });
+  });
+  if (s.selected?.kind === 'stack' && s.selected.id === stackId) deselect(s);
+  render(s);
+  schedSave(s);
+  toast(s, `Stack ${stName} + ${memberIds.length} Devices gelöscht`);
 }
 
 // Promote a single link into a LAG. LAGs only live on stacks, so each side of
