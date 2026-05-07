@@ -10089,6 +10089,7 @@ function exitDetailView(s) {
     // the next detail-view session and silently block entry animations.
     overlay.classList.remove('m002-detail-hop-out');
     overlay.classList.remove('m002-detail-hop-in');
+    overlay.classList.remove('m002-detail-overlay-hopping');
     const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion) {
       // Snap exit — no choreography, just opacity fade.
@@ -10901,6 +10902,17 @@ function hopToPeer(s, peerId, fromEl) {
   overlay.classList.remove('m002-detail-hop-in');
   s._detailHopActive = true;
 
+  // hopping class spans the ENTIRE hop window — added now, removed at
+  // settle. It's the master pin that freezes tile-inner / tile-bg
+  // through hop-out → FLIP → hop-in. Without it, the role-flip from
+  // is-peer to is-center at sync time would re-trigger the show rule's
+  // emerge animation on the new center tile (because the matching
+  // animation property changed), and the FLIP would glide a tile that's
+  // also restarting its scale(0.005, 0.02) → vertical-line → expand
+  // emerge — visible as a "vertikaler Strich" flying down through the
+  // 33% keyframe phase.
+  overlay.classList.add('m002-detail-overlay-hopping');
+
   // Remove settled BEFORE the hop-out class lands. Settled's !important
   // pins (transform:none, opacity:1, animation:none) on port-inner / stub
   // / peer-link beat any animation under the CSS cascade rules — keeping
@@ -10933,6 +10945,7 @@ function hopToPeer(s, peerId, fromEl) {
   const releaseHopLock = () => {
     overlay.classList.remove('m002-detail-hop-out');
     overlay.classList.remove('m002-detail-hop-in');
+    overlay.classList.remove('m002-detail-overlay-hopping');
     s._detailHopActive = false;
   };
 
@@ -10994,6 +11007,7 @@ function hopToPeer(s, peerId, fromEl) {
     if (reduceMotion) {
       // Snap to settled state.
       if (s.detailDeviceId === peerId) overlay.classList.add('m002-detail-overlay-settled');
+      overlay.classList.remove('m002-detail-overlay-hopping');
       s._detailHopActive = false;
       return;
     }
@@ -11015,6 +11029,7 @@ function hopToPeer(s, peerId, fromEl) {
         if (s.detailDeviceId === peerId) {
           overlay.classList.add('m002-detail-overlay-settled');
           overlay.classList.remove('m002-detail-hop-in');
+          overlay.classList.remove('m002-detail-overlay-hopping');
         }
         s._detailHopActive = false;
       }, HOP_IN_MS + 100);

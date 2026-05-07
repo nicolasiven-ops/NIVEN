@@ -1106,13 +1106,30 @@ input.m002-field-conflict,
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
   animation:m002-detail-port-glide-in 380ms cubic-bezier(0.16,1,0.3,1) 120ms both!important;
 }
-/* Tile-inner / tile-bg freeze during hop. Higher specificity (0,5,0) than
-   the show entry rules (0,4,0) so these win without needing !important on
-   the entry animations themselves; !important here defeats the entry
-   rule's properties cleanly. Without these guards, removing settled
-   would let the show rule's animation property re-bind on tile-inner +
-   tile-bg, triggering an emerge restart from scale(0.005,0.02)
-   simultaneously with the FLIP — visually catastrophic. */
+/* Tile-inner / tile-bg freeze for the ENTIRE hop window — added by
+   hopToPeer at start, removed at settle. This is the master pin that
+   prevents role-flips (peer → center, center → peer) from restarting
+   the show rule's emerge / port-pop animations mid-glide; without it,
+   the new center tile would re-emerge from scale(0.005, 0.02) and
+   pass through the 33% "thin vertical line" keyframe phase right as
+   the FLIP is gliding it down — that's the "vertikaler Strich" the
+   user flagged. The hop-out / hop-in rules below cover the same
+   ground defensively (in case hopping is somehow off while those
+   classes are on). */
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center .m002-detail-tile-inner,
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer .m002-detail-tile-inner{
+  animation:none!important;
+  transform:none!important;
+  opacity:1!important;
+}
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center .m002-detail-tile-bg,
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer .m002-detail-tile-bg{
+  animation:none!important;
+  fill:#0a0a10!important;
+}
+/* Defensive duplicate for hop-out + hop-in phases. Specificity (0,5,0)
+   beats the show entry rules (0,4,0) so these win without needing the
+   show rule itself to carry !important. */
 .m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-center .m002-detail-tile-inner,
 .m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-peer .m002-detail-tile-inner,
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-center .m002-detail-tile-inner,
