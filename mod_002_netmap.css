@@ -1116,17 +1116,45 @@ input.m002-field-conflict,
    user flagged. The hop-out / hop-in rules below cover the same
    ground defensively (in case hopping is somehow off while those
    classes are on). */
-.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center .m002-detail-tile-inner,
-.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer .m002-detail-tile-inner{
+/* The hopping pin EXCLUDES fresh tiles. Fresh tiles are tiles that were
+   spawned BY this very hop's syncDetailFrame (uplink-peers / stack-peers
+   of the new centre that weren't visible in the old layout). They need
+   to stay HIDDEN through hop-out + FLIP and only pop in at hop-in time
+   along with the ports + peer-links — without this :not(.fresh) the
+   hopping pin would force them to identity/visible the instant they
+   land in the DOM, so they'd appear at full size BEFORE the swap is
+   visually complete (the "Elemente erscheinen vor dem Swap" the user
+   flagged on v2.34.9).
+   For non-fresh tiles, the pin is unchanged: it freezes their inner
+   transform/opacity at identity through the hop so the FLIP is the
+   only motion the user sees on those tiles. */
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center:not(.m002-detail-fresh) .m002-detail-tile-inner,
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer:not(.m002-detail-fresh) .m002-detail-tile-inner{
   animation:none!important;
   transform:none!important;
   opacity:1!important;
 }
-.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center .m002-detail-tile-bg,
-.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer .m002-detail-tile-bg{
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-center:not(.m002-detail-fresh) .m002-detail-tile-bg,
+.m002-detail-overlay.m002-detail-overlay-hopping .m002-detail-tile.is-peer:not(.m002-detail-fresh) .m002-detail-tile-bg{
   animation:none!important;
   fill:#0a0a10!important;
 }
+/* Fresh tiles during hop-out + FLIP rely on the show-rule's port-pop
+   animation in its delay phase + `both` fill to stay at the 0%
+   keyframe state (scale 0.6 / opacity 0). No explicit hide rule is
+   needed here — the show rule already does the right thing for fresh
+   tiles, AS LONG AS the hopping pin doesn't get in the way (hence the
+   :not(.m002-detail-fresh) above).
+   At hop-in landing, the override below replaces the show rule's
+   slow 700ms-delayed pop with an immediate 0ms-delayed one, so fresh
+   tiles arrive in the same wave as the freshly-rendered ports +
+   peer-links. Specificity (0,6,0) beats the show entry rule (0,4,0)
+   without !important — the cascade picks this animation, and
+   animation-level transforms beat any non-!important static rule. */
+.m002-detail-overlay.m002-detail-overlay-hopping.m002-detail-hop-in .m002-detail-tile.m002-detail-fresh .m002-detail-tile-inner{
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.2,0.5,1) 0ms both;
+}
+
 /* Defensive duplicate for hop-out + hop-in phases. Specificity (0,5,0)
    beats the show entry rules (0,4,0) so these win without needing the
    show rule itself to carry !important. */

@@ -10881,6 +10881,14 @@ function syncDetailFrame(s, body, frame) {
   const existing = new Map();
   tilesGroup.querySelectorAll('.m002-detail-tile').forEach((el) => {
     existing.set(el.dataset.detailTileId, el);
+    // Strip the freshness marker from every surviving tile BEFORE we
+    // start adding new ones. m002-detail-fresh is meant to mark "tile
+    // created in THIS sync"; without this clear, the class would keep
+    // accumulating from the initial enter onwards and surviving tiles
+    // would (incorrectly) be hidden by the .hopping .fresh CSS rule
+    // during every subsequent hop, leaving the user with a blank upper
+    // row instead of the FLIP'ing peers.
+    el.classList.remove('m002-detail-fresh');
   });
   const newIds = [];
   for (const [id, pos] of frame.tilePositions) {
@@ -10890,7 +10898,17 @@ function syncDetailFrame(s, body, frame) {
     let tile = existing.get(id);
     if (!tile) {
       tile = document.createElementNS('http://www.w3.org/2000/svg', 'g');
-      tile.setAttribute('class', 'm002-detail-tile m002-detail-fresh');
+      // m002-detail-fresh only on tiles created MID-HOP (i.e. peers/
+      // stack-peers/endpoints of the new centre that didn't exist before
+      // this sync). The class is what the .hopping :not(.fresh) selector
+      // dance uses to keep these guys HIDDEN through hop-out + FLIP and
+      // pop them IN at hop-in time. Initial enter syncs (no hop in
+      // flight) don't get the class — those tiles ride the regular
+      // show-rule entry choreography with the v2.34.9 `both` fill.
+      const baseClass = s._detailHopActive
+        ? 'm002-detail-tile m002-detail-fresh'
+        : 'm002-detail-tile';
+      tile.setAttribute('class', baseClass);
       tile.dataset.detailTileId = id;
       tile.dataset.detailStop = '1';
       const w = DETAIL.tile.w, h = DETAIL.tile.h;
