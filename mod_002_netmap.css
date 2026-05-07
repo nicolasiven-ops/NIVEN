@@ -1048,6 +1048,34 @@ input.m002-field-conflict,
   animation:m002-detail-stub-fade 360ms cubic-bezier(0.16,1,0.3,1) forwards!important;
   animation-delay:260ms!important;
 }
+/* Endpoint tiles during hop. Without these, fresh endpoint-tile-inner DOM
+   created by sync at t=200ms inherits ONLY the .m002-detail-overlay-show
+   rule (720ms delay + port-pop). Even with the `both` fill mode added
+   above, endpoint tiles would only animate at t=200+720=920ms, leaving
+   them invisible from t=200 to t=920 (720ms of black space below the
+   centre tile) and then popping in 240ms after the uplink ports already
+   appeared at t=680ms — the bottom row would lag noticeably behind the
+   top row.
+   Hop-out: suck the old endpoint-inner out (mirrors peer-tile suck —
+   100ms delay, 280ms duration — so top + bottom rows fade in step).
+   Hop-in: glide the new endpoint-inner in via the same gentle keyframe
+   the uplink ports use, with a small 120ms delay relative to hop-in so
+   the bottom row arrives just behind the uplink ports and reads as one
+   coordinated lower-row settle. `both` fill so the 0%-keyframe state
+   (scale 0.88 opacity 0 — invisible) applies during the 120ms delay
+   too — without it, the user sees a brief default-visible flash before
+   the animation starts. */
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  /* No delay — sync at HOP_OUT_MS=200ms removes the old endpoint tile DOM
+     entirely, so any animation must complete within that 200ms window.
+     180ms duration leaves a 20ms paint-budget margin so the suck reads as
+     finished before the FLIP starts. */
+  animation:m002-detail-port-suck 180ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
+  animation:m002-detail-port-glide-in 380ms cubic-bezier(0.16,1,0.3,1) 120ms both!important;
+}
 /* Tile-inner / tile-bg freeze during hop. Higher specificity (0,5,0) than
    the show entry rules (0,4,0) so these win without needing !important on
    the entry animations themselves; !important here defeats the entry
@@ -1222,7 +1250,14 @@ input.m002-field-conflict,
   opacity:0;
 }
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 720ms forwards;
+  /* `both` fill instead of `forwards` so the 0%-keyframe state (scale 0.6
+     opacity 0 — invisible) applies during the 720ms delay instead of the
+     default un-animated state (transform:none opacity:1 — visible). Without
+     this, endpoint tiles created during a hop's sync (t=200ms) sat fully
+     visible for 480ms before hop-in's animation kicked in, which the user
+     read as "Ports erscheinen instant, keine Animation". `both` keeps the
+     existing forwards behaviour at the end too. */
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 720ms both;
 }
 .m002-detail-overlay-settled .m002-detail-tile.is-endpoint .m002-detail-tile-inner{
   animation:none!important;
