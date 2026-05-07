@@ -10140,6 +10140,31 @@ function classifyDetailPort(s, dev, portN) {
   return { kind: isUplink ? 'uplink' : 'access', occupied: true, peer, link };
 }
 
+// Stack-cable peers — devices connected to dev via the explicit
+// stack.stackLinks list of dev's owning stack. Returns deduped entries
+// (peer device + the underlying stackLink record) so the detail-view can
+// render each unique stack-neighbour exactly once even when there are
+// multiple parallel stack-cables to the same peer (rare but possible).
+// Returns [] when dev isn't in any stack.
+function stackCableNeighborsOf(s, dev) {
+  if (!s.stacks || !dev) return [];
+  const stack = s.stacks.find((st) => (st.members || []).includes(dev.id));
+  if (!stack) return [];
+  const out = [];
+  const seen = new Set();
+  (stack.stackLinks || []).forEach((sl) => {
+    let otherId = null;
+    if (sl.fromDevice === dev.id) otherId = sl.toDevice;
+    else if (sl.toDevice === dev.id) otherId = sl.fromDevice;
+    if (!otherId || seen.has(otherId)) return;
+    const other = s.devices.find((d) => d.id === otherId);
+    if (!other) return;
+    seen.add(otherId);
+    out.push({ peer: other, stackLink: sl });
+  });
+  return out;
+}
+
 // Unified tile dimensions. Every visible device in the Detail-View — the
 // central element AND every uplink peer — uses the same intrinsic 144×96
 // markup so a Position-Swap hop can animate the SAME DOM node between
@@ -10276,6 +10301,20 @@ function computeDetailFrame(s, dev) {
     if (peer && !peerSeen.has(peer.id)) { peerSeen.add(peer.id); peerOrder.push(peer); }
   });
 
+  // Stack-cable peers — devices connected via the central element's stack
+  // stackLinks. Rendered in the same upper row as the uplink-peers but
+  // right of them with a visible block-gap, so the user reads "navigable
+  // neighbours via L2 wire" left, "stack siblings via stacking cable"
+  // right, with one clear separation between the two relationships.
+  const stackEntries = stackCableNeighborsOf(s, dev);
+  // De-dupe against uplink-peers — if the same device shows up via BOTH a
+  // regular uplink-link AND a stack-cable, it stays in the uplink block
+  // (that's the more functional connection); the stack-cable is dropped
+  // here. Two tiles for the same peer would just confuse navigation.
+  const stackPeerOrder = stackEntries
+    .filter(({ peer }) => !peerSeen.has(peer.id))
+    .map((e) => e.peer);
+
   const D = DETAIL;
   const rowW = (n) => n <= 0 ? 0 : n * D.port.w + (n - 1) * D.gap;
   const upCount = Math.min(D.maxCols, uplinks.length);
@@ -10283,6 +10322,10 @@ function computeDetailFrame(s, dev) {
 
   const peerCount = peerOrder.length;
   const peerRowW  = peerCount ? peerCount * D.tile.w + (peerCount - 1) * D.peerGap : 0;
+  const stackPeerCount = stackPeerOrder.length;
+  const stackRowW = stackPeerCount ? stackPeerCount * D.tile.w + (stackPeerCount - 1) * D.peerGap : 0;
+  const stackBlockGap  = (peerCount && stackPeerCount) ? D.peerGap * 2.5 : 0;
+  const combinedRowW   = peerRowW + stackBlockGap + stackRowW;
   const centerW   = D.tile.w * D.centerScale;
   const centerH   = D.tile.h * D.centerScale;
 
@@ -10292,13 +10335,14 @@ function computeDetailFrame(s, dev) {
   const showFreePortText = freePortCount > 0;
   const showOverflowRow  = showPagination || showFreePortText;
 
-  const innerW = Math.max(centerW, peerRowW, upW, endpointRowW);
+  const innerW = Math.max(centerW, combinedRowW, upW, endpointRowW);
   const totalW = innerW + D.pad * 2;
 
   const upPad    = D.pad;
   const dnPad    = D.pad;
 
-  const peerRowH = peerCount ? D.tile.h + D.peerLinkGap : 0;
+  // Upper row exists if EITHER uplink-peers OR stack-peers are present.
+  const peerRowH = (peerCount || stackPeerCount) ? D.tile.h + D.peerLinkGap : 0;
   const upRowH   = uplinks.length ? D.port.h + D.vgap : 0;
   const endpointRowH = endpointCount ? D.peerLinkGap + D.tile.h : 0;
   const overflowRowH = showOverflowRow ? 28 : 0;
@@ -10325,18 +10369,36 @@ function computeDetailFrame(s, dev) {
     y: centerY,
     scale: D.centerScale,
   });
-  if (peerCount) {
-    const startX = cx - peerRowW / 2;
-    peerOrder.forEach((peer, i) => {
-      const pcx = startX + D.tile.w / 2 + i * (D.tile.w + D.peerGap);
-      tilePositions.set(peer.id, {
-        deviceId: peer.id,
-        role: 'peer',
-        x: pcx,
-        y: peerCenterY,
-        scale: 1,
+  // Upper row layout — uplink-peers block (left) + stack-block-gap +
+  // stack-peers block (right), the whole composite centred at cx so a
+  // detail-view with only stack-peers (no uplinks) still feels balanced.
+  if (peerCount || stackPeerCount) {
+    const rowStartX = cx - combinedRowW / 2;
+    if (peerCount) {
+      peerOrder.forEach((peer, i) => {
+        const pcx = rowStartX + D.tile.w / 2 + i * (D.tile.w + D.peerGap);
+        tilePositions.set(peer.id, {
+          deviceId: peer.id,
+          role: 'peer',
+          x: pcx,
+          y: peerCenterY,
+          scale: 1,
+        });
       });
-    });
+    }
+    if (stackPeerCount) {
+      const stackStartX = rowStartX + peerRowW + stackBlockGap;
+      stackPeerOrder.forEach((peer, i) => {
+        const pcx = stackStartX + D.tile.w / 2 + i * (D.tile.w + D.peerGap);
+        tilePositions.set(peer.id, {
+          deviceId: peer.id,
+          role: 'stack-peer',
+          x: pcx,
+          y: peerCenterY,
+          scale: 1,
+        });
+      });
+    }
   }
   if (endpointCount) {
     const startX = cx - endpointRowW / 2;
@@ -10355,15 +10417,25 @@ function computeDetailFrame(s, dev) {
 
   const STUB_LEN = (D.vgap - 8) * 5;
 
+  // Filter stackEntries down to only the ones that survived the uplink-
+  // dedupe filter, so renderDetailLinksMarkup can iterate them 1:1 with
+  // the actually-rendered stack-peer tiles.
+  const visibleStackEntries = stackEntries.filter(({ peer }) =>
+    stackPeerOrder.some((p) => p.id === peer.id)
+  );
+
   return {
     centerDev: dev,
     cls, uplinks,
     peerOrder,
+    stackEntries: visibleStackEntries,
+    stackPeerOrder,
     endpointOrder, endpointSlice, endpointPage, endpointPageCount,
     freePortCount, showPagination, showFreePortText,
     tilePositions,
     totalW, totalH,
     cx, upY, centerBottomY, endpointTopY, endpointRowW, overflowY,
+    centerW, centerH,
     upW,
     STUB_LEN,
     // Backward-compat fields — renderDetailPortsMarkup short-circuits on
@@ -10642,55 +10714,98 @@ function renderDetailPortsMarkup(s, frame) {
 }
 
 function renderDetailLinksMarkup(s, frame) {
-  if (!frame.uplinks.length) return '';
+  const hasUplinks = frame.uplinks.length > 0;
+  const hasStackCables = (frame.stackEntries && frame.stackEntries.length) > 0;
+  if (!hasUplinks && !hasStackCables) return '';
+
   const D = DETAIL;
   const t = typeOf(frame.centerDev.type);
   const cx = frame.cx;
-  const portStartX = cx - frame.upW / 2;
-  // Peers that absorb multiple uplinks (canonical case: a JUMP wired to
-  // several ports of the centre device, since JUMPs have no per-port slot
-  // and every hub-leg lands on the same peer tile). Without lanes, every
-  // peer-link uses the same `H tileCx V tileBottomY` tail and the final
-  // vertical drop + the horizontal cross-over visibly overlap. We fan them
-  // out by offsetting both the cross-over Y and the tile-entry X per
-  // sibling; lanes stay within the tile's bottom edge so each link still
-  // visually terminates on the same tile.
-  const peerCounts = new Map();
-  frame.uplinks.slice(0, D.maxCols).forEach((c) => {
-    const peerId = c.info.peer?.id;
-    if (!peerId) return;
-    peerCounts.set(peerId, (peerCounts.get(peerId) || 0) + 1);
-  });
-  const peerIdx = new Map();
-  const PEER_LANE = 7;
   const out = [];
-  frame.uplinks.slice(0, D.maxCols).forEach((c, i) => {
-    const peer = c.info.peer;
-    const linkObj = c.info.link;
-    if (!peer || !linkObj) return;
-    const tilePos = frame.tilePositions.get(peer.id);
-    if (!tilePos) return;
-    const portCx = portStartX + i * (D.port.w + D.gap) + D.port.w / 2;
-    const portTopY = frame.upY;
-    const tileBottomY = tilePos.y + D.tile.h / 2;
-    const tileCx = tilePos.x;
-    const total = peerCounts.get(peer.id) || 1;
-    const idx = peerIdx.get(peer.id) || 0;
-    peerIdx.set(peer.id, idx + 1);
-    const lane = total > 1 ? (idx - (total - 1) / 2) * PEER_LANE : 0;
-    const midY = (tileBottomY + portTopY) / 2 + lane;
-    const tileEntryX = tileCx + lane;
-    const d = `M ${portCx} ${portTopY} V ${midY} H ${tileEntryX} V ${tileBottomY}`;
-    const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
-    const firstV = (c.p.vlans || [])[0];
-    const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
-    out.push(
-      `<g class="m002-link m002-detail-peer-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
-        <path class="m002-link-hit" d="${d}"/>
-        <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
-      </g>`
-    );
-  });
+
+  // -------- Uplink-peer links (Z-route from port-top to peer-tile-bottom) --
+  if (hasUplinks) {
+    const portStartX = cx - frame.upW / 2;
+    // Peers that absorb multiple uplinks (canonical case: a JUMP wired to
+    // several ports of the centre device, since JUMPs have no per-port slot
+    // and every hub-leg lands on the same peer tile). Without lanes, every
+    // peer-link uses the same `H tileCx V tileBottomY` tail and the final
+    // vertical drop + the horizontal cross-over visibly overlap. We fan them
+    // out by offsetting both the cross-over Y and the tile-entry X per
+    // sibling; lanes stay within the tile's bottom edge so each link still
+    // visually terminates on the same tile.
+    const peerCounts = new Map();
+    frame.uplinks.slice(0, D.maxCols).forEach((c) => {
+      const peerId = c.info.peer?.id;
+      if (!peerId) return;
+      peerCounts.set(peerId, (peerCounts.get(peerId) || 0) + 1);
+    });
+    const peerIdx = new Map();
+    const PEER_LANE = 7;
+    frame.uplinks.slice(0, D.maxCols).forEach((c, i) => {
+      const peer = c.info.peer;
+      const linkObj = c.info.link;
+      if (!peer || !linkObj) return;
+      const tilePos = frame.tilePositions.get(peer.id);
+      if (!tilePos) return;
+      const portCx = portStartX + i * (D.port.w + D.gap) + D.port.w / 2;
+      const portTopY = frame.upY;
+      const tileBottomY = tilePos.y + D.tile.h / 2;
+      const tileCx = tilePos.x;
+      const total = peerCounts.get(peer.id) || 1;
+      const idx = peerIdx.get(peer.id) || 0;
+      peerIdx.set(peer.id, idx + 1);
+      const lane = total > 1 ? (idx - (total - 1) / 2) * PEER_LANE : 0;
+      const midY = (tileBottomY + portTopY) / 2 + lane;
+      const tileEntryX = tileCx + lane;
+      const d = `M ${portCx} ${portTopY} V ${midY} H ${tileEntryX} V ${tileBottomY}`;
+      const isSel = s.selected?.kind === 'link' && s.selected.id === linkObj.id;
+      const firstV = (c.p.vlans || [])[0];
+      const stripeColour = firstV ? vlanColor(s, firstV) : t.accent;
+      out.push(
+        `<g class="m002-link m002-detail-peer-link${isSel ? ' m002-selected' : ''}" data-detail-link="${escAttr(linkObj.id)}" data-detail-stop="1" style="--accent:${stripeColour}">
+          <path class="m002-link-hit" d="${d}"/>
+          <path class="m002-link-line" d="${d}" stroke="${stripeColour}"/>
+        </g>`
+      );
+    });
+  }
+
+  // -------- Stack-cables (dashed grey, top of centre tile to peer-bottom) --
+  // Mirror the grid's stacking-cable visual (.m002-stack-cable in the main
+  // CSS — dashed 5/4 stroke, gray, opacity .75) so the user reads the
+  // stack relationship by SHAPE, not just by position. Each cable starts
+  // from a fanned anchor on the centre tile's top-edge (so multiple
+  // stack-peers don't all converge on a single point) and Z-routes up to
+  // its peer-tile-bottom. Routes are drawn AFTER the uplink-peer-links so
+  // they paint on top — useful when an uplink-link's hit-area happens to
+  // overlap the stack-cable's path.
+  if (hasStackCables) {
+    const centerPos = frame.tilePositions.get(frame.centerDev.id);
+    const centerTopY = centerPos.y - frame.centerH / 2;
+    const stackCount = frame.stackEntries.length;
+    // Fan anchors across the right ~60% of the centre's top edge so they
+    // emerge from the side closest to the stack-row, not from the middle.
+    const anchorXMin = centerPos.x;                             // centre x (50%)
+    const anchorXMax = centerPos.x + frame.centerW / 2 - 14;     // 14 px in from right edge
+    frame.stackEntries.forEach(({ peer, stackLink }, i) => {
+      const tilePos = frame.tilePositions.get(peer.id);
+      if (!tilePos) return;
+      const tFrac = stackCount === 1 ? 0.5 : i / (stackCount - 1);
+      const anchorX = anchorXMin + tFrac * (anchorXMax - anchorXMin);
+      const tileCx = tilePos.x;
+      const tileBottomY = tilePos.y + D.tile.h / 2;
+      const midY = (centerTopY + tileBottomY) / 2;
+      const d = `M ${anchorX} ${centerTopY} V ${midY} H ${tileCx} V ${tileBottomY}`;
+      out.push(
+        `<g class="m002-stacklink m002-detail-stack-cable" data-detail-stacklink="${escAttr(stackLink.id)}" data-detail-stop="1">
+          <path class="m002-stack-cable-hit" d="${d}"/>
+          <path class="m002-stack-cable" d="${d}"/>
+        </g>`
+      );
+    });
+  }
+
   return out.join('');
 }
 
