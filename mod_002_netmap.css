@@ -1890,7 +1890,10 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 
 /* === Drawing layer — "glass overlay" annotations + floating toolbar === */
 /* Toolbar: vertical column, top-left of the canvas (just below the layerbar). */
-.m002-draw-toolbar{position:absolute;top:80px;left:18px;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);font-family:'JetBrains Mono','Share Tech Mono',monospace;color:#7a7f8e;user-select:none;}
+/* Legacy left-edge toolbar — replaced by the radial DRAW submenu. Kept in
+   the DOM (engine still reads .active states) but no longer rendered. */
+.m002-draw-toolbar{display:none !important;}
+.m002-draw-toolbar--legacy{position:absolute;top:80px;left:18px;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);font-family:'JetBrains Mono','Share Tech Mono',monospace;color:#7a7f8e;user-select:none;}
 .m002-draw-toolbar .m002-draw-body{display:flex;flex-direction:column;gap:6px;}
 .m002-draw-toolbar[data-collapsed="true"] .m002-draw-body{display:none;}
 .m002-draw-toolbar[data-collapsed="true"]{padding:4px;}
@@ -1929,6 +1932,8 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
 .m002-host.m002-drawing-mode .m002-svg{cursor:crosshair;}
 .m002-host.m002-drawing-mode[data-draw-mode="text"] .m002-svg{cursor:text;}
 .m002-host.m002-eraser-mode .m002-svg{cursor:not-allowed;}
+.m002-host.m002-wipe-mode .m002-svg{cursor:crosshair;}
+.m002-wipe-cursor{opacity:0.85;}
 /* In eraser mode strokes become the only interactive things — devices and
    links pause their hit-testing so the user can target a stroke that overlaps
    them. */

@@ -1499,6 +1499,7 @@ async function mount(stage, ctx) {
       cloneStack, splitStack, moveStackToZone,
       deleteStack: deleteStackWithMembers,
       createLagFromLink,
+      setDrawTool, toggleDrawingsVisible,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -1692,7 +1693,8 @@ function createState(stage, ctx) {
     drawTool: null,          // null | 'pen'|'line'|'arrow'|'rect'|'ellipse'|'text'|'eraser'
     drawColor: '#ff003c',
     drawWidth: 3,
-    drawingsHidden: false,
+    // Drawings start hidden — sketch surface is opt-in via radial DRAW → TOGGLE.
+    drawingsHidden: true,
     drawToolbarCollapsed: false,
     drawingActive: null,     // in-progress shape during a pointer drag
     drawUndoStack: [],       // separate undo stack for drawings (last 40 strokes)
@@ -3114,6 +3116,12 @@ function bindBoard(s) {
         e.preventDefault();
         return;
       }
+      if (s.drawTool === 'wipe') {
+        beginWipe(s, e);
+        s.drag = { kind: 'wipe' };
+        e.preventDefault();
+        return;
+      }
       if (beginDrawing(s, e)) {
         s.drag = { kind: 'draw' };
         e.preventDefault();
@@ -3252,6 +3260,10 @@ function bindBoard(s) {
     if (!s.drag) return;
     if (s.drag.kind === 'draw') {
       updateDrawing(s, e);
+      return;
+    }
+    if (s.drag.kind === 'wipe') {
+      updateWipe(s, e);
       return;
     }
     if (s.drag.kind === 'pan') {
@@ -3455,6 +3467,11 @@ function bindBoard(s) {
     // before any of the regular drag-end choreography runs.
     if (s.drag?.kind === 'draw') {
       endDrawing(s);
+      s.drag = null;
+      return;
+    }
+    if (s.drag?.kind === 'wipe') {
+      endWipe(s);
       s.drag = null;
       return;
     }
@@ -12395,7 +12412,14 @@ function toast(s, msg) {
 // m002-world (so strokes pan/zoom with the canvas). Persists per-map via
 // snapshotMapData / hydrateMapData. Toolbar lives on the left edge; collapse
 // button shrinks it to a single icon.
-const DRAW_TOOLS = new Set(['pen','line','arrow','rect','ellipse','text','eraser']);
+// 'wipe' is the radial DRAW E action — circle-drag eraser (different from
+// 'eraser' which is a per-stroke click). The other shape tools (line / arrow
+// / rect / ellipse / text) are still in the engine but no longer reachable
+// from the UI; the radial only exposes pen / wipe / eraser.
+const DRAW_TOOLS = new Set(['pen','line','arrow','rect','ellipse','text','eraser','wipe']);
+// World-space radius of the WIPE eraser circle. Generous so the user can
+// drag-rub-clear large areas without precision aim.
+const DRAW_WIPE_RADIUS = 60;
 
 function bindDrawToolbar(s) {
   if (!s.drawToolbarEl) return;
@@ -12427,6 +12451,13 @@ function setDrawTool(s, tool) {
   // open text-input prompt — avoids ghost geometry sticking around.
   cancelDrawingActive(s);
   closeDrawTextInput(s);
+  // Activating any draw tool while the board is hidden would have the user
+  // sketching into the void. Auto-unhide so they see what they're doing.
+  // TOGGLE remains the explicit hide gesture once they're done.
+  if (s.drawTool && s.drawingsHidden) {
+    s.drawingsHidden = false;
+    schedSave(s);
+  }
   refreshDrawToolbar(s);
   applyDrawHostState(s);
 }
@@ -12481,6 +12512,7 @@ function applyDrawHostState(s) {
   if (!s.host) return;
   s.host.classList.toggle('m002-drawing-mode', !!s.drawTool);
   s.host.classList.toggle('m002-eraser-mode', s.drawTool === 'eraser');
+  s.host.classList.toggle('m002-wipe-mode', s.drawTool === 'wipe');
   s.host.classList.toggle('m002-drawings-hidden', !!s.drawingsHidden);
   // Host carries the active tool via its own attr (data-draw-mode) instead of
   // data-draw-tool so the CSS / querySelector "[data-draw-tool]" matches only
@@ -12607,6 +12639,116 @@ function eraseDrawing(s, drawingId) {
   renderDrawings(s);
   schedSave(s);
   return true;
+}
+
+// =============================================================================
+// WIPE — circle-drag eraser. Different from the per-stroke 'eraser' tool: drag
+// a generously-sized circle over the canvas, every drawing it touches dies in
+// the same gesture (one undo step for the whole sweep). Visual cursor lives
+// in s.gOverlay so it inherits world transform.
+// =============================================================================
+function beginWipe(s, e) {
+  // One undo step covers the entire wipe gesture, regardless of how many
+  // drawings get caught. Pushed once here, never per-victim.
+  pushDrawUndoSnapshot(s);
+  if (!s.gOverlay) return;
+  // Spawn the cursor circle. Stays mounted for the full drag, repositioned
+  // each frame from updateWipe.
+  const g = document.createElementNS(SVG_NS, 'g');
+  g.setAttribute('class', 'm002-wipe-cursor');
+  g.setAttribute('pointer-events', 'none');
+  const ring = document.createElementNS(SVG_NS, 'circle');
+  ring.setAttribute('r', String(DRAW_WIPE_RADIUS));
+  ring.setAttribute('fill', 'rgba(255,0,60,0.10)');
+  ring.setAttribute('stroke', '#ff003c');
+  ring.setAttribute('stroke-width', '1.5');
+  g.appendChild(ring);
+  s.gOverlay.appendChild(g);
+  s._wipe = { g, removed: 0, undoPushed: true };
+  updateWipe(s, e);
+}
+
+function updateWipe(s, e) {
+  const w = drawWorldPoint(s, e.clientX, e.clientY);
+  if (s._wipe?.g) {
+    s._wipe.g.setAttribute('transform', `translate(${w.x} ${w.y})`);
+  }
+  // Sweep: collect victims, splice in one pass to keep indices stable, then
+  // re-render once at the end of the frame.
+  const r = DRAW_WIPE_RADIUS;
+  let hit = false;
+  s.drawings = s.drawings.filter((d) => {
+    if (drawingIntersectsCircle(d, w.x, w.y, r)) {
+      hit = true;
+      return false;
+    }
+    return true;
+  });
+  if (hit) {
+    if (s._wipe) s._wipe.removed += 1;
+    renderDrawings(s);
+  }
+}
+
+function endWipe(s) {
+  if (s._wipe?.g) s._wipe.g.remove();
+  const removed = s._wipe?.removed || 0;
+  // No actual victims → drop the snapshot so undo doesn't see a no-op step.
+  if (!removed && s._wipe?.undoPushed && s.drawUndoStack.length) s.drawUndoStack.pop();
+  s._wipe = null;
+  if (removed) schedSave(s);
+}
+
+// Coarse hit test: circle (cx,cy,r) versus a drawing. AABB pre-filter, then
+// per-tool refinement for thin/long shapes (pen, line, arrow) so a stroke
+// only barely glancing the cursor's bbox doesn't get nuked from across the
+// canvas. Rect/ellipse/text use the AABB hit alone — they're solid enough
+// that any bbox overlap is "the user touched it".
+function drawingIntersectsCircle(d, cx, cy, r) {
+  const halfW = Math.max(0.5, +d.width || 2) / 2;
+  const pad = r + halfW;
+  if (d.tool === 'pen') {
+    if (!d.points || d.points.length === 0) return false;
+    if (d.points.length === 1) {
+      const [x, y] = d.points[0];
+      return Math.hypot(x - cx, y - cy) <= pad;
+    }
+    for (let i = 1; i < d.points.length; i++) {
+      const a = d.points[i - 1], b = d.points[i];
+      if (pointSegDist(cx, cy, a[0], a[1], b[0], b[1]) <= pad) return true;
+    }
+    return false;
+  }
+  if (d.tool === 'line' || d.tool === 'arrow') {
+    return pointSegDist(cx, cy, d.x1, d.y1, d.x2, d.y2) <= pad;
+  }
+  if (d.tool === 'rect' || d.tool === 'ellipse') {
+    const x0 = Math.min(d.x1, d.x2), y0 = Math.min(d.y1, d.y2);
+    const x1 = Math.max(d.x1, d.x2), y1 = Math.max(d.y1, d.y2);
+    return circleAabbOverlap(cx, cy, r, x0 - halfW, y0 - halfW, x1 + halfW, y1 + halfW);
+  }
+  if (d.tool === 'text') {
+    // Anchor-based proximity. Text bbox is unknown without measuring DOM,
+    // so a generous radius (font size + r) is good enough for an eraser.
+    const fs = Math.max(10, (d.fontSize || 16));
+    return Math.hypot(d.x - cx, d.y - cy) <= (r + fs);
+  }
+  return false;
+}
+
+function pointSegDist(px, py, ax, ay, bx, by) {
+  const dx = bx - ax, dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 < 1e-6) return Math.hypot(px - ax, py - ay);
+  let t = ((px - ax) * dx + (py - ay) * dy) / len2;
+  if (t < 0) t = 0; else if (t > 1) t = 1;
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+function circleAabbOverlap(cx, cy, r, x0, y0, x1, y1) {
+  const nx = Math.max(x0, Math.min(cx, x1));
+  const ny = Math.max(y0, Math.min(cy, y1));
+  return Math.hypot(cx - nx, cy - ny) <= r;
 }
 
 // Build SVG markup for one drawing. Returned string is innerHTML-safe — text

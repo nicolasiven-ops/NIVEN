@@ -24,7 +24,10 @@ const RADIAL_PRIMARY = [
   { id: 'new',  dir: 'N', center: -90, label: 'NEW',  glyph: '+'  },
   { id: 'move', dir: 'E', center:   0, label: 'MOVE', glyph: '↦' },
   { id: 'tool', dir: 'S', center:  90, label: 'TOOL', glyph: '⚙' },
-  { id: 'undo', dir: 'W', center: 180, label: 'UNDO', glyph: '↶' },
+  // W slot used to be a duplicate UNDO (also reachable via TOOL→UNDO). Now
+  // hosts the DRAW submenu — the only way to reach the sketch tools after
+  // the legacy left-edge toolbar got pulled.
+  { id: 'draw', dir: 'W', center: 180, label: 'DRAW', glyph: '✎' },
 ];
 
 // MOVE submenu — switches the active layer or jumps the user into the zone
@@ -66,6 +69,15 @@ const RADIAL_STACK = [
   { id: 'st-move',   dir: 'W', center: 180, label: 'MOVE',   glyph: '↦' },
 ];
 
+// DRAW submenu — opened from primary W. Pen / circle-wipe / per-stroke
+// eraser / visibility toggle. Replaces the old left-edge draw toolbar.
+const RADIAL_DRAW = [
+  { id: 'draw-pen',    dir: 'N', center: -90, label: 'PEN',    glyph: '✎' },
+  { id: 'draw-wipe',   dir: 'E', center:   0, label: 'WIPE',   glyph: '◯' },
+  { id: 'draw-erase',  dir: 'S', center:  90, label: 'ERASE',  glyph: '⌫' },
+  { id: 'draw-toggle', dir: 'W', center: 180, label: 'TOGGLE', glyph: '◉' },
+];
+
 // LINK ring — DELETE south, LAG north (promote this link's ports into a
 // LAG on each stacked side; both stacked → LAG-pair with counterparts).
 // East/West stay empty — nothing else fits a single-link gesture.
@@ -103,6 +115,9 @@ const _deps = {
   deleteStack:       () => {},
   // Link-radial callbacks.
   createLagFromLink: () => {},
+  // Draw-submenu callbacks.
+  setDrawTool:           () => {},
+  toggleDrawingsVisible: () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -297,6 +312,10 @@ function handleRadialAction(s, action) {
     showRadialToolSubmenu(s);
     return;
   }
+  if (action === 'draw') {
+    showRadialDrawSubmenu(s);
+    return;
+  }
   if (action === 'zones') {
     showRadialZonesSubmenu(s);
     return;
@@ -447,6 +466,32 @@ function handleRadialAction(s, action) {
     if (target?.kind === 'link') _deps.createLagFromLink(s, target.id);
     return;
   }
+  // --- Draw submenu (from primary W) ---
+  if (action === 'draw-pen') {
+    closeRadialMenu(s);
+    _deps.setDrawTool(s, 'pen');
+    return;
+  }
+  if (action === 'draw-wipe') {
+    closeRadialMenu(s);
+    _deps.setDrawTool(s, 'wipe');
+    return;
+  }
+  if (action === 'draw-erase') {
+    closeRadialMenu(s);
+    _deps.setDrawTool(s, 'eraser');
+    return;
+  }
+  if (action === 'draw-toggle') {
+    closeRadialMenu(s);
+    _deps.toggleDrawingsVisible(s);
+    return;
+  }
+  if (action === 'back-draw') {
+    s.radial?.el.removeAttribute('data-fresh');
+    swapRadialContent(s, renderRadialDraw(), 'draw');
+    return;
+  }
 }
 
 function showRadialDeviceSubmenu(s) {
@@ -477,6 +522,11 @@ function showRadialElementZonesSubmenu(s) {
 function showRadialStackZonesSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialStackZones(s), 'st-zones');
+}
+
+function showRadialDrawSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialDraw(), 'draw');
 }
 
 function swapRadialContent(s, html, level) {
@@ -663,6 +713,36 @@ function renderRadialElement() {
       <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="cancel">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
         <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">CANCEL</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialDraw() {
+  // Draw-tools submenu — 4 cardinals, centre walks back to primary.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / RADIAL_DRAW.length) / 2;
+  let segs = '';
+  RADIAL_DRAW.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const pos = radialLabelPositions(cx, cy, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
       </g>
       ${segs}
     </svg>`;
