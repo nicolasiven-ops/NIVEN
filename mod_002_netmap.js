@@ -1789,16 +1789,6 @@ function buildDOM(s) {
         <div class="m002-tab-menu" hidden></div>
       </div>
 
-      <div class="m002-statusbar">
-        <span class="m002-stat-tag">// NET_FORGE</span>
-        <span class="m002-stat-sep">·</span>
-        <span class="m002-stat-devices">0 NODES</span>
-        <span class="m002-stat-sep">·</span>
-        <span class="m002-stat-links">0 LINKS</span>
-        <span class="m002-stat-sep">·</span>
-        <span class="m002-stat-mode">SELECT</span>
-      </div>
-
       <div class="m002-detail-overlay" hidden>
         <div class="m002-detail-head">
           <button type="button" class="m002-detail-back" title="Back to map (ESC)"><span class="m002-detail-back-glyph">←</span><span>MAP</span></button>
@@ -1845,7 +1835,7 @@ function buildDOM(s) {
   s.palette = host.querySelector('.m002-leftpanel');
   s.inspector = host.querySelector('.m002-inspector');
   s.layerBar = host.querySelector('.m002-layerbar');
-  s.statusBar = host.querySelector('.m002-statusbar');
+  s.statusBar = null; // removed — tabbar now occupies the bottom row
   s.toastStackEl = host.querySelector('.m002-toast-stack');
   // Legend body lives in the left panel; the picker calls still target the body
   s.legendEl = host.querySelector('.m002-vlan-legend-body')?.parentElement || null;
@@ -9992,14 +9982,16 @@ function refreshDetailViewIfSettled(s) {
   }
 }
 
+// Statusbar (// NET_FORGE · 37 NODES · 30 LINKS · SELECT) wurde entfernt —
+// die Tab-Bar belegt jetzt die untere Canvas-Zeile, die Status-Lesezeichen
+// waren rein passiv und visuell überflüssig. updateStatus / setMode bleiben
+// als No-ops bestehen, damit alle Aufrufer (es gibt viele über die Codebase)
+// nicht angefasst werden müssen — der einzige Seiteneffekt der noch zählt
+// ist renderMinimap(), der nichts mit der Statusbar zu tun hat.
 function updateStatus(s) {
-  s.host.querySelector('.m002-stat-devices').textContent = `${s.devices.length} NODES`;
-  s.host.querySelector('.m002-stat-links').textContent = `${s.links.length} LINKS`;
   renderMinimap(s);
 }
-function setMode(s, txt) {
-  s.host.querySelector('.m002-stat-mode').textContent = txt;
-}
+function setMode(_s, _txt) { /* no-op since the statusbar was removed */ }
 
 // =============================================================================
 // Detail-View — drill-down on a single element.
