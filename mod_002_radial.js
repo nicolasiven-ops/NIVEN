@@ -57,6 +57,21 @@ const RADIAL_ELEMENT = [
   { id: 'el-move',    dir: 'W', center: 180, label: 'MOVE',    glyph: '↦' },
 ];
 
+// STACK ring — opened on right-click on a stack icon / envelope. SPLIT is the
+// inverse of stack creation (dissolves the group, keeps members standalone).
+const RADIAL_STACK = [
+  { id: 'st-clone',  dir: 'N', center: -90, label: 'CLONE',  glyph: '⎘' },
+  { id: 'st-split',  dir: 'E', center:   0, label: 'SPLIT',  glyph: '⇄' },
+  { id: 'st-delete', dir: 'S', center:  90, label: 'DELETE', glyph: '×' },
+  { id: 'st-move',   dir: 'W', center: 180, label: 'MOVE',   glyph: '↦' },
+];
+
+// LINK ring — only DELETE is meaningful as a quick gesture for a link. Other
+// cardinals stay empty by design (an asymmetric ring is the honest signal).
+const RADIAL_LINK = [
+  { id: 'lk-delete', dir: 'S', center: 90, label: 'DELETE', glyph: '×' },
+];
+
 // --- Dependency injection --------------------------------------------------
 // All deps default to no-op stubs so the module is non-crashy if a caller
 // forgets to wire them up.
@@ -79,6 +94,11 @@ const _deps = {
   moveDeviceToZone:  () => {},
   connectFromDevice: () => {},
   deleteRef:         () => {},
+  // Stack-radial callbacks.
+  cloneStack:        () => {},
+  splitStack:        () => {},
+  moveStackToZone:   () => {},
+  deleteStack:       () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -180,6 +200,25 @@ export function openRadialMenu(s, clientX, clientY) {
 // dismissal logic to openRadialMenu, but the ring is the ELEMENT set and the
 // menu carries the target ref so submenu actions know what to operate on.
 export function openRadialElementMenu(s, clientX, clientY, target) {
+  _openRadialTargeted(s, clientX, clientY, target, 'element', renderRadialElement());
+}
+
+// Right-click on a stack envelope or its collapsed icon — same chrome, stack-
+// specific action ring, target ref carries the stack id.
+export function openRadialStackMenu(s, clientX, clientY, target) {
+  _openRadialTargeted(s, clientX, clientY, target, 'stack', renderRadialStack());
+}
+
+// Right-click on a link — minimal ring with only DELETE. Other cardinals
+// intentionally empty.
+export function openRadialLinkMenu(s, clientX, clientY, target) {
+  _openRadialTargeted(s, clientX, clientY, target, 'link', renderRadialLink());
+}
+
+// Shared opener for every targeted (right-click-on-thing) variant. Identical
+// dismissal + event wiring to openRadialMenu — the difference is just which
+// HTML body gets injected and which level/target tag the radial carries.
+function _openRadialTargeted(s, clientX, clientY, target, level, html) {
   closeRadialMenu(s);
   const w = _deps.clientToWorld(s, clientX, clientY);
   const hostRect = s.host.getBoundingClientRect();
@@ -191,11 +230,11 @@ export function openRadialElementMenu(s, clientX, clientY, target) {
   root.className = 'm002-radial';
   root.style.left = `${localX}px`;
   root.style.top  = `${localY}px`;
-  root.dataset.level = 'element';
+  root.dataset.level = level;
   root.dataset.fresh = '1';
-  root.innerHTML = renderRadialElement();
+  root.innerHTML = html;
   s.host.appendChild(root);
-  s.radial = { el: root, world: w, level: 'element', target };
+  s.radial = { el: root, world: w, level, target };
 
   requestAnimationFrame(() => root.classList.add('m002-radial-in'));
 
@@ -356,6 +395,48 @@ function handleRadialAction(s, action) {
     if (target?.kind === 'device') _deps.moveDeviceToZone(s, target.id, zoneId);
     return;
   }
+  // --- Stack ring (right-click on a stack) ---
+  if (action === 'st-clone') {
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target?.kind === 'stack') _deps.cloneStack(s, target.id);
+    return;
+  }
+  if (action === 'st-split') {
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target?.kind === 'stack') _deps.splitStack(s, target.id);
+    return;
+  }
+  if (action === 'st-delete') {
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target?.kind === 'stack') _deps.deleteStack(s, target.id);
+    return;
+  }
+  if (action === 'st-move') {
+    showRadialStackZonesSubmenu(s);
+    return;
+  }
+  if (action === 'back-stack') {
+    s.radial?.el.removeAttribute('data-fresh');
+    swapRadialContent(s, renderRadialStack(), 'stack');
+    return;
+  }
+  if (action.startsWith('st-move-zone:')) {
+    const zoneId = action.slice('st-move-zone:'.length);
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target?.kind === 'stack') _deps.moveStackToZone(s, target.id, zoneId);
+    return;
+  }
+  // --- Link ring (right-click on a link) ---
+  if (action === 'lk-delete') {
+    const target = s.radial?.target;
+    closeRadialMenu(s);
+    if (target) _deps.deleteRef(s, target);
+    return;
+  }
 }
 
 function showRadialDeviceSubmenu(s) {
@@ -381,6 +462,11 @@ function showRadialZonesSubmenu(s) {
 function showRadialElementZonesSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialElementZones(s), 'el-zones');
+}
+
+function showRadialStackZonesSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialStackZones(s), 'st-zones');
 }
 
 function swapRadialContent(s, html, level) {
@@ -567,6 +653,113 @@ function renderRadialElement() {
       <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="cancel">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
         <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">CANCEL</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialStack() {
+  // Stack-action ring — same chrome as the device ring; CANCEL centre.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / RADIAL_STACK.length) / 2;
+  let segs = '';
+  RADIAL_STACK.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const pos = radialLabelPositions(cx, cy, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="cancel">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">CANCEL</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialLink() {
+  // Single-segment ring for links — only DELETE is meaningful as a quick
+  // gesture, so the other three cardinals stay empty by design.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / 4) / 2; // 4-way slot geometry, only one filled
+  let segs = '';
+  RADIAL_LINK.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const pos = radialLabelPositions(cx, cy, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="cancel">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">CANCEL</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialStackZones(s) {
+  // Zone picker for stack MOVE — excludes the stack's current zone. Centre
+  // walks back to the stack ring.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const target = s.radial?.target;
+  const stack = target?.kind === 'stack' ? (s.stacks || []).find((st) => st.id === target.id) : null;
+  const currentZone = stack?.zone || s.activeZone;
+  const zones = (s.zones || []).filter((z) => z.id !== currentZone);
+  let segs = '';
+  if (zones.length === 0) {
+    segs = `
+      <text class="m002-rad-empty" x="${cx}" y="${cy - RADIAL_INNER_R - 24}"
+            text-anchor="middle" fill="#5a5f6e"
+            font-family="'JetBrains Mono','Share Tech Mono',monospace" font-size="10" letter-spacing="1.6">
+        NO OTHER ZONES
+      </text>`;
+  } else {
+    const N = zones.length;
+    const slice = 360 / N;
+    const half = slice / 2;
+    zones.forEach((z, i) => {
+      const center = -90 + i * slice;
+      const start = center - half + RADIAL_SUB_GAP_DEG / 2;
+      const end   = center + half - RADIAL_SUB_GAP_DEG / 2;
+      const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+      const labelPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2, center);
+      segs += `
+        <g class="m002-rad-seg m002-rad-seg-zone" data-radial-action="st-move-zone:${_deps.escAttr(z.id)}">
+          <path class="m002-rad-seg-path" d="${path}"/>
+          <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${_deps.escSvg(z.name)}</text>
+        </g>`;
+    });
+  }
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back-stack">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
       </g>
       ${segs}
     </svg>`;

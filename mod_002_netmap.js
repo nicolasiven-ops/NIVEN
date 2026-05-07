@@ -56,6 +56,8 @@ import {
   configureRadial,
   openRadialMenu,
   openRadialElementMenu,
+  openRadialStackMenu,
+  openRadialLinkMenu,
 } from './mod_002_radial.js';
 
 // Cross-module wiring lives inside mount() to keep this top-level free of
@@ -1490,6 +1492,7 @@ async function mount(stage, ctx) {
       spawnDeviceAt, switchZone, escAttr, escSvg,
       getDeviceTypes: () => DEVICE_TYPES,
       cloneDevice, moveDeviceToZone, connectFromDevice, deleteRef,
+      cloneStack, splitStack, moveStackToZone, deleteStack,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -3029,17 +3032,25 @@ function bindBoard(s) {
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
-    // Right-click on the background → primary radial action menu at the
-    // cursor. Right-click on a device → element radial (clone / connect /
-    // move / delete). Stacks and links still suppress the native menu but
-    // don't yet open one of their own.
+    // Right-click routes to a target-specific radial. Devices get the full
+    // 4-action ring; stacks get clone / split / delete / move; links get a
+    // single DELETE slot. Background falls through to the primary ring.
+    // Click priority matches the dom-walk order: device first (member
+    // click inside an expanded stack should go to the device), then stack,
+    // then link, then background.
     if (e.button === 2) {
       if (devEl) {
         openRadialElementMenu(s, e.clientX, e.clientY, { kind: 'device', id: devEl.dataset.deviceId });
         e.preventDefault();
         return;
       }
-      if (stackEl || linkEl) {
+      if (stackEl) {
+        openRadialStackMenu(s, e.clientX, e.clientY, { kind: 'stack', id: stackEl.dataset.stackId });
+        e.preventDefault();
+        return;
+      }
+      if (linkEl) {
+        openRadialLinkMenu(s, e.clientX, e.clientY, { kind: 'link', id: linkEl.dataset.linkId });
         e.preventDefault();
         return;
       }
@@ -3881,6 +3892,105 @@ function connectFromDevice(s, deviceId) {
   s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
   s.gDevices.querySelector(`[data-device-id="${deviceId}"]`)?.classList.add('m002-link-pending');
   setMode(s, 'LINK · pick second node');
+}
+
+// Deep-clone a stack — every member device gets a new id, the stack object
+// gets a new id, and intra-stack cabling (stackLinks) is rebuilt against the
+// new device ids. Position offset by 2·GRID. LAGs are intentionally NOT
+// carried over — they hold pairwise counterpart pointers that would either
+// alias to the original peer or break, and rebuilding the pairing is more
+// gesture than copy.
+function cloneStack(s, stackId) {
+  const src = findStackById(s, stackId);
+  if (!src) return;
+  if (!src.members || src.members.length === 0) return;
+  snapshot(s);
+  const idMap = new Map();
+  const newMembers = [];
+  src.members.forEach((memberId) => {
+    const dev = s.devices.find((d) => d.id === memberId);
+    if (!dev) return;
+    const copy = (typeof structuredClone === 'function')
+      ? structuredClone(dev)
+      : JSON.parse(JSON.stringify(dev));
+    copy.id = rid();
+    copy.x = dev.x + GRID * 2;
+    copy.y = dev.y + GRID * 2;
+    if (isReference(copy)) copy.coupleId = null;
+    idMap.set(memberId, copy.id);
+    newMembers.push(copy.id);
+    s.devices.push(copy);
+  });
+  if (newMembers.length === 0) return;
+  // External links (s.links) are NOT cloned — re-pointing them is ambiguous
+  // (clone is a parallel copy, not a replacement). Stack-internal cabling
+  // gets rebuilt fresh against the cloned members.
+  const newStackLinks = (src.stackLinks || []).map((sl) => {
+    const copySl = (typeof structuredClone === 'function')
+      ? structuredClone(sl)
+      : JSON.parse(JSON.stringify(sl));
+    copySl.id = rid();
+    if (idMap.has(sl.fromDevice)) copySl.fromDevice = idMap.get(sl.fromDevice);
+    if (idMap.has(sl.toDevice))   copySl.toDevice   = idMap.get(sl.toDevice);
+    return copySl;
+  });
+  const idx = s.stacks.length + 1;
+  const newStack = {
+    id: 'stk_' + rid(),
+    name: `${src.name} (copy)`,
+    members: newMembers,
+    x: src.x + GRID * 2,
+    y: src.y + GRID * 2,
+    expanded: src.expanded,
+    zone: src.zone,
+    lags: [],
+    stackLinks: newStackLinks,
+    virtualInterfaces: [],
+    routes: [],
+  };
+  s.stacks.push(newStack);
+  render(s);
+  select(s, 'stack', newStack.id);
+  toast(s, `Cloned ${src.name} → ${newStack.name}`);
+  schedSave(s);
+}
+
+// Dissolve a stack into independent devices. Members keep their own x,y
+// (drifted with any stack drag), so they reappear at whatever position the
+// stack drag left them at. Stack-LAGs and stackLinks die with the stack —
+// they only made sense in a stacked context.
+function splitStack(s, stackId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  const stName = st.name;
+  const memberCount = st.members.length;
+  if (s.selected?.kind === 'stack' && s.selected.id === stackId) deselect(s);
+  snapshot(s);
+  dropStackAndItsLags(s, st);
+  render(s);
+  toast(s, `Split ${stName} → ${memberCount} devices`);
+  schedSave(s);
+}
+
+// Reassign a stack (and all its members) to a different zone. Members carry
+// their own zone field so the inspector and zone-bar stay consistent if the
+// stack is later split.
+function moveStackToZone(s, stackId, zoneId) {
+  const st = findStackById(s, stackId);
+  if (!st) return;
+  const z = s.zones.find((zz) => zz.id === zoneId);
+  if (!z) return;
+  if ((st.zone || s.activeZone) === zoneId) return;
+  snapshot(s);
+  st.zone = zoneId;
+  st.members.forEach((mid) => {
+    const m = s.devices.find((d) => d.id === mid);
+    if (m) m.zone = zoneId;
+  });
+  if (s.selected?.kind === 'stack' && s.selected.id === stackId) deselect(s);
+  render(s);
+  toast(s, `Moved ${st.name} → ${z.name}`);
+  schedSave(s);
 }
 
 // Resolve a reference's target into a display label. Returns "(no target)" if
