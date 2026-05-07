@@ -10044,9 +10044,22 @@ const DETAIL_LEAVING_OPACITY_AT = 500;
 function exitDetailView(s) {
   if (!s.detailDeviceId) return;
   s.detailDeviceId = null;
+  // Tear down EVERY pending hop timer + the settled timer + reset the
+  // hop-active lock so a follow-up enterDetailView starts from a clean
+  // slate. Without this, a hop that was mid-flight when the user pressed
+  // ESC (or clicked the background) would leave _detailHopActive=true
+  // forever, and every subsequent peer click would be rejected by the
+  // first guard inside hopToPeer.
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
+  if (s._detailHopOutTimer) { clearTimeout(s._detailHopOutTimer); s._detailHopOutTimer = null; }
+  if (s._detailHopInTimer)  { clearTimeout(s._detailHopInTimer);  s._detailHopInTimer  = null; }
+  s._detailHopActive = false;
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (overlay) {
+    // Strip any in-flight hop classes too — otherwise they linger into
+    // the next detail-view session and silently block entry animations.
+    overlay.classList.remove('m002-detail-hop-out');
+    overlay.classList.remove('m002-detail-hop-in');
     const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
     if (reduceMotion) {
       // Snap exit — no choreography, just opacity fade.
@@ -10839,14 +10852,25 @@ const HOP_IN_MS  = 820;
 
 function hopToPeer(s, peerId, fromEl) {
   if (!peerId || peerId === s.detailDeviceId) return;
-  if (s._detailHopActive) return;
   const peer = s.devices.find((d) => d.id === peerId);
   if (!peer) return;
   const overlay = s.host.querySelector('.m002-detail-overlay');
   if (!overlay) return;
 
-  s._detailHopActive = true;
+  // No "is a hop already in flight?" early-return. If the user clicks
+  // a different peer mid-hop they want to navigate THERE, not wait for
+  // the previous animation to finish. We unconditionally tear down any
+  // pending hop timers + transient classes and re-arm the lock so the
+  // new sequence runs cleanly. Keeping the old guard caused the
+  // _detailHopActive flag to get permanently stuck whenever a hop got
+  // interrupted (ESC mid-fade, fast double-click, etc.) and silently
+  // killed all subsequent navigation.
   if (s._detailSettleTimer) { clearTimeout(s._detailSettleTimer); s._detailSettleTimer = null; }
+  if (s._detailHopOutTimer) { clearTimeout(s._detailHopOutTimer); s._detailHopOutTimer = null; }
+  if (s._detailHopInTimer)  { clearTimeout(s._detailHopInTimer);  s._detailHopInTimer  = null; }
+  overlay.classList.remove('m002-detail-hop-out');
+  overlay.classList.remove('m002-detail-hop-in');
+  s._detailHopActive = true;
 
   // Remove settled BEFORE the hop-out class lands. Settled's !important
   // pins (transform:none, opacity:1, animation:none) on port-inner / stub
@@ -10873,7 +10897,26 @@ function hopToPeer(s, peerId, fromEl) {
     });
   }
 
+  // Helper used in every early-return path so _detailHopActive is never
+  // left stuck-true. Without this, exitDetailView mid-hop (or any other
+  // path that aborts the hop early) would freeze the lock and silently
+  // reject every subsequent peer click.
+  const releaseHopLock = () => {
+    overlay.classList.remove('m002-detail-hop-out');
+    overlay.classList.remove('m002-detail-hop-in');
+    s._detailHopActive = false;
+  };
+
   const performSyncAndFlip = () => {
+    s._detailHopOutTimer = null;
+    // Aborted: detail view was closed (ESC / background click) while
+    // hop-out was animating. Don't re-open it by re-assigning
+    // detailDeviceId — bail and free the lock.
+    if (!s.detailDeviceId && !s._viewBeforeDetail) {
+      releaseHopLock();
+      return;
+    }
+
     // Update state — focus + selection + title.
     s.detailDeviceId = peerId;
     // Endpoints belong to the previous centre; reset paging so the new centre
@@ -10928,11 +10971,18 @@ function hopToPeer(s, peerId, fromEl) {
 
     // Phase 3 — wait for FLIP to complete, THEN add hop-in so the new
     // ports/stubs/peer-links pop / fade in deliberately. Settle one
-    // animation-pass later.
-    setTimeout(() => {
-      if (s.detailDeviceId !== peerId) return;
+    // animation-pass later. Both the hop-in trigger and the settle
+    // step release _detailHopActive in EVERY exit path so a mid-hop
+    // exit doesn't strand the lock.
+    s._detailHopInTimer = setTimeout(() => {
+      s._detailHopInTimer = null;
+      if (s.detailDeviceId !== peerId) {
+        releaseHopLock();
+        return;
+      }
       overlay.classList.add('m002-detail-hop-in');
       s._detailSettleTimer = setTimeout(() => {
+        s._detailSettleTimer = null;
         if (s.detailDeviceId === peerId) {
           overlay.classList.add('m002-detail-overlay-settled');
           overlay.classList.remove('m002-detail-hop-in');
@@ -10948,7 +10998,7 @@ function hopToPeer(s, peerId, fromEl) {
   } else {
     // Phase 1 — old ports / links / stubs fade out. Tiles stay put.
     overlay.classList.add('m002-detail-hop-out');
-    setTimeout(performSyncAndFlip, HOP_OUT_MS);
+    s._detailHopOutTimer = setTimeout(performSyncAndFlip, HOP_OUT_MS);
   }
 }
 
