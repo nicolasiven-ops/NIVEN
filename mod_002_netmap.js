@@ -55,6 +55,7 @@ import {
 import {
   configureRadial,
   openRadialMenu,
+  openRadialElementMenu,
 } from './mod_002_radial.js';
 
 // Cross-module wiring lives inside mount() to keep this top-level free of
@@ -1488,6 +1489,7 @@ async function mount(stage, ctx) {
       clientToWorld, toggleLinkMode, toggleDeleteMode, undo,
       spawnDeviceAt, switchZone, escAttr, escSvg,
       getDeviceTypes: () => DEVICE_TYPES,
+      cloneDevice, moveDeviceToZone, connectFromDevice, deleteRef,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -3003,12 +3005,17 @@ function bindBoard(s) {
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
-    // Right-click on the background → open the radial action menu at the
-    // cursor. Right-click on a device is intentionally a no-op for now —
-    // reserved for a future per-node context action. The native browser menu
-    // is suppressed in either case via the contextmenu listener below.
+    // Right-click on the background → primary radial action menu at the
+    // cursor. Right-click on a device → element radial (clone / connect /
+    // move / delete). Stacks and links still suppress the native menu but
+    // don't yet open one of their own.
     if (e.button === 2) {
-      if (devEl || stackEl || linkEl) {
+      if (devEl) {
+        openRadialElementMenu(s, e.clientX, e.clientY, { kind: 'device', id: devEl.dataset.deviceId });
+        e.preventDefault();
+        return;
+      }
+      if (stackEl || linkEl) {
         e.preventDefault();
         return;
       }
@@ -3768,6 +3775,88 @@ function spawnDeviceAt(s, typeId, wx, wy) {
   updateStatus(s);
   toast(s, `Added ${dev.name}`);
   schedSave(s);
+}
+
+// =============================================================================
+// Element-radial actions: clone / move-to-zone / connect-from
+// =============================================================================
+// Right-clicking a device opens a 4-segment ring (mod_002_radial.js). These
+// helpers are the action targets the radial dispatches into. They live in
+// netmap.js because they need full access to the state graph (devices,
+// stacks, link mode, zones).
+
+// Deep-copy a device. The clone gets a fresh id, lands on a diagonal grid-cell
+// offset from the source so the user sees both, and stays in the same zone.
+// Stack membership and JUMP couples are NOT carried over — the clone is a
+// standalone twin (joining a stack must be an explicit gesture; coupleId is
+// pairwise and cannot have two owners).
+function cloneDevice(s, deviceId) {
+  const src = s.devices.find((d) => d.id === deviceId);
+  if (!src) return;
+  snapshot(s);
+  // structuredClone gives us a clean deep copy without aliasing nested
+  // arrays (ports, vlans, lags, routes, interfaces). Falls back to JSON
+  // for older runtimes — defensively, even though every modern browser has it.
+  const copy = (typeof structuredClone === 'function')
+    ? structuredClone(src)
+    : JSON.parse(JSON.stringify(src));
+  copy.id = rid();
+  copy.x = src.x + GRID * 2;
+  copy.y = src.y + GRID * 2;
+  // Append a "(copy)" tag to distinguish from the source until the user renames.
+  copy.name = `${src.name} (copy)`;
+  // Don't inherit cross-references — those are pairwise / position-bound.
+  if (isReference(copy)) copy.coupleId = null;
+  s.devices.push(copy);
+  const t = typeOf(copy.type);
+  drawDevice(s, copy);
+  if (t?.accent) vfxGridPulse(s, copy.x, copy.y, t.accent);
+  select(s, 'device', copy.id);
+  updateStatus(s);
+  toast(s, `Cloned ${src.name}`);
+  schedSave(s);
+}
+
+// Reassign a device's zone. Bounces if the device is in a stack — stacks
+// share the stack's zone, so a member can't live elsewhere.
+function moveDeviceToZone(s, deviceId, zoneId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  const z = s.zones.find((zz) => zz.id === zoneId);
+  if (!z) return;
+  if ((dev.zone || s.activeZone) === zoneId) return;
+  if (findStack(s, deviceId)) {
+    toast(s, 'Cannot move stacked device — remove from stack first');
+    return;
+  }
+  // JUMPs hold a coupleId pointing at a peer in another zone. Moving a JUMP
+  // into the peer's zone collapses the cross-zone invariant; drop the couple.
+  if (isReference(dev) && dev.coupleId) {
+    const peer = s.devices.find((d) => d.id === dev.coupleId);
+    if (peer && peer.zone === zoneId) {
+      uncoupleJump(s, dev);
+    }
+  }
+  snapshot(s);
+  dev.zone = zoneId;
+  // Device is no longer in the active zone — drop it from selection so the
+  // inspector doesn't show a phantom node, and re-render to remove its glyph.
+  if (s.selected?.kind === 'device' && s.selected.id === deviceId) deselect(s);
+  render(s);
+  toast(s, `Moved ${dev.name} → ${z.name}`);
+  schedSave(s);
+}
+
+// Enter LINK mode pre-armed with the right-clicked device as the first pick.
+// User now just needs to click the second device to commit.
+function connectFromDevice(s, deviceId) {
+  const dev = s.devices.find((d) => d.id === deviceId);
+  if (!dev) return;
+  if (!s.linkMode) toggleLinkMode(s);
+  s.linkPending = deviceId;
+  s.gDevices.querySelectorAll('.m002-link-pending').forEach((el) => el.classList.remove('m002-link-pending'));
+  s.gDevices.querySelector(`[data-device-id="${deviceId}"]`)?.classList.add('m002-link-pending');
+  setMode(s, 'LINK · pick second node');
 }
 
 // Resolve a reference's target into a display label. Returns "(no target)" if
