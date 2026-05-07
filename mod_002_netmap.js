@@ -1500,7 +1500,7 @@ async function mount(stage, ctx) {
       cloneStack, splitStack, moveStackToZone,
       deleteStack: deleteStackWithMembers,
       createLagFromLink,
-      setDrawTool, clearDrawTool, undoDrawing,
+      setDrawTool, clearDrawTool, setDrawColor, toggleDrawingsVisible,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -12682,21 +12682,80 @@ function updateWipe(s, e) {
   if (s._wipe?.g) {
     s._wipe.g.setAttribute('transform', `translate(${w.x} ${w.y})`);
   }
-  // Sweep: collect victims, splice in one pass to keep indices stable, then
-  // re-render once at the end of the frame.
+  // Pen strokes get rubbed out partially: each pen drawing is split into the
+  // runs of points that stayed outside the wipe circle, and each surviving
+  // run becomes its own pen drawing. Other tools (line / arrow / rect /
+  // ellipse / text) are atomic shapes — splitting them mid-shape doesn't
+  // mean anything, so they fall back to whole-remove on hit.
   const r = DRAW_WIPE_RADIUS;
-  let hit = false;
-  s.drawings = s.drawings.filter((d) => {
-    if (drawingIntersectsCircle(d, w.x, w.y, r)) {
-      hit = true;
-      return false;
+  const next = [];
+  let changed = false;
+  for (const d of s.drawings) {
+    if (d.tool === 'pen') {
+      const result = wipePenStroke(d, w.x, w.y, r);
+      if (result === null) {
+        next.push(d); // untouched
+      } else {
+        changed = true;
+        result.forEach((frag) => next.push(frag));
+      }
+    } else if (drawingIntersectsCircle(d, w.x, w.y, r)) {
+      changed = true;
+    } else {
+      next.push(d);
     }
-    return true;
-  });
-  if (hit) {
+  }
+  if (changed) {
+    s.drawings = next;
     if (s._wipe) s._wipe.removed += 1;
     renderDrawings(s);
   }
+}
+
+// Split a pen stroke around the wipe circle. Returns null if the stroke is
+// completely outside (no work needed); otherwise returns an array of zero or
+// more new pen drawings — every run of consecutive points that stayed outside
+// becomes its own fresh pen drawing with a new id, so the engine's id-based
+// per-stroke ops (eraser click, undo replay) keep working.
+function wipePenStroke(d, cx, cy, r) {
+  const halfW = Math.max(0.5, +d.width || 2) / 2;
+  const pad = r + halfW;
+  const points = d.points || [];
+  if (!points.length) return null;
+  const inside = points.map((p) => Math.hypot(p[0] - cx, p[1] - cy) <= pad);
+  // Quick exit: nothing inside AND no segment crosses the circle from one
+  // outside-point to another → leave the stroke alone.
+  let anyInside = false;
+  for (const v of inside) { if (v) { anyInside = true; break; } }
+  let segCross = false;
+  if (!anyInside) {
+    for (let i = 1; i < points.length; i++) {
+      if (pointSegDist(cx, cy, points[i - 1][0], points[i - 1][1], points[i][0], points[i][1]) <= pad) {
+        segCross = true; break;
+      }
+    }
+  }
+  if (!anyInside && !segCross) return null;
+  // Walk the points, collecting outside-runs as fragments. Single-point dust
+  // gets dropped — too small to be visually useful after a slice.
+  const fragments = [];
+  let current = [];
+  for (let i = 0; i < points.length; i++) {
+    if (inside[i]) {
+      if (current.length >= 2) fragments.push(current);
+      current = [];
+    } else {
+      current.push(points[i]);
+    }
+  }
+  if (current.length >= 2) fragments.push(current);
+  return fragments.map((pts) => ({
+    id: rid(),
+    tool: 'pen',
+    color: d.color,
+    width: d.width,
+    points: pts,
+  }));
 }
 
 function endWipe(s) {

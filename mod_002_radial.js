@@ -70,13 +70,23 @@ const RADIAL_STACK = [
 ];
 
 // PEN-mode ring — opened on background right-click while a draw tool is
-// active. Cardinal slots swap the active draw tool or undo. Centre exits
-// draw mode entirely (back to the mouse cursor).
+// active. N opens a colour picker submenu; W toggles the canvas visibility;
+// E/S are the two erasers. Centre exits draw mode entirely (back to mouse).
 const RADIAL_PEN = [
-  { id: 'pen-pen',   dir: 'N', center: -90, label: 'PEN',   glyph: '✎' },
-  { id: 'pen-wipe',  dir: 'E', center:   0, label: 'WIPE',  glyph: '◯' },
-  { id: 'pen-erase', dir: 'S', center:  90, label: 'ERASE', glyph: '⌫' },
-  { id: 'pen-undo',  dir: 'W', center: 180, label: 'UNDO',  glyph: '↶' },
+  { id: 'pen-color',  dir: 'N', center: -90, label: 'COLOR',  glyph: '◐' },
+  { id: 'pen-wipe',   dir: 'E', center:   0, label: 'WIPE',   glyph: '◯' },
+  { id: 'pen-erase',  dir: 'S', center:  90, label: 'ERASE',  glyph: '⌫' },
+  { id: 'pen-toggle', dir: 'W', center: 180, label: 'TOGGLE', glyph: '◉' },
+];
+
+// Pen-mode COLOUR submenu — five swatches around the ring; centre walks back
+// to the pen-mode ring. Same five colours the legacy left-edge toolbar shipped.
+const RADIAL_PEN_COLORS = [
+  { hex: '#e8e8ee', name: 'WHITE'  },
+  { hex: '#ff003c', name: 'RED'    },
+  { hex: '#ffae00', name: 'YELLOW' },
+  { hex: '#35ff7a', name: 'GREEN'  },
+  { hex: '#00d4ff', name: 'CYAN'   },
 ];
 
 // LINK ring — DELETE south, LAG north (promote this link's ports into a
@@ -117,9 +127,10 @@ const _deps = {
   // Link-radial callbacks.
   createLagFromLink: () => {},
   // Draw-mode callbacks.
-  setDrawTool:    () => {},
-  clearDrawTool:  () => {},
-  undoDrawing:    () => {},
+  setDrawTool:           () => {},
+  clearDrawTool:         () => {},
+  setDrawColor:          () => {},
+  toggleDrawingsVisible: () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -478,9 +489,8 @@ function handleRadialAction(s, action) {
     return;
   }
   // --- Pen-mode ring (right-click on background while drawing) ---
-  if (action === 'pen-pen') {
-    closeRadialMenu(s);
-    _deps.setDrawTool(s, 'pen');
+  if (action === 'pen-color') {
+    showRadialPenColorsSubmenu(s);
     return;
   }
   if (action === 'pen-wipe') {
@@ -493,14 +503,31 @@ function handleRadialAction(s, action) {
     _deps.setDrawTool(s, 'eraser');
     return;
   }
-  if (action === 'pen-undo') {
+  if (action === 'pen-toggle') {
     closeRadialMenu(s);
-    _deps.undoDrawing(s);
+    _deps.toggleDrawingsVisible(s);
     return;
   }
   if (action === 'pen-exit') {
     closeRadialMenu(s);
     _deps.clearDrawTool(s);
+    return;
+  }
+  if (action === 'back-pen') {
+    s.radial?.el.removeAttribute('data-fresh');
+    swapRadialContent(s, renderRadialPen(), 'pen');
+    return;
+  }
+  if (action.startsWith('pen-color:')) {
+    const hex = action.slice('pen-color:'.length);
+    closeRadialMenu(s);
+    _deps.setDrawColor(s, hex);
+    // After picking a colour, drop the user back into PEN so the next
+    // gesture writes ink. If they were in WIPE/ERASE, that's almost
+    // certainly what they want once they've reached for a colour. Skip
+    // the call when already in PEN — setDrawTool toggles same-tool, which
+    // would silently exit draw mode here.
+    if (s.drawTool !== 'pen') _deps.setDrawTool(s, 'pen');
     return;
   }
 }
@@ -528,6 +555,11 @@ function showRadialZonesSubmenu(s) {
 function showRadialElementZonesSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialElementZones(s), 'el-zones');
+}
+
+function showRadialPenColorsSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialPenColors(s), 'pen-colors');
 }
 
 function showRadialStackZonesSubmenu(s) {
@@ -754,6 +786,43 @@ function renderRadialPen() {
       <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="pen-exit">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
         <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">MOUSE</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialPenColors(s) {
+  // Five colour swatches around the ring; centre walks back to the pen-mode
+  // ring. Active colour gets a highlight ring so the current selection is
+  // visible at a glance.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const N = RADIAL_PEN_COLORS.length;
+  const slice = 360 / N;
+  const half = slice / 2;
+  let segs = '';
+  RADIAL_PEN_COLORS.forEach((c, i) => {
+    const center = -90 + i * slice;
+    const start = center - half + RADIAL_SUB_GAP_DEG / 2;
+    const end   = center + half - RADIAL_SUB_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const labelPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2, center);
+    const dotPos = polarXY(cx, cy, (RADIAL_INNER_R + RADIAL_OUTER_R) / 2 - 18, center);
+    const isActive = (s.drawColor || '').toLowerCase() === c.hex.toLowerCase();
+    segs += `
+      <g class="m002-rad-seg m002-rad-seg-pen-color${isActive ? ' m002-rad-seg-pen-color-active' : ''}" data-radial-action="pen-color:${c.hex}" style="--accent:${c.hex}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <circle class="m002-rad-seg-dot" cx="${dotPos.x}" cy="${dotPos.y}" r="6" fill="${c.hex}" stroke="${isActive ? '#fff' : 'rgba(0,0,0,0.4)'}" stroke-width="1.5"/>
+        <text class="m002-rad-seg-label" x="${labelPos.x}" y="${labelPos.y + 4}" text-anchor="middle">${c.name}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back-pen">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
       </g>
       ${segs}
     </svg>`;
