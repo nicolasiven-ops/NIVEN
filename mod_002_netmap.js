@@ -1505,9 +1505,12 @@ async function mount(stage, ctx) {
   applyStyle(state, state.prefs?.style);
   bindBoard(state);
   bindKeyboard(state);
+  bindDrawToolbar(state);
   await loadFromServer(state);
   applyView(state);
   render(state);
+  renderDrawings(state);
+  applyDrawHostState(state);
   refreshTabBar(state);
   refreshZoneBar(state);
   showInspectorEmpty(state);
@@ -1517,6 +1520,9 @@ async function mount(stage, ctx) {
 
 function unmount() {
   if (!state) return;
+  // Tear down any in-flight drawing prompt — its keydown/blur listeners
+  // would otherwise dangle on a removed input.
+  try { closeDrawTextInput(state); } catch (_) {}
   // Best-effort: flush any pending edits before tearing down.
   if (state.saveTimer) { clearTimeout(state.saveTimer); state.saveTimer = null; }
   if (state.dirty) { try { saveNow(state); } catch (_) {} }
@@ -1673,6 +1679,19 @@ function createState(stage, ctx) {
     undoStack: [],     // last N snapshots (JSON strings) of mutable state
     redoStack: [],     // forward stack after undo
     UNDO_LIMIT: 40,
+
+    // Drawing layer — freehand "glass overlay" annotations.
+    // Persists per-map (snapshot/hydrate). gDrawings is the SVG group rendered
+    // last in m002-world so strokes float visually above devices/links.
+    drawings: [],            // [{ id, tool, color, width, points?, x1,y1,x2,y2?, x,y,text? }]
+    drawTool: null,          // null | 'pen'|'line'|'arrow'|'rect'|'ellipse'|'text'|'eraser'
+    drawColor: '#ff003c',
+    drawWidth: 3,
+    drawingsHidden: false,
+    drawToolbarCollapsed: false,
+    drawingActive: null,     // in-progress shape during a pointer drag
+    drawUndoStack: [],       // separate undo stack for drawings (last 40 strokes)
+    DRAW_UNDO_LIMIT: 40,
   };
 }
 
@@ -1772,6 +1791,8 @@ function buildDOM(s) {
             <g class="m002-devices"></g>
             <g class="m002-overlay"></g>
             <g class="m002-vfx-exits" pointer-events="none"></g>
+            <g class="m002-drawings" pointer-events="none"></g>
+            <g class="m002-drawing-active" pointer-events="none"></g>
           </g>
         </svg>
       </div>
@@ -1783,6 +1804,46 @@ function buildDOM(s) {
           `).join('')}
         </div>
       </div>
+
+      <div class="m002-draw-toolbar" data-collapsed="false">
+        <button type="button" class="m002-draw-toggle" data-draw-act="collapse" title="Collapse / expand drawing tools">
+          <span class="m002-draw-toggle-glyph m002-draw-toggle-collapse">⟨</span>
+          <span class="m002-draw-toggle-glyph m002-draw-toggle-expand">✎</span>
+        </button>
+        <div class="m002-draw-body">
+          <div class="m002-draw-section">
+            <button type="button" class="m002-draw-tool" data-draw-tool="pen" title="Pen — freehand"><span class="m002-draw-glyph">✎</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="line" title="Line"><span class="m002-draw-glyph">╱</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="arrow" title="Arrow"><span class="m002-draw-glyph">➜</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="rect" title="Rectangle"><span class="m002-draw-glyph">▭</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="ellipse" title="Ellipse"><span class="m002-draw-glyph">◯</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="text" title="Text"><span class="m002-draw-glyph">T</span></button>
+            <button type="button" class="m002-draw-tool" data-draw-tool="eraser" title="Eraser — click a stroke to remove"><span class="m002-draw-glyph">⌫</span></button>
+          </div>
+          <div class="m002-draw-sep"></div>
+          <div class="m002-draw-section m002-draw-colors">
+            <button type="button" class="m002-draw-color" data-draw-color="#e8e8ee" style="--c:#e8e8ee" title="White"></button>
+            <button type="button" class="m002-draw-color active" data-draw-color="#ff003c" style="--c:#ff003c" title="Red"></button>
+            <button type="button" class="m002-draw-color" data-draw-color="#ffae00" style="--c:#ffae00" title="Yellow"></button>
+            <button type="button" class="m002-draw-color" data-draw-color="#35ff7a" style="--c:#35ff7a" title="Green"></button>
+            <button type="button" class="m002-draw-color" data-draw-color="#00d4ff" style="--c:#00d4ff" title="Cyan"></button>
+          </div>
+          <div class="m002-draw-sep"></div>
+          <div class="m002-draw-section m002-draw-widths">
+            <button type="button" class="m002-draw-width" data-draw-width="1.5" title="Thin"><span class="m002-draw-w-dot" style="width:4px;height:4px"></span></button>
+            <button type="button" class="m002-draw-width active" data-draw-width="3" title="Medium"><span class="m002-draw-w-dot" style="width:8px;height:8px"></span></button>
+            <button type="button" class="m002-draw-width" data-draw-width="6" title="Thick"><span class="m002-draw-w-dot" style="width:14px;height:14px"></span></button>
+          </div>
+          <div class="m002-draw-sep"></div>
+          <div class="m002-draw-section">
+            <button type="button" class="m002-draw-act" data-draw-act="visibility" title="Show / hide drawings"><span class="m002-draw-glyph">◉</span></button>
+            <button type="button" class="m002-draw-act" data-draw-act="undo" title="Undo last stroke"><span class="m002-draw-glyph">↶</span></button>
+            <button type="button" class="m002-draw-act" data-draw-act="clear" title="Clear all drawings"><span class="m002-draw-glyph">✕</span></button>
+          </div>
+        </div>
+      </div>
+
+      <input type="text" class="m002-draw-text-input" hidden autocomplete="off" spellcheck="false"/>
 
       <div class="m002-zonebar-wrap">
         <div class="m002-zonebar"></div>
@@ -1836,6 +1897,10 @@ function buildDOM(s) {
   s.gOverlay = host.querySelector('.m002-overlay');
   s.gPulse = host.querySelector('.m002-vfx-pulse');
   s.gExits = host.querySelector('.m002-vfx-exits');
+  s.gDrawings = host.querySelector('.m002-drawings');
+  s.gDrawingActive = host.querySelector('.m002-drawing-active');
+  s.drawToolbarEl = host.querySelector('.m002-draw-toolbar');
+  s.drawTextInput = host.querySelector('.m002-draw-text-input');
   s.palette = host.querySelector('.m002-leftpanel');
   s.inspector = host.querySelector('.m002-inspector');
   s.layerBar = host.querySelector('.m002-layerbar');
@@ -3028,6 +3093,28 @@ function bindBoard(s) {
 
   // Mouse interactions: pan empty, drag device, drag stack
   const onDown = (e) => {
+    // Drawing layer takes priority — eraser swallows left-clicks on a stroke,
+    // every other draw tool (pen / line / arrow / rect / ellipse / text) takes
+    // precedence over device/link selection.
+    if (s.drawTool && e.button === 0) {
+      const drawEl = e.target.closest('[data-draw-id]');
+      if (s.drawTool === 'eraser') {
+        if (drawEl) {
+          eraseDrawing(s, drawEl.dataset.drawId);
+          e.preventDefault();
+          return;
+        }
+        // Click on empty space in eraser mode → no-op (don't accidentally pan
+        // the canvas; user wanted to delete something specific).
+        e.preventDefault();
+        return;
+      }
+      if (beginDrawing(s, e)) {
+        s.drag = { kind: 'draw' };
+        e.preventDefault();
+        return;
+      }
+    }
     const devEl = e.target.closest('[data-device-id]');
     const stackEl = e.target.closest('[data-stack-id]');
     const linkEl = e.target.closest('[data-link-id]');
@@ -3158,6 +3245,10 @@ function bindBoard(s) {
   const onMove = (e) => {
     if (s.dragRope) updateRopeFromPointer(s, e.clientX, e.clientY);
     if (!s.drag) return;
+    if (s.drag.kind === 'draw') {
+      updateDrawing(s, e);
+      return;
+    }
     if (s.drag.kind === 'pan') {
       s.drag.lastX = e.clientX;
       s.drag.lastY = e.clientY;
@@ -3355,6 +3446,13 @@ function bindBoard(s) {
     }
   };
   const onUp = (e) => {
+    // Drawing gestures finish here — commit the in-progress shape and bail
+    // before any of the regular drag-end choreography runs.
+    if (s.drag?.kind === 'draw') {
+      endDrawing(s);
+      s.drag = null;
+      return;
+    }
     // Rope drag finishes independently of s.drag (right-click never sets it).
     if (s.dragRope && e.button === 2) {
       endRopeDrag(s);
@@ -3751,6 +3849,14 @@ function bindKeyboard(s) {
       const lagModal = s.host?.querySelector('.m002-lag-modal');
       if (lagModal && !lagModal.hidden) { closeLagModal(s); return; }
       if (s.dragRope) { cancelRopeDrag(s); return; }
+      if (s.drawTextInput && !s.drawTextInput.hidden) { closeDrawTextInput(s); return; }
+      if (s.drawTool) {
+        cancelDrawingActive(s);
+        s.drawTool = null;
+        applyDrawHostState(s);
+        refreshDrawToolbar(s);
+        return;
+      }
       if (s.portModalOpen) closePortModal(s);
       else if (s.detailDeviceId) exitDetailView(s);
       else if (s.linkMode) toggleLinkMode(s);
@@ -10022,6 +10128,11 @@ function vfxAnimateView(s, doRender, anchor, opts) {
 // Render — full redraw (used after layer toggle / load / delete)
 // =============================================================================
 function render(s) {
+  // Drawings live in their own SVG group and only need redraw when the
+  // drawings array (or eraser-mode state) changes — but it's cheap to keep
+  // them in sync on every render so they survive map switches / hydrate /
+  // undo without each call site needing to remember.
+  renderDrawings(s);
   recomputeVlanIndex(s);
   recomputeSubnetIndex(s);
   renderLegend(s);
@@ -12131,6 +12242,355 @@ function toast(s, msg) {
     item.classList.add('leave');
     setTimeout(() => { if (item.parentNode) item.parentNode.removeChild(item); }, 260);
   }, 2800);
+}
+
+
+// =============================================================================
+// Drawing layer — "glass overlay" annotations
+// =============================================================================
+// Floating freehand sketch layer rendered into a dedicated SVG group inside
+// m002-world (so strokes pan/zoom with the canvas). Persists per-map via
+// snapshotMapData / hydrateMapData. Toolbar lives on the left edge; collapse
+// button shrinks it to a single icon.
+const DRAW_TOOLS = new Set(['pen','line','arrow','rect','ellipse','text','eraser']);
+
+function bindDrawToolbar(s) {
+  if (!s.drawToolbarEl) return;
+  s.drawToolbarEl.addEventListener('mousedown', (e) => e.stopPropagation());
+  s.drawToolbarEl.addEventListener('click', (e) => {
+    const toolBtn = e.target.closest('[data-draw-tool]');
+    if (toolBtn) { setDrawTool(s, toolBtn.dataset.drawTool); return; }
+    const colBtn = e.target.closest('[data-draw-color]');
+    if (colBtn) { setDrawColor(s, colBtn.dataset.drawColor); return; }
+    const wBtn = e.target.closest('[data-draw-width]');
+    if (wBtn) { setDrawWidth(s, parseFloat(wBtn.dataset.drawWidth)); return; }
+    const actBtn = e.target.closest('[data-draw-act]');
+    if (actBtn) {
+      const a = actBtn.dataset.drawAct;
+      if (a === 'collapse') toggleDrawToolbarCollapse(s);
+      else if (a === 'visibility') toggleDrawingsVisible(s);
+      else if (a === 'undo') undoDrawing(s);
+      else if (a === 'clear') clearAllDrawings(s);
+    }
+  });
+  refreshDrawToolbar(s);
+}
+
+function setDrawTool(s, tool) {
+  if (!DRAW_TOOLS.has(tool)) return;
+  // Toggle off if same tool clicked again.
+  s.drawTool = (s.drawTool === tool) ? null : tool;
+  // Leaving / entering draw mode also resets any in-progress shape and any
+  // open text-input prompt — avoids ghost geometry sticking around.
+  cancelDrawingActive(s);
+  closeDrawTextInput(s);
+  refreshDrawToolbar(s);
+  applyDrawHostState(s);
+}
+
+function setDrawColor(s, color) {
+  s.drawColor = color;
+  refreshDrawToolbar(s);
+}
+
+function setDrawWidth(s, width) {
+  s.drawWidth = width;
+  refreshDrawToolbar(s);
+}
+
+function toggleDrawToolbarCollapse(s) {
+  s.drawToolbarCollapsed = !s.drawToolbarCollapsed;
+  // Collapsing always exits drawing mode so the user doesn't strand themselves
+  // in pen mode with no visible toolbar to escape with.
+  if (s.drawToolbarCollapsed && s.drawTool) {
+    s.drawTool = null;
+    cancelDrawingActive(s);
+    closeDrawTextInput(s);
+    applyDrawHostState(s);
+  }
+  refreshDrawToolbar(s);
+}
+
+function toggleDrawingsVisible(s) {
+  s.drawingsHidden = !s.drawingsHidden;
+  applyDrawHostState(s);
+  refreshDrawToolbar(s);
+  schedSave(s);
+}
+
+function refreshDrawToolbar(s) {
+  if (!s.drawToolbarEl) return;
+  s.drawToolbarEl.dataset.collapsed = s.drawToolbarCollapsed ? 'true' : 'false';
+  s.drawToolbarEl.querySelectorAll('[data-draw-tool]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.drawTool === s.drawTool);
+  });
+  s.drawToolbarEl.querySelectorAll('[data-draw-color]').forEach((b) => {
+    b.classList.toggle('active', b.dataset.drawColor === s.drawColor);
+  });
+  s.drawToolbarEl.querySelectorAll('[data-draw-width]').forEach((b) => {
+    b.classList.toggle('active', parseFloat(b.dataset.drawWidth) === s.drawWidth);
+  });
+  const visBtn = s.drawToolbarEl.querySelector('[data-draw-act="visibility"]');
+  if (visBtn) visBtn.classList.toggle('active', !s.drawingsHidden);
+}
+
+function applyDrawHostState(s) {
+  if (!s.host) return;
+  s.host.classList.toggle('m002-drawing-mode', !!s.drawTool);
+  s.host.classList.toggle('m002-eraser-mode', s.drawTool === 'eraser');
+  s.host.classList.toggle('m002-drawings-hidden', !!s.drawingsHidden);
+  // Host carries the active tool via its own attr (data-draw-mode) instead of
+  // data-draw-tool so the CSS / querySelector "[data-draw-tool]" matches only
+  // the toolbar buttons, not the host itself.
+  if (s.drawTool) s.host.dataset.drawMode = s.drawTool;
+  else delete s.host.dataset.drawMode;
+}
+
+// Convert a viewport-relative client point into world coordinates that the
+// drawings group's transform expects. Mirrors clientToWorld but inlined here
+// so callers don't need to recompute the rect.
+function drawWorldPoint(s, cx, cy) {
+  const rect = s.svg.getBoundingClientRect();
+  return {
+    x: (cx - rect.left - s.view.x) / s.view.zoom,
+    y: (cy - rect.top  - s.view.y) / s.view.zoom,
+  };
+}
+
+// Begin a new shape on pointer-down. Pen pushes the first point; line/arrow/
+// rect/ellipse stash an anchor and a moving endpoint; text opens an inline
+// input at the click world-coords. Returns true if the gesture was consumed
+// by the drawing layer (caller short-circuits the regular pan/select code).
+function beginDrawing(s, e) {
+  if (!s.drawTool || s.drawTool === 'eraser') return false;
+  const w = drawWorldPoint(s, e.clientX, e.clientY);
+  if (s.drawTool === 'text') {
+    openDrawTextInput(s, w.x, w.y, e.clientX, e.clientY);
+    return true;
+  }
+  pushDrawUndoSnapshot(s);
+  s.drawingActive = {
+    id: rid(),
+    tool: s.drawTool,
+    color: s.drawColor,
+    width: s.drawWidth,
+  };
+  if (s.drawTool === 'pen') {
+    s.drawingActive.points = [[w.x, w.y]];
+  } else {
+    s.drawingActive.x1 = w.x; s.drawingActive.y1 = w.y;
+    s.drawingActive.x2 = w.x; s.drawingActive.y2 = w.y;
+  }
+  renderDrawingActive(s);
+  return true;
+}
+
+function updateDrawing(s, e) {
+  if (!s.drawingActive) return;
+  const w = drawWorldPoint(s, e.clientX, e.clientY);
+  if (s.drawingActive.tool === 'pen') {
+    const pts = s.drawingActive.points;
+    const last = pts[pts.length - 1];
+    // Skip near-duplicate samples — keeps the path lean, especially at high
+    // pointer-event rates from precision touchpads.
+    if (Math.hypot(w.x - last[0], w.y - last[1]) > 1.2) pts.push([w.x, w.y]);
+  } else {
+    s.drawingActive.x2 = w.x;
+    s.drawingActive.y2 = w.y;
+  }
+  renderDrawingActive(s);
+}
+
+function endDrawing(s) {
+  if (!s.drawingActive) return;
+  const d = s.drawingActive;
+  s.drawingActive = null;
+  // Reject zero-length shapes (a pure click without a drag) — except pen,
+  // which keeps single-point dabs as valid little dots.
+  let keep = true;
+  if (d.tool === 'pen') {
+    keep = d.points && d.points.length >= 1;
+  } else {
+    const dx = (d.x2 - d.x1) || 0, dy = (d.y2 - d.y1) || 0;
+    keep = Math.hypot(dx, dy) >= 2;
+  }
+  if (keep) {
+    s.drawings.push(d);
+    renderDrawings(s);
+    schedSave(s);
+  } else {
+    // Rebuild empty active layer + drop the snapshot we pushed on begin —
+    // nothing actually happened so undo shouldn't see a step here.
+    if (s.drawUndoStack.length) s.drawUndoStack.pop();
+  }
+  s.gDrawingActive.innerHTML = '';
+}
+
+function cancelDrawingActive(s) {
+  if (!s.drawingActive) return;
+  s.drawingActive = null;
+  if (s.gDrawingActive) s.gDrawingActive.innerHTML = '';
+  // Drop the snapshot we pushed on begin since the gesture was aborted.
+  if (s.drawUndoStack.length) s.drawUndoStack.pop();
+}
+
+function pushDrawUndoSnapshot(s) {
+  s.drawUndoStack.push(JSON.stringify(s.drawings));
+  while (s.drawUndoStack.length > s.DRAW_UNDO_LIMIT) s.drawUndoStack.shift();
+}
+
+function undoDrawing(s) {
+  if (!s.drawUndoStack.length) { toast(s, 'Nothing to undo on drawings'); return; }
+  s.drawings = JSON.parse(s.drawUndoStack.pop());
+  renderDrawings(s);
+  schedSave(s);
+}
+
+function clearAllDrawings(s) {
+  if (!s.drawings || !s.drawings.length) { toast(s, 'No drawings to clear'); return; }
+  if (!confirm('Clear all drawings on this map? Use Undo on the drawing toolbar to recover.')) return;
+  pushDrawUndoSnapshot(s);
+  s.drawings = [];
+  renderDrawings(s);
+  schedSave(s);
+  toast(s, 'Drawings cleared');
+}
+
+function eraseDrawing(s, drawingId) {
+  const idx = s.drawings.findIndex((d) => d.id === drawingId);
+  if (idx < 0) return false;
+  pushDrawUndoSnapshot(s);
+  s.drawings.splice(idx, 1);
+  renderDrawings(s);
+  schedSave(s);
+  return true;
+}
+
+// Build SVG markup for one drawing. Returned string is innerHTML-safe — text
+// is escaped via escSvg / escAttr.
+function drawingToSvg(s, d, opts = {}) {
+  const interactive = opts.interactive !== false;
+  const eraserMode = !!opts.eraserMode;
+  const klass = `m002-draw-shape m002-draw-shape--${d.tool}` + (eraserMode ? ' m002-draw-shape--erasable' : '');
+  const peAttr = interactive ? '' : ' pointer-events="none"';
+  const idAttr = interactive ? ` data-draw-id="${escAttr(d.id)}"` : '';
+  const stroke = d.color || '#ff003c';
+  const w = Math.max(0.5, +d.width || 2);
+  if (d.tool === 'pen') {
+    if (!d.points || !d.points.length) return '';
+    if (d.points.length === 1) {
+      const [x, y] = d.points[0];
+      return `<circle class="${klass}" cx="${x.toFixed(2)}" cy="${y.toFixed(2)}" r="${(w/2).toFixed(2)}" fill="${stroke}"${peAttr}${idAttr}/>`;
+    }
+    const dAttr = d.points.map((p, i) => `${i ? 'L' : 'M'}${p[0].toFixed(2)} ${p[1].toFixed(2)}`).join(' ');
+    return `<path class="${klass}" d="${dAttr}" fill="none" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"${peAttr}${idAttr}/>`;
+  }
+  if (d.tool === 'line') {
+    return `<line class="${klass}" x1="${d.x1.toFixed(2)}" y1="${d.y1.toFixed(2)}" x2="${d.x2.toFixed(2)}" y2="${d.y2.toFixed(2)}" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round"${peAttr}${idAttr}/>`;
+  }
+  if (d.tool === 'arrow') {
+    const dx = d.x2 - d.x1, dy = d.y2 - d.y1;
+    const len = Math.hypot(dx, dy) || 1;
+    const ah = Math.max(8, w * 4);    // arrowhead length
+    const aw = Math.max(6, w * 3);    // arrowhead half-width
+    const ux = dx / len, uy = dy / len;
+    const px = -uy, py = ux; // perpendicular
+    const baseX = d.x2 - ux * ah;
+    const baseY = d.y2 - uy * ah;
+    const lx = baseX + px * aw, ly = baseY + py * aw;
+    const rx = baseX - px * aw, ry = baseY - py * aw;
+    return (
+      `<line class="${klass}" x1="${d.x1.toFixed(2)}" y1="${d.y1.toFixed(2)}" x2="${baseX.toFixed(2)}" y2="${baseY.toFixed(2)}" stroke="${stroke}" stroke-width="${w}" stroke-linecap="round"${peAttr}${idAttr}/>` +
+      `<polygon class="${klass}" points="${d.x2.toFixed(2)},${d.y2.toFixed(2)} ${lx.toFixed(2)},${ly.toFixed(2)} ${rx.toFixed(2)},${ry.toFixed(2)}" fill="${stroke}"${peAttr}${idAttr}/>`
+    );
+  }
+  if (d.tool === 'rect') {
+    const x = Math.min(d.x1, d.x2), y = Math.min(d.y1, d.y2);
+    const ww = Math.abs(d.x2 - d.x1), hh = Math.abs(d.y2 - d.y1);
+    return `<rect class="${klass}" x="${x.toFixed(2)}" y="${y.toFixed(2)}" width="${ww.toFixed(2)}" height="${hh.toFixed(2)}" fill="none" stroke="${stroke}" stroke-width="${w}"${peAttr}${idAttr}/>`;
+  }
+  if (d.tool === 'ellipse') {
+    const cx = (d.x1 + d.x2) / 2, cy = (d.y1 + d.y2) / 2;
+    const rx = Math.abs(d.x2 - d.x1) / 2, ry = Math.abs(d.y2 - d.y1) / 2;
+    return `<ellipse class="${klass}" cx="${cx.toFixed(2)}" cy="${cy.toFixed(2)}" rx="${rx.toFixed(2)}" ry="${ry.toFixed(2)}" fill="none" stroke="${stroke}" stroke-width="${w}"${peAttr}${idAttr}/>`;
+  }
+  if (d.tool === 'text') {
+    const fs = Math.max(10, (d.fontSize || 16));
+    return `<text class="${klass}" x="${(d.x).toFixed(2)}" y="${(d.y).toFixed(2)}" fill="${stroke}" font-family="'Rajdhani','Inter',sans-serif" font-size="${fs}" font-weight="600"${peAttr}${idAttr}>${escSvg(d.text || '')}</text>`;
+  }
+  return '';
+}
+
+function renderDrawings(s) {
+  if (!s.gDrawings) return;
+  const eraserMode = s.drawTool === 'eraser';
+  s.gDrawings.innerHTML = (s.drawings || [])
+    .map((d) => drawingToSvg(s, d, { interactive: true, eraserMode }))
+    .join('');
+}
+
+function renderDrawingActive(s) {
+  if (!s.gDrawingActive) return;
+  if (!s.drawingActive) { s.gDrawingActive.innerHTML = ''; return; }
+  s.gDrawingActive.innerHTML = drawingToSvg(s, s.drawingActive, { interactive: false });
+}
+
+// Inline text input — positioned in viewport coords (above the SVG) so the
+// user can type at native size; commits a text drawing at the click's world
+// coords on Enter / blur.
+function openDrawTextInput(s, wx, wy, cx, cy) {
+  closeDrawTextInput(s);
+  const input = s.drawTextInput;
+  if (!input) return;
+  input.hidden = false;
+  input.value = '';
+  input.style.left = (cx - 4) + 'px';
+  input.style.top = (cy - 14) + 'px';
+  input.style.color = s.drawColor || '#ff003c';
+  input.dataset.wx = String(wx);
+  input.dataset.wy = String(wy);
+  // Defer focus to the next tick so the click that opened it doesn't blur it.
+  setTimeout(() => input.focus(), 0);
+  const onKey = (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); commitDrawTextInput(s); }
+    else if (e.key === 'Escape') { e.preventDefault(); closeDrawTextInput(s); }
+  };
+  const onBlur = () => commitDrawTextInput(s);
+  input._onKey = onKey;
+  input._onBlur = onBlur;
+  input.addEventListener('keydown', onKey);
+  input.addEventListener('blur', onBlur);
+}
+
+function commitDrawTextInput(s) {
+  const input = s.drawTextInput;
+  if (!input || input.hidden) return;
+  const text = (input.value || '').trim();
+  const wx = parseFloat(input.dataset.wx);
+  const wy = parseFloat(input.dataset.wy);
+  closeDrawTextInput(s);
+  if (!text) return;
+  pushDrawUndoSnapshot(s);
+  s.drawings.push({
+    id: rid(),
+    tool: 'text',
+    color: s.drawColor,
+    x: wx, y: wy,
+    text,
+    fontSize: 16,
+  });
+  renderDrawings(s);
+  schedSave(s);
+}
+
+function closeDrawTextInput(s) {
+  const input = s.drawTextInput;
+  if (!input || input.hidden) return;
+  input.hidden = true;
+  input.value = '';
+  if (input._onKey) input.removeEventListener('keydown', input._onKey);
+  if (input._onBlur) input.removeEventListener('blur', input._onBlur);
+  input._onKey = input._onBlur = null;
 }
 
 

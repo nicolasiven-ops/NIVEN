@@ -1834,3 +1834,75 @@ body.m002-tool-delete .cursor.active.down .m002-cursor-frame{transform:rotate(45
   animation: none !important;
   filter: none !important;
 }
+
+/* === Drawing layer — "glass overlay" annotations + floating toolbar === */
+/* Toolbar: vertical column, top-left of the canvas (just below the layerbar). */
+.m002-draw-toolbar{position:absolute;top:80px;left:18px;z-index:6;display:flex;flex-direction:column;align-items:stretch;gap:6px;background:rgba(8,8,14,0.85);border:1px solid #1a1a22;padding:6px;backdrop-filter:blur(6px);font-family:'JetBrains Mono','Share Tech Mono',monospace;color:#7a7f8e;user-select:none;}
+.m002-draw-toolbar .m002-draw-body{display:flex;flex-direction:column;gap:6px;}
+.m002-draw-toolbar[data-collapsed="true"] .m002-draw-body{display:none;}
+.m002-draw-toolbar[data-collapsed="true"]{padding:4px;}
+.m002-draw-toggle{display:flex;align-items:center;justify-content:center;width:28px;height:24px;background:transparent;border:1px solid transparent;color:#7a7f8e;cursor:pointer;font-family:inherit;font-size:13px;line-height:1;padding:0;align-self:flex-end;transition:color .12s,border-color .12s,background-color .12s;}
+.m002-draw-toggle:hover{color:#e8e8ee;border-color:#1a1a22;}
+.m002-draw-toggle-glyph{display:none;}
+.m002-draw-toolbar[data-collapsed="false"] .m002-draw-toggle-collapse{display:inline;}
+.m002-draw-toolbar[data-collapsed="true"]  .m002-draw-toggle-expand{display:inline;color:#ff003c;}
+.m002-draw-toolbar[data-collapsed="true"]  .m002-draw-toggle{align-self:stretch;}
+.m002-draw-section{display:flex;flex-direction:column;gap:3px;}
+.m002-draw-sep{height:1px;background:#1a1a22;margin:2px 0;}
+.m002-draw-tool,
+.m002-draw-act{display:flex;align-items:center;justify-content:center;width:28px;height:28px;background:transparent;border:1px solid transparent;color:#7a7f8e;cursor:pointer;font-family:inherit;font-size:14px;line-height:1;padding:0;transition:color .12s,border-color .12s,background-color .12s;}
+.m002-draw-tool:hover,
+.m002-draw-act:hover{color:#e8e8ee;border-color:#1a1a22;}
+.m002-draw-tool.active{background:rgba(255,0,60,0.10);border-color:#ff003c;color:#ff003c;}
+.m002-draw-act.active{color:#ff003c;}
+.m002-draw-glyph{font-family:inherit;line-height:1;}
+.m002-draw-colors{display:grid;grid-template-columns:1fr 1fr;gap:3px;}
+.m002-draw-color{width:13px;height:13px;border-radius:50%;border:1px solid rgba(255,255,255,0.18);background:var(--c,#fff);cursor:pointer;padding:0;transition:transform .12s,box-shadow .12s,border-color .12s;justify-self:center;}
+.m002-draw-color:hover{transform:scale(1.15);}
+.m002-draw-color.active{border-color:#ff003c;box-shadow:0 0 0 1.5px rgba(255,0,60,0.6),0 0 6px rgba(255,0,60,0.4);transform:scale(1.15);}
+.m002-draw-widths{flex-direction:column;gap:3px;align-items:center;}
+.m002-draw-width{display:flex;align-items:center;justify-content:center;width:28px;height:18px;background:transparent;border:1px solid transparent;cursor:pointer;padding:0;transition:border-color .12s,background-color .12s;}
+.m002-draw-width:hover{border-color:#1a1a22;}
+.m002-draw-width.active{border-color:#ff003c;background:rgba(255,0,60,0.06);}
+.m002-draw-w-dot{display:inline-block;background:#9aa0a8;border-radius:50%;}
+.m002-draw-width.active .m002-draw-w-dot{background:#ff003c;box-shadow:0 0 4px rgba(255,0,60,0.6);}
+
+/* Drawings group: defaults to no pointer-events so devices/links remain
+   interactive. In drawing mode we crosshair the whole canvas. */
+.m002-drawings{pointer-events:none;}
+.m002-drawing-active{pointer-events:none;}
+.m002-host.m002-drawings-hidden .m002-drawings,
+.m002-host.m002-drawings-hidden .m002-drawing-active{display:none;}
+.m002-host.m002-drawing-mode .m002-svg{cursor:crosshair;}
+.m002-host.m002-drawing-mode[data-draw-mode="text"] .m002-svg{cursor:text;}
+.m002-host.m002-eraser-mode .m002-svg{cursor:not-allowed;}
+/* In eraser mode strokes become the only interactive things — devices and
+   links pause their hit-testing so the user can target a stroke that overlaps
+   them. */
+.m002-host.m002-drawing-mode .m002-drawings{pointer-events:none;}
+.m002-host.m002-eraser-mode .m002-drawings{pointer-events:auto;}
+.m002-host.m002-eraser-mode .m002-draw-shape{pointer-events:stroke;}
+.m002-host.m002-eraser-mode .m002-draw-shape--text,
+.m002-host.m002-eraser-mode .m002-draw-shape--rect,
+.m002-host.m002-eraser-mode .m002-draw-shape--ellipse{pointer-events:all;}
+.m002-host.m002-eraser-mode .m002-draw-shape:hover{opacity:0.45;cursor:not-allowed;}
+
+/* Inline text-input — floats over the SVG at the click coords. */
+.m002-draw-text-input{position:absolute;z-index:7;background:rgba(8,8,14,0.92);border:1px dashed #ff003c;padding:2px 6px;font-family:'Rajdhani','Inter',sans-serif;font-size:16px;font-weight:600;color:#ff003c;outline:none;min-width:80px;}
+
+/* Sketch style — paper-friendly toolbar palette. */
+.m002-host[data-grid-style="sketch"] .m002-draw-toolbar{background:rgba(254,252,246,0.94);border-color:#c8c2b0;color:#7a7568;}
+.m002-host[data-grid-style="sketch"] .m002-draw-tool,
+.m002-host[data-grid-style="sketch"] .m002-draw-act,
+.m002-host[data-grid-style="sketch"] .m002-draw-toggle{color:#7a7568;}
+.m002-host[data-grid-style="sketch"] .m002-draw-tool:hover,
+.m002-host[data-grid-style="sketch"] .m002-draw-act:hover,
+.m002-host[data-grid-style="sketch"] .m002-draw-toggle:hover{color:#2a2a30;border-color:#c8c2b0;}
+.m002-host[data-grid-style="sketch"] .m002-draw-tool.active{background:rgba(196,75,60,0.08);border-color:#c44b3c;color:#c44b3c;}
+.m002-host[data-grid-style="sketch"] .m002-draw-act.active{color:#c44b3c;}
+.m002-host[data-grid-style="sketch"] .m002-draw-color.active{border-color:#c44b3c;box-shadow:0 0 0 1.5px rgba(196,75,60,0.6);}
+.m002-host[data-grid-style="sketch"] .m002-draw-width.active{border-color:#c44b3c;background:rgba(196,75,60,0.06);}
+.m002-host[data-grid-style="sketch"] .m002-draw-width.active .m002-draw-w-dot{background:#c44b3c;box-shadow:0 0 4px rgba(196,75,60,0.4);}
+.m002-host[data-grid-style="sketch"] .m002-draw-sep{background:#d6d0c0;}
+.m002-host[data-grid-style="sketch"] .m002-draw-toolbar[data-collapsed="true"] .m002-draw-toggle-expand{color:#c44b3c;}
+.m002-host[data-grid-style="sketch"] .m002-draw-text-input{background:rgba(254,252,246,0.96);border-color:#c44b3c;color:#c44b3c;}

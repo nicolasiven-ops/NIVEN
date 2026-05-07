@@ -93,6 +93,8 @@ export function snapshotMapData(s) {
     subnetRegistry: s.subnetRegistry,
     zones: s.zones, activeZone: s.activeZone,
     view: s.view,
+    drawings: s.drawings || [],
+    drawingsHidden: !!s.drawingsHidden,
   };
 }
 
@@ -189,6 +191,9 @@ export function hydrateMapData(s, data) {
   if (!Array.isArray(s.view.vlanFilter)) s.view.vlanFilter = [];
   if (!Array.isArray(s.view.subnetFilter)) s.view.subnetFilter = [];
   if (!s.view.zoneViews || typeof s.view.zoneViews !== 'object') s.view.zoneViews = {};
+  s.drawings = Array.isArray(data.drawings) ? data.drawings : [];
+  s.drawingsHidden = !!data.drawingsHidden;
+  s.drawUndoStack = [];
   _migrate(s);
 }
 
