@@ -70,13 +70,23 @@ const RADIAL_STACK = [
 ];
 
 // PEN-mode ring — opened on background right-click while a draw tool is
-// active. N opens a colour picker submenu; W toggles the canvas visibility;
-// E/S are the two erasers. Centre exits draw mode entirely (back to mouse).
+// active. PEN brings the user back to drawing from any other tool; WIPE and
+// COLOR are direct slots; TOOLS opens a submenu for the less-frequent
+// actions (toggle, erase, collapse/expand-all). Centre exits draw mode.
 const RADIAL_PEN = [
-  { id: 'pen-color',  dir: 'N', center: -90, label: 'COLOR',  glyph: '◐' },
-  { id: 'pen-wipe',   dir: 'E', center:   0, label: 'WIPE',   glyph: '◯' },
-  { id: 'pen-erase',  dir: 'S', center:  90, label: 'ERASE',  glyph: '⌫' },
-  { id: 'pen-toggle', dir: 'W', center: 180, label: 'TOGGLE', glyph: '◉' },
+  { id: 'pen-pen',   dir: 'N', center: -90, label: 'PEN',   glyph: '✎' },
+  { id: 'pen-wipe',  dir: 'E', center:   0, label: 'WIPE',  glyph: '◯' },
+  { id: 'pen-tools', dir: 'S', center:  90, label: 'TOOLS', glyph: '⚙' },
+  { id: 'pen-color', dir: 'W', center: 180, label: 'COLOR', glyph: '◐' },
+];
+
+// Tools submenu inside the pen ring — three cardinals (N intentionally empty),
+// laid out on a 4-way grid so the wedges hug the cardinals instead of fanning
+// across thirds of the ring.
+const RADIAL_PEN_TOOLS = [
+  { id: 'pen-tools-collapse', dir: 'E', center:   0, label: 'COLLAPSE', glyph: '⇕' },
+  { id: 'pen-tools-erase',    dir: 'S', center:  90, label: 'ERASE',    glyph: '⌫' },
+  { id: 'pen-tools-toggle',   dir: 'W', center: 180, label: 'TOGGLE',   glyph: '◉' },
 ];
 
 // Pen-mode COLOUR submenu — five swatches around the ring; centre walks back
@@ -127,10 +137,11 @@ const _deps = {
   // Link-radial callbacks.
   createLagFromLink: () => {},
   // Draw-mode callbacks.
-  setDrawTool:           () => {},
-  clearDrawTool:         () => {},
-  setDrawColor:          () => {},
-  toggleDrawingsVisible: () => {},
+  setDrawTool:             () => {},
+  clearDrawTool:           () => {},
+  setDrawColor:            () => {},
+  toggleDrawingsVisible:   () => {},
+  toggleAllStacksCollapsed: () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -489,8 +500,11 @@ function handleRadialAction(s, action) {
     return;
   }
   // --- Pen-mode ring (right-click on background while drawing) ---
-  if (action === 'pen-color') {
-    showRadialPenColorsSubmenu(s);
+  if (action === 'pen-pen') {
+    closeRadialMenu(s);
+    // setDrawTool toggles same-tool, which would silently exit pen mode
+    // when the user is already in PEN. Force-set instead.
+    if (s.drawTool !== 'pen') _deps.setDrawTool(s, 'pen');
     return;
   }
   if (action === 'pen-wipe') {
@@ -498,14 +512,27 @@ function handleRadialAction(s, action) {
     _deps.setDrawTool(s, 'wipe');
     return;
   }
-  if (action === 'pen-erase') {
+  if (action === 'pen-color') {
+    showRadialPenColorsSubmenu(s);
+    return;
+  }
+  if (action === 'pen-tools') {
+    showRadialPenToolsSubmenu(s);
+    return;
+  }
+  if (action === 'pen-tools-erase') {
     closeRadialMenu(s);
     _deps.setDrawTool(s, 'eraser');
     return;
   }
-  if (action === 'pen-toggle') {
+  if (action === 'pen-tools-toggle') {
     closeRadialMenu(s);
     _deps.toggleDrawingsVisible(s);
+    return;
+  }
+  if (action === 'pen-tools-collapse') {
+    closeRadialMenu(s);
+    _deps.toggleAllStacksCollapsed(s);
     return;
   }
   if (action === 'pen-exit') {
@@ -560,6 +587,11 @@ function showRadialElementZonesSubmenu(s) {
 function showRadialPenColorsSubmenu(s) {
   if (!s.radial) return;
   swapRadialContent(s, renderRadialPenColors(s), 'pen-colors');
+}
+
+function showRadialPenToolsSubmenu(s) {
+  if (!s.radial) return;
+  swapRadialContent(s, renderRadialPenTools(), 'pen-tools');
 }
 
 function showRadialStackZonesSubmenu(s) {
@@ -786,6 +818,38 @@ function renderRadialPen() {
       <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="pen-exit">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
         <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">MOUSE</text>
+      </g>
+      ${segs}
+    </svg>`;
+}
+
+function renderRadialPenTools() {
+  // Pen-tools submenu — three slots arranged on a 4-way grid (N stays empty
+  // so the cardinals look symmetric instead of fanning across thirds of the
+  // ring). Centre walks back to the pen-mode ring.
+  const cx = RADIAL_OUTER_R;
+  const cy = RADIAL_OUTER_R;
+  const size = RADIAL_OUTER_R * 2;
+  const half = (360 / 4) / 2; // hardcoded 4-way grid; N intentionally empty
+  let segs = '';
+  RADIAL_PEN_TOOLS.forEach((seg) => {
+    const start = seg.center - half + RADIAL_GAP_DEG / 2;
+    const end   = seg.center + half - RADIAL_GAP_DEG / 2;
+    const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
+    const pos = radialLabelPositions(cx, cy, seg.center);
+    segs += `
+      <g class="m002-rad-seg" data-radial-action="${seg.id}" data-dir="${seg.dir}">
+        <path class="m002-rad-seg-path" d="${path}"/>
+        <text class="m002-rad-seg-glyph" x="${pos.glyph.x}" y="${pos.glyph.y}" text-anchor="middle">${seg.glyph}</text>
+        <text class="m002-rad-seg-label" x="${pos.label.x}" y="${pos.label.y}" text-anchor="middle">${seg.label}</text>
+      </g>`;
+  });
+  return `
+    <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
+      <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
+      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back-pen">
+        <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
       </g>
       ${segs}
     </svg>`;

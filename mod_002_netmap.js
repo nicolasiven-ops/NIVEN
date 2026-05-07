@@ -1501,6 +1501,7 @@ async function mount(stage, ctx) {
       deleteStack: deleteStackWithMembers,
       createLagFromLink,
       setDrawTool, clearDrawTool, setDrawColor, toggleDrawingsVisible,
+      toggleAllStacksCollapsed,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -4161,6 +4162,34 @@ function deleteStackWithMembers(s, stackId) {
   render(s);
   schedSave(s);
   toast(s, `Stack ${stName} + ${memberIds.length} Devices gelöscht`);
+}
+
+// Bulk collapse/expand for every stack on the active map. Used by the pen
+// ring TOOLS submenu so a sketch session can hide all the cluster detail in
+// one gesture (and bring it back). Smart-toggle: any expanded → collapse
+// all; everything already collapsed → expand all. Mirrors the per-stack
+// toggleStackExpanded() in spirit but skips the recenter / sub-grid heal
+// passes — those would re-trigger n times and make the canvas jump.
+function toggleAllStacksCollapsed(s) {
+  const stacks = s.stacks || [];
+  if (stacks.length === 0) {
+    toast(s, 'No stacks on this map');
+    return;
+  }
+  const anyExpanded = stacks.some((st) => !!st.expanded);
+  const targetExpanded = !anyExpanded; // collapse all if any open, else expand
+  let changed = 0;
+  stacks.forEach((st) => {
+    if (!!st.expanded !== targetExpanded) {
+      st.expanded = targetExpanded;
+      changed += 1;
+    }
+  });
+  if (s._soloCollapsedIds && targetExpanded) s._soloCollapsedIds.clear();
+  if (changed === 0) return;
+  render(s);
+  schedSave(s);
+  toast(s, `${targetExpanded ? 'Expanded' : 'Collapsed'} ${changed} stack${changed === 1 ? '' : 's'}`);
 }
 
 // Promote a single link into a LAG. LAGs only live on stacks, so each side of
