@@ -1504,7 +1504,7 @@ async function mount(stage, ctx) {
   await loadFromServer(state);
   applyView(state);
   render(state);
-  refreshMapBar(state);
+  refreshTabBar(state);
   refreshZoneBar(state);
   showInspectorEmpty(state);
   refreshToolHighlights(state);
@@ -1784,6 +1784,11 @@ function buildDOM(s) {
         <div class="m002-zonebar"></div>
       </div>
 
+      <div class="m002-tabbar-wrap">
+        <div class="m002-tabbar"></div>
+        <div class="m002-tab-menu" hidden></div>
+      </div>
+
       <div class="m002-statusbar">
         <span class="m002-stat-tag">// NET_FORGE</span>
         <span class="m002-stat-sep">·</span>
@@ -1806,14 +1811,6 @@ function buildDOM(s) {
     </main>
 
     <aside class="m002-rightpanel m002-inspector">
-      <div class="m002-mapbar">
-        <button type="button" class="m002-map-btn" title="Maps">
-          <span class="m002-map-label">// MAP</span>
-          <span class="m002-map-name">—</span>
-          <span class="m002-map-caret">▾</span>
-        </button>
-        <div class="m002-map-menu" hidden></div>
-      </div>
       <input type="file" class="m002-import-input" accept="application/json" hidden/>
       <div class="m002-insp-head">
         <span class="m002-insp-id">// INSPECT</span>
@@ -1853,14 +1850,45 @@ function buildDOM(s) {
   // Legend body lives in the left panel; the picker calls still target the body
   s.legendEl = host.querySelector('.m002-vlan-legend-body')?.parentElement || null;
   s.zoneBarEl = host.querySelector('.m002-zonebar');
-  s.mapBtnEl = host.querySelector('.m002-map-btn');
-  s.mapMenuEl = host.querySelector('.m002-map-menu');
+  s.tabBarEl = host.querySelector('.m002-tabbar');
+  s.tabMenuEl = host.querySelector('.m002-tab-menu');
+  s.tabCtxEl = null; // lazily created floating context-menu for right-clicked tabs
   s.importInputEl = host.querySelector('.m002-import-input');
-  s.mapBtnEl.addEventListener('click', (e) => { e.stopPropagation(); toggleMapMenu(s); });
+  // Tab bar: click to switch / × to delete / + to add / ⋯ to open export menu.
+  s.tabBarEl.addEventListener('click', (e) => {
+    if (e.target.closest('.m002-tab-rename-input')) return; // ignore clicks inside rename input
+    const closeBtn = e.target.closest('.m002-tab-close');
+    if (closeBtn) {
+      e.stopPropagation();
+      const tab = closeBtn.closest('.m002-tab');
+      if (tab) deleteMap(s, tab.dataset.mapid);
+      return;
+    }
+    if (e.target.closest('.m002-tab-add')) { e.stopPropagation(); createMap(s); return; }
+    if (e.target.closest('.m002-tab-more')) { e.stopPropagation(); toggleTabMenu(s); return; }
+    const tab = e.target.closest('.m002-tab');
+    if (tab) {
+      if (tab.classList.contains('active')) return;
+      switchMap(s, tab.dataset.mapid);
+    }
+  });
+  s.tabBarEl.addEventListener('dblclick', (e) => {
+    const nameEl = e.target.closest('.m002-tab-name');
+    if (!nameEl) return;
+    const tab = nameEl.closest('.m002-tab');
+    if (!tab) return;
+    e.preventDefault();
+    startInlineRename(s, tab.dataset.mapid);
+  });
+  s.tabBarEl.addEventListener('contextmenu', (e) => {
+    const tab = e.target.closest('.m002-tab');
+    if (!tab) return;
+    e.preventDefault();
+    showTabContextMenu(s, tab.dataset.mapid, e.clientX, e.clientY);
+  });
   document.addEventListener('click', (e) => {
-    if (!s.mapMenuEl) return;
-    if (e.target.closest('.m002-mapbar')) return;
-    if (!s.mapMenuEl.hidden) s.mapMenuEl.hidden = true;
+    if (s.tabMenuEl && !s.tabMenuEl.hidden && !e.target.closest('.m002-tabbar-wrap')) s.tabMenuEl.hidden = true;
+    if (s.tabCtxEl && !e.target.closest('.m002-tab-ctx')) hideTabContextMenu(s);
   });
   s.importInputEl.addEventListener('change', (e) => {
     const file = e.target.files?.[0];
@@ -11014,52 +11042,156 @@ function hopToPeer(s, peerId, fromEl) {
 // =============================================================================
 // Maps — switch / create / delete / export / import
 // =============================================================================
-function refreshMapBar(s) {
-  if (!s.mapBtnEl) return;
-  const active = s.maps.find((m) => m.id === s.activeMapId);
-  s.mapBtnEl.querySelector('.m002-map-name').textContent = active?.name || '—';
+// Tab bar — Excel-style sheets at the bottom of the canvas. Each map = one tab.
+// Click to switch · double-click name to rename · × to delete · + to add ·
+// ⋯ opens the export/import menu · right-click a tab for the per-map context menu.
+function refreshTabBar(s) {
+  if (!s.tabBarEl) return;
+  // Preserve any open inline-rename across re-renders (e.g. concurrent saves).
+  const editing = s.tabBarEl.querySelector('.m002-tab-rename-input');
+  const editingMapId = editing ? editing.closest('.m002-tab')?.dataset.mapid : null;
+  const editingValue = editing ? editing.value : null;
+  const editingSelStart = editing ? editing.selectionStart : null;
+  const editingSelEnd = editing ? editing.selectionEnd : null;
+
+  s.tabBarEl.innerHTML = `
+    <div class="m002-tabs">
+      ${s.maps.map((m) => {
+        const isActive = m.id === s.activeMapId;
+        return `
+        <div class="m002-tab ${isActive ? 'active' : ''}" data-mapid="${escAttr(m.id)}" title="${escAttr(m.name)} — Doppelklick zum Umbenennen">
+          <span class="m002-tab-dot" aria-hidden="true"></span>
+          <span class="m002-tab-name">${escSvg(m.name)}</span>
+          <button type="button" class="m002-tab-close" tabindex="-1" aria-label="Delete map">×</button>
+        </div>`;
+      }).join('')}
+    </div>
+    <button type="button" class="m002-tab-add" title="New map" aria-label="New map">+</button>
+    <button type="button" class="m002-tab-more" title="Export / Import" aria-label="Export / Import">⋯</button>
+  `;
+  if (editingMapId) {
+    // Re-enter rename mode so the user's typing is not lost on incidental refreshes.
+    startInlineRename(s, editingMapId, { initialValue: editingValue, selStart: editingSelStart, selEnd: editingSelEnd });
+  }
 }
 
-function toggleMapMenu(s) {
-  if (!s.mapMenuEl) return;
-  if (!s.mapMenuEl.hidden) { s.mapMenuEl.hidden = true; return; }
-  s.mapMenuEl.innerHTML = `
-    <div class="m002-menu-section">
-      ${s.maps.map((m) => `
-        <button type="button" class="m002-menu-item ${m.id === s.activeMapId ? 'active' : ''}" data-mapsel="${escAttr(m.id)}">
-          <span>${escSvg(m.name)}</span>
-          ${m.id === s.activeMapId ? '<span class="m002-menu-dot"></span>' : ''}
-        </button>`).join('')}
-    </div>
-    <div class="m002-menu-sep"></div>
-    <div class="m002-menu-section">
-      <button type="button" class="m002-menu-item" data-mapact="new">+ NEW MAP</button>
-      <button type="button" class="m002-menu-item" data-mapact="rename">RENAME CURRENT</button>
-      <button type="button" class="m002-menu-item danger" data-mapact="delete">DELETE CURRENT</button>
-    </div>
-    <div class="m002-menu-sep"></div>
+function toggleTabMenu(s) {
+  if (!s.tabMenuEl) return;
+  if (!s.tabMenuEl.hidden) { s.tabMenuEl.hidden = true; return; }
+  s.tabMenuEl.innerHTML = `
     <div class="m002-menu-section">
       <button type="button" class="m002-menu-item" data-mapact="export">EXPORT JSON</button>
       <button type="button" class="m002-menu-item" data-mapact="export-png">EXPORT PNG</button>
       <button type="button" class="m002-menu-item" data-mapact="import">IMPORT JSON</button>
     </div>
   `;
-  s.mapMenuEl.querySelectorAll('[data-mapsel]').forEach((b) => {
-    b.addEventListener('click', () => { switchMap(s, b.dataset.mapsel); s.mapMenuEl.hidden = true; });
-  });
-  s.mapMenuEl.querySelectorAll('[data-mapact]').forEach((b) => {
+  s.tabMenuEl.querySelectorAll('[data-mapact]').forEach((b) => {
     b.addEventListener('click', () => {
-      s.mapMenuEl.hidden = true;
+      s.tabMenuEl.hidden = true;
       const act = b.dataset.mapact;
-      if (act === 'new') createMap(s);
-      else if (act === 'rename') renameCurrentMap(s);
-      else if (act === 'delete') deleteCurrentMap(s);
-      else if (act === 'export') exportMap(s);
+      if (act === 'export') exportMap(s);
       else if (act === 'export-png') exportPNG(s);
       else if (act === 'import') s.importInputEl.click();
     });
   });
-  s.mapMenuEl.hidden = false;
+  s.tabMenuEl.hidden = false;
+}
+
+function showTabContextMenu(s, mapId, x, y) {
+  hideTabContextMenu(s);
+  const m = s.maps.find((mm) => mm.id === mapId);
+  if (!m) return;
+  const isActive = mapId === s.activeMapId;
+  const canDelete = s.maps.length > 1;
+  const menu = document.createElement('div');
+  menu.className = 'm002-tab-ctx';
+  menu.innerHTML = `
+    <div class="m002-menu-section">
+      <button type="button" class="m002-menu-item" data-act="rename">RENAME</button>
+      <button type="button" class="m002-menu-item" data-act="duplicate">DUPLICATE</button>
+      <button type="button" class="m002-menu-item" data-act="export">EXPORT JSON</button>
+    </div>
+    <div class="m002-menu-sep"></div>
+    <div class="m002-menu-section">
+      <button type="button" class="m002-menu-item danger ${canDelete ? '' : 'is-disabled'}" data-act="delete">DELETE</button>
+    </div>
+  `;
+  menu.style.left = `${x}px`;
+  menu.style.top = `${y}px`;
+  document.body.appendChild(menu);
+  // Re-anchor if it spills off the viewport.
+  const rect = menu.getBoundingClientRect();
+  if (rect.right > window.innerWidth - 4) menu.style.left = `${window.innerWidth - rect.width - 4}px`;
+  if (rect.bottom > window.innerHeight - 4) menu.style.top = `${y - rect.height}px`;
+  menu.addEventListener('click', async (e) => {
+    const btn = e.target.closest('[data-act]');
+    if (!btn || btn.classList.contains('is-disabled')) return;
+    const act = btn.dataset.act;
+    hideTabContextMenu(s);
+    if (act === 'rename') {
+      if (!isActive) await switchMap(s, mapId);
+      startInlineRename(s, mapId);
+    } else if (act === 'duplicate') {
+      duplicateMap(s, mapId);
+    } else if (act === 'export') {
+      if (!isActive) await switchMap(s, mapId);
+      exportMap(s);
+    } else if (act === 'delete') {
+      deleteMap(s, mapId);
+    }
+  });
+  s.tabCtxEl = menu;
+}
+
+function hideTabContextMenu(s) {
+  if (s.tabCtxEl) { try { s.tabCtxEl.remove(); } catch (_) {} s.tabCtxEl = null; }
+}
+
+function startInlineRename(s, mapId, opts = {}) {
+  if (!s.tabBarEl) return;
+  const tab = [...s.tabBarEl.querySelectorAll('.m002-tab')].find((el) => el.dataset.mapid === mapId);
+  if (!tab) return;
+  const nameEl = tab.querySelector('.m002-tab-name');
+  if (!nameEl || nameEl.querySelector('input')) return;
+  const m = s.maps.find((mm) => mm.id === mapId);
+  if (!m) return;
+  const original = m.name;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.className = 'm002-tab-rename-input';
+  input.value = (typeof opts.initialValue === 'string') ? opts.initialValue : m.name;
+  input.maxLength = 60;
+  input.spellcheck = false;
+  nameEl.textContent = '';
+  nameEl.appendChild(input);
+  input.focus();
+  if (typeof opts.selStart === 'number' && typeof opts.selEnd === 'number') {
+    try { input.setSelectionRange(opts.selStart, opts.selEnd); } catch (_) {}
+  } else {
+    input.select();
+  }
+  let committed = false;
+  const commit = async () => {
+    if (committed) return;
+    committed = true;
+    const next = input.value.trim().slice(0, 60);
+    if (!next || next === original) { refreshTabBar(s); return; }
+    m.name = next;
+    refreshTabBar(s);
+    if (s.localPersist) { schedSave(s); toast(s, `Map renamed: ${next}`); return; }
+    if (!s.sb || String(m.id).startsWith('local_')) { toast(s, `Map renamed: ${next}`); return; }
+    const { error } = await s.sb.from('m002_maps').update({ name: next }).eq('id', m.id);
+    if (error) { console.warn('[m002] rename failed', error); m.name = original; refreshTabBar(s); toast(s, 'Rename failed'); return; }
+    toast(s, `Map renamed: ${next}`);
+  };
+  input.addEventListener('keydown', (e) => {
+    e.stopPropagation();
+    if (e.key === 'Enter') { e.preventDefault(); input.blur(); }
+    else if (e.key === 'Escape') { e.preventDefault(); committed = true; refreshTabBar(s); }
+  });
+  input.addEventListener('blur', commit);
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('dblclick', (e) => e.stopPropagation());
 }
 
 async function switchMap(s, mapId) {
@@ -11069,70 +11201,122 @@ async function switchMap(s, mapId) {
   await loadMapData(s, mapId);
   applyView(s);
   render(s);
-  refreshMapBar(s);
+  refreshTabBar(s);
   refreshZoneBar(s);
   rememberActiveMap(s);
   const m = s.maps.find((mm) => mm.id === mapId);
   if (m) toast(s, `Map: ${m.name}`);
 }
 
+// Pick a default name for a brand-new map: "MAP_N" where N is the lowest
+// integer not already used by any tab. Keeps fresh tabs predictable so the
+// inline-rename flow has a sensible placeholder to overwrite.
+function nextMapName(s) {
+  const used = new Set((s.maps || []).map((m) => String(m.name || '').toUpperCase()));
+  for (let i = 1; i < 999; i++) {
+    const candidate = `MAP_${String(i).padStart(2, '0')}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  return `MAP_${Date.now()}`;
+}
+
 async function createMap(s) {
-  const name = (prompt('New map name:', `Map ${s.maps.length + 1}`) || '').trim();
-  if (!name) return;
+  const name = nextMapName(s);
   await saveNow(s);
+  let newId = null;
   if (s.localPersist) {
     // Licensed: persist to localStorage via schedSave / saveNow.
-    const id = 'lic_' + rid();
-    s.maps.push({ id, name });
-    s.activeMapId = id;
+    newId = 'lic_' + rid();
+    s.maps.push({ id: newId, name });
+    s.activeMapId = newId;
     hydrateMapData(s, {});
     schedSave(s);
   } else if (!s.sb) {
     // Offline / unlicensed demo: in-memory only.
-    const id = 'local_' + rid();
-    s.maps.push({ id, name });
-    s.activeMapId = id;
+    newId = 'local_' + rid();
+    s.maps.push({ id: newId, name });
+    s.activeMapId = newId;
     hydrateMapData(s, {});
   } else {
     const { data: row, error } = await s.sb.from('m002_maps')
       .insert({ name, data: {} }).select('id,name').single();
     if (error) { console.warn('[m002] create failed', error); toast(s, 'Create failed'); return; }
+    newId = row.id;
     s.maps.push({ id: row.id, name: row.name });
     s.activeMapId = row.id;
     hydrateMapData(s, {});
   }
   applyView(s);
   render(s);
-  refreshMapBar(s);
+  refreshTabBar(s);
   refreshZoneBar(s);
   rememberActiveMap(s);
   toast(s, `Map "${name}" created`);
+  // Land directly in inline-rename so the user can name the new tab without
+  // hunting for a button (Excel-feel: new sheet → cursor in label).
+  if (newId) startInlineRename(s, newId);
+}
+
+// Duplicate the given map: snapshot its data, push a new tab beside it, switch.
+async function duplicateMap(s, mapId) {
+  const src = s.maps.find((mm) => mm.id === mapId);
+  if (!src) return;
+  await saveNow(s);
+  // For the active map use the live in-memory snapshot (most up-to-date);
+  // for any other tab pull its server-side / persisted blob.
+  let data = {};
+  if (mapId === s.activeMapId) {
+    data = snapshotMapData(s);
+  } else if (!s.localPersist && s.sb && !String(mapId).startsWith('local_')) {
+    try {
+      const { data: row, error } = await s.sb.from('m002_maps').select('data').eq('id', mapId).single();
+      if (error) throw error;
+      data = row?.data || {};
+    } catch (e) { console.warn('[m002] duplicate read failed', e); }
+  }
+  const baseName = String(src.name || 'MAP').slice(0, 50);
+  const name = `${baseName} (copy)`;
+  let newId = null;
+  if (s.localPersist) {
+    newId = 'lic_' + rid();
+    s.maps.push({ id: newId, name });
+    s.activeMapId = newId;
+    hydrateMapData(s, data);
+    schedSave(s);
+  } else if (!s.sb) {
+    newId = 'local_' + rid();
+    s.maps.push({ id: newId, name });
+    s.activeMapId = newId;
+    hydrateMapData(s, data);
+  } else {
+    const { data: row, error } = await s.sb.from('m002_maps').insert({ name, data }).select('id,name').single();
+    if (error) { console.warn('[m002] duplicate insert failed', error); toast(s, 'Duplicate failed'); return; }
+    newId = row.id;
+    s.maps.push({ id: row.id, name: row.name });
+    s.activeMapId = row.id;
+    hydrateMapData(s, data);
+  }
+  applyView(s);
+  render(s);
+  refreshTabBar(s);
+  refreshZoneBar(s);
+  rememberActiveMap(s);
+  toast(s, `Duplicated "${src.name}"`);
+  if (newId) startInlineRename(s, newId);
 }
 
 async function renameCurrentMap(s) {
-  const m = s.maps.find((mm) => mm.id === s.activeMapId);
-  if (!m) return;
-  const name = (prompt('Rename map:', m.name) || '').trim();
-  if (!name) return;
-  m.name = name;
-  refreshMapBar(s);
-  if (s.localPersist) {
-    schedSave(s); // saveNow → syncLicensedStore picks up the new name
-    toast(s, `Map renamed: ${name}`);
-    return;
-  }
-  if (!s.sb || String(m.id).startsWith('local_')) {
-    toast(s, `Map renamed: ${name}`);
-    return;
-  }
-  const { error } = await s.sb.from('m002_maps').update({ name }).eq('id', m.id);
-  if (error) { console.warn('[m002] rename failed', error); toast(s, 'Rename failed'); return; }
-  toast(s, `Map renamed: ${name}`);
+  // Kept as the public entry point for keyboard shortcuts / external callers —
+  // routes into the inline rename instead of a blocking prompt().
+  if (!s.activeMapId) return;
+  startInlineRename(s, s.activeMapId);
 }
 
-async function deleteCurrentMap(s) {
+// Delete the given map (defaults to active). Last surviving map can't be deleted.
+async function deleteMap(s, mapId) {
+  if (!mapId) mapId = s.activeMapId;
   if (s.maps.length <= 1) { toast(s, 'Cannot delete the last map'); return; }
-  const m = s.maps.find((mm) => mm.id === s.activeMapId);
+  const m = s.maps.find((mm) => mm.id === mapId);
   if (!m) return;
   if (!confirm(`Delete map "${m.name}"? This cannot be undone.`)) return;
   if (!s.localPersist && s.sb && !String(m.id).startsWith('local_')) {
@@ -11140,17 +11324,23 @@ async function deleteCurrentMap(s) {
     if (error) { console.warn('[m002] delete failed', error); toast(s, 'Delete failed'); return; }
   }
   const deletedName = m.name;
+  const wasActive = s.activeMapId === m.id;
   s.maps = s.maps.filter((mm) => mm.id !== m.id);
-  s.activeMapId = s.maps[0].id;
-  await loadMapData(s, s.activeMapId);
-  applyView(s);
-  render(s);
-  refreshMapBar(s);
-  refreshZoneBar(s);
+  if (wasActive) {
+    s.activeMapId = s.maps[0].id;
+    await loadMapData(s, s.activeMapId);
+    applyView(s);
+    render(s);
+  }
+  refreshTabBar(s);
+  if (wasActive) refreshZoneBar(s);
   rememberActiveMap(s);
   if (s.localPersist) schedSave(s); // sync the deletion to localStorage
   toast(s, `Map "${deletedName}" deleted`);
 }
+
+// Back-compat shim — old menu still calls this name, route to the active-tab delete.
+async function deleteCurrentMap(s) { return deleteMap(s, s.activeMapId); }
 
 function exportMap(s) {
   const m = s.maps.find((mm) => mm.id === s.activeMapId);
@@ -11181,7 +11371,7 @@ function importMapFromFile(s, file) {
         schedSave(s);
         applyView(s);
         render(s);
-        refreshMapBar(s);
+        refreshTabBar(s);
         refreshZoneBar(s);
         rememberActiveMap(s);
         toast(s, `Imported "${name}"`);
@@ -11201,7 +11391,7 @@ function importMapFromFile(s, file) {
       hydrateMapData(s, data);
       applyView(s);
       render(s);
-      refreshMapBar(s);
+      refreshTabBar(s);
       refreshZoneBar(s);
       rememberActiveMap(s);
       toast(s, `Imported "${name}"`);
