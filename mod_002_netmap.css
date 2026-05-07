@@ -1040,24 +1040,6 @@ input.m002-field-conflict,
      because that path uses the var directly without the multiplier. */
   animation-delay:calc((var(--enter-delay,700ms) - 700ms) * 1.5)!important;
 }
-/* will-change hint scoped to the hop window. Pre-promotes port-inner /
-   stub / peer-link to their own composition layer ALREADY during the
-   hop-out fade (200ms before hop-in starts), so the layer-creation
-   cost doesn't land in the same frame the 24+ port-glide-in animations
-   begin. Without the hint the user reported a recurring hitch "always
-   at the same spot" — that spot was t=680ms, the moment hop-in lands
-   and the browser has to spin up timelines + layers in one tick. The
-   hint is unset by .m002-detail-overlay-settled (specificity 0,3,0
-   wins via !important via the existing settle-pin rules releasing the
-   layer back to the browser once the hop is done). */
-.m002-detail-overlay.m002-detail-hop-out .m002-detail-port-inner,
-.m002-detail-overlay.m002-detail-hop-in  .m002-detail-port-inner,
-.m002-detail-overlay.m002-detail-hop-out .m002-detail-stub,
-.m002-detail-overlay.m002-detail-hop-in  .m002-detail-stub,
-.m002-detail-overlay.m002-detail-hop-out .m002-detail-peer-link,
-.m002-detail-overlay.m002-detail-hop-in  .m002-detail-peer-link{
-  will-change:transform, opacity;
-}
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-stub{
   animation:m002-detail-stub-fade 320ms cubic-bezier(0.16,1,0.3,1) forwards!important;
   animation-delay:200ms!important;
