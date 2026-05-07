@@ -1236,18 +1236,30 @@ input.m002-field-conflict,
 
 /* Entry choreography. Centre tile keeps the cinematic point→line→expand
    intro (m002-detail-elem-emerge keyframe — unchanged). Peers pop in
-   ~680ms later in the same wave the legacy peer-tiles used. */
+   ~680ms later in the same wave the legacy peer-tiles used.
+
+   animation-fill-mode: BOTH — backwards fill is critical here. With just
+   `forwards`, during the 700ms peer-tile delay the inner falls back to
+   its default style (identity, fully visible) because the :not(.show)
+   initial-state rule no longer matches once .show is on. Result: the
+   peer-tiles render at full size for 700ms before snapping to the 0%
+   keyframe and animating — visible as "instantly loaded" peers while
+   the centre is still mid-emerge. `both` applies the 0% keyframe
+   (scale 0.6 opacity 0) backwards through the delay, so peers stay
+   invisible until their pop wave fires. Same fix on the centre's
+   emerge — the 50ms delay was short enough to be imperceptible, but
+   `both` is technically the correct mode for both entries. */
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-center .m002-detail-tile-inner{
-  animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;
+  animation:m002-detail-elem-emerge 1000ms cubic-bezier(0.4,0,0.2,1) 50ms both;
 }
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-center .m002-detail-tile-bg{
-  animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms forwards;
+  animation:m002-detail-elem-fill 1000ms cubic-bezier(0.4,0,0.2,1) 50ms both;
 }
 .m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile.is-peer .m002-detail-tile-inner{
   /* 700ms delay matches the uplink-port-row's PORT_BASE_DELAY in JS so
      peer-tiles + ports + peer-links arrive as one cohesive "upper row"
      wave AFTER the centre has emerged, instead of three separate phases. */
-  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 700ms forwards;
+  animation:m002-detail-port-pop 280ms cubic-bezier(0.34,1.4,0.5,1) 700ms both;
 }
 
 /* Settled — pins inner state so live edits to the inspector don't replay
