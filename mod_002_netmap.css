@@ -1019,6 +1019,19 @@ input.m002-field-conflict,
 }
 .m002-detail-overlay-settled .m002-detail-peer-link{animation:none!important;opacity:1!important;}
 
+/* Detail-view stack-cable — gets the same entry/hop/exit timing as the
+   peer-link above so dashed stack wires arrive in the same upper-row
+   wave instead of popping in instantly. The wrapper-group carries the
+   fade; the inner <path class="m002-stack-cable"> keeps its grid
+   stroke-opacity .75, so the composited end opacity stays at the
+   familiar grid look (wrapper 1 × inner-stroke 0.75 = 0.75). */
+.m002-detail-stack-cable{opacity:0;}
+.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stack-cable{
+  animation:m002-detail-stub-fade 320ms ease-out forwards;
+  animation-delay:800ms;
+}
+.m002-detail-overlay-settled .m002-detail-stack-cable{animation:none!important;opacity:1!important;}
+
 /* ============================================================================
    Hop transient animations (v2.34 Push C, fixed v2.34.3). When the user
    clicks a peer-tile for a Position-Swap, the *tiles* glide via FLIP
@@ -1051,6 +1064,10 @@ input.m002-field-conflict,
   animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
+.m002-detail-overlay.m002-detail-hop-out .m002-detail-stack-cable{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
 /* Hop-in port animation. Gentler than the initial entry (cubic-bezier
    1.2 instead of 1.4 = less aggressive overshoot) + 280ms duration so
    each port reads as a deliberate settle rather than a snap. Per-port
@@ -1075,6 +1092,10 @@ input.m002-field-conflict,
   animation-delay:200ms!important;
 }
 .m002-detail-overlay.m002-detail-hop-in .m002-detail-peer-link{
+  animation:m002-detail-stub-fade 360ms cubic-bezier(0.16,1,0.3,1) forwards!important;
+  animation-delay:260ms!important;
+}
+.m002-detail-overlay.m002-detail-hop-in .m002-detail-stack-cable{
   animation:m002-detail-stub-fade 360ms cubic-bezier(0.16,1,0.3,1) forwards!important;
   animation-delay:260ms!important;
 }
@@ -1195,6 +1216,10 @@ input.m002-field-conflict,
   pointer-events:none;
 }
 .m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link{
+  animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
+  pointer-events:none;
+}
+.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stack-cable{
   animation:m002-detail-stub-fade-out 200ms cubic-bezier(0.4,0,1,1) forwards!important;
   pointer-events:none;
 }
@@ -1444,8 +1469,8 @@ input.m002-field-conflict,
 
 @media (prefers-reduced-motion: reduce){
   .m002-detail-overlay,.m002-detail-overlay .m002-detail-head,.m002-detail-overlay.m002-detail-overlay-show,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-head{transition:none!important;}
-  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-free-ports,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-free-ports{animation:none!important;}
-  .m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-link,.m002-detail-tile-inner,.m002-detail-pagination,.m002-detail-free-ports{transform:none!important;opacity:1!important;}
+  .m002-detail-overlay.m002-detail-overlay-show .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-stack-cable,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-show .m002-detail-free-ports,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-tile-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stub,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-peer-link,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-stack-cable,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-port-inner,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-pagination,.m002-detail-overlay.m002-detail-overlay-leaving .m002-detail-free-ports{animation:none!important;}
+  .m002-detail-port-inner,.m002-detail-stub,.m002-detail-head,.m002-detail-peer-link,.m002-detail-stack-cable,.m002-detail-tile-inner,.m002-detail-pagination,.m002-detail-free-ports{transform:none!important;opacity:1!important;}
   .m002-detail-tile{transition:none!important;}
   .m002-detail-overlay{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;}
 }
