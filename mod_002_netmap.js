@@ -2537,7 +2537,10 @@ function commitRopeLink(s, fromId, toId) {
     if (l.from === link.from || l.from === link.to ||
         l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
-  drawLink(s, link);
+  // Use redrawLink (not drawLink) so a new hub-leg that joins an existing
+  // hub-tunnel LAG-pair group is properly absorbed instead of stacking a
+  // plain gray line on top of the LAG-pair double-line.
+  redrawLink(s, link);
   if (s.activeLayer === 'routing') drawL3Paths(s);
   updateStatus(s);
   schedSave(s);
@@ -2929,7 +2932,10 @@ function commitAutoLink(s, fromId, toId) {
     if (l.from === link.from || l.from === link.to ||
         l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
-  drawLink(s, link);
+  // Use redrawLink so a new hub-leg that joins an existing hub-tunnel
+  // LAG-pair group is properly absorbed (no plain line stacked under the
+  // LAG-pair double-line).
+  redrawLink(s, link);
   if (s.activeLayer === 'routing') drawL3Paths(s);
   updateStatus(s);
   schedSave(s);
@@ -4235,7 +4241,10 @@ function handleLinkClick(s, deviceId) {
     if (l.from === link.from || l.from === link.to ||
         l.to   === link.from || l.to   === link.to) redrawLink(s, l);
   });
-  drawLink(s, link);
+  // Use redrawLink (not drawLink) so a new hub-leg that joins an existing
+  // hub-tunnel LAG-pair group is properly absorbed instead of stacking a
+  // plain gray line on top of the LAG-pair double-line.
+  redrawLink(s, link);
   // A new edge can extend or split L3 paths (e.g. now-connected router and
   // endpoint suddenly share a path through the new wire). Refresh ribbons.
   if (s.activeLayer === 'routing') drawL3Paths(s);
