@@ -21,13 +21,13 @@ const RADIAL_GAP_DEG = 4;          // gap between outer-ring segments
 const RADIAL_SUB_GAP_DEG = 3;      // gap inside the device submenu
 
 const RADIAL_PRIMARY = [
-  { id: 'new',  dir: 'N', center: -90, label: 'NEW',  glyph: '+'  },
-  { id: 'move', dir: 'E', center:   0, label: 'MOVE', glyph: '↦' },
-  { id: 'tool', dir: 'S', center:  90, label: 'TOOL', glyph: '⚙' },
-  // W slot used to be a duplicate UNDO (also reachable via TOOL→UNDO). Now
-  // hosts the DRAW submenu — the only way to reach the sketch tools after
-  // the legacy left-edge toolbar got pulled.
-  { id: 'draw', dir: 'W', center: 180, label: 'DRAW', glyph: '✎' },
+  { id: 'new',     dir: 'N', center: -90, label: 'NEW',  glyph: '+'  },
+  { id: 'move',    dir: 'E', center:   0, label: 'MOVE', glyph: '↦' },
+  { id: 'tool',    dir: 'S', center:  90, label: 'TOOL', glyph: '⚙' },
+  // W slot drops the user straight into PEN. Once in draw mode, a second
+  // right-click opens the pen-mode ring (WIPE/ERASE/TOGGLE/EXIT) instead of
+  // re-opening primary — same slot is the entry and exit gesture.
+  { id: 'pen-on', dir: 'W', center: 180, label: 'PEN',  glyph: '✎' },
 ];
 
 // MOVE submenu — switches the active layer or jumps the user into the zone
@@ -69,13 +69,14 @@ const RADIAL_STACK = [
   { id: 'st-move',   dir: 'W', center: 180, label: 'MOVE',   glyph: '↦' },
 ];
 
-// DRAW submenu — opened from primary W. Pen / circle-wipe / per-stroke
-// eraser / visibility toggle. Replaces the old left-edge draw toolbar.
-const RADIAL_DRAW = [
-  { id: 'draw-pen',    dir: 'N', center: -90, label: 'PEN',    glyph: '✎' },
-  { id: 'draw-wipe',   dir: 'E', center:   0, label: 'WIPE',   glyph: '◯' },
-  { id: 'draw-erase',  dir: 'S', center:  90, label: 'ERASE',  glyph: '⌫' },
-  { id: 'draw-toggle', dir: 'W', center: 180, label: 'TOGGLE', glyph: '◉' },
+// PEN-mode ring — opened on background right-click while a draw tool is
+// active. Cardinal slots swap the active draw tool or undo. Centre exits
+// draw mode entirely (back to the mouse cursor).
+const RADIAL_PEN = [
+  { id: 'pen-pen',   dir: 'N', center: -90, label: 'PEN',   glyph: '✎' },
+  { id: 'pen-wipe',  dir: 'E', center:   0, label: 'WIPE',  glyph: '◯' },
+  { id: 'pen-erase', dir: 'S', center:  90, label: 'ERASE', glyph: '⌫' },
+  { id: 'pen-undo',  dir: 'W', center: 180, label: 'UNDO',  glyph: '↶' },
 ];
 
 // LINK ring — DELETE south, LAG north (promote this link's ports into a
@@ -115,9 +116,10 @@ const _deps = {
   deleteStack:       () => {},
   // Link-radial callbacks.
   createLagFromLink: () => {},
-  // Draw-submenu callbacks.
-  setDrawTool:           () => {},
-  toggleDrawingsVisible: () => {},
+  // Draw-mode callbacks.
+  setDrawTool:    () => {},
+  clearDrawTool:  () => {},
+  undoDrawing:    () => {},
 };
 
 export function configureRadial(deps = {}) {
@@ -213,6 +215,14 @@ export function openRadialMenu(s, clientX, clientY) {
     document.removeEventListener('mousedown', onDocDown, true);
     document.removeEventListener('keydown', onKey, true);
   };
+}
+
+// Right-click on background while a draw tool is active. Cardinal slots are
+// the draw tool roster; centre is MOUSE — exits draw mode entirely. Caller
+// (netmap onDown) decides between this and the primary ring based on
+// s.drawTool, so the same gesture serves both contexts.
+export function openRadialPenMenu(s, clientX, clientY) {
+  _openRadialTargeted(s, clientX, clientY, null, 'pen', renderRadialPen());
 }
 
 // Right-click directly on a device opens this variant. Identical chrome and
@@ -312,8 +322,9 @@ function handleRadialAction(s, action) {
     showRadialToolSubmenu(s);
     return;
   }
-  if (action === 'draw') {
-    showRadialDrawSubmenu(s);
+  if (action === 'pen-on') {
+    closeRadialMenu(s);
+    _deps.setDrawTool(s, 'pen');
     return;
   }
   if (action === 'zones') {
@@ -466,30 +477,30 @@ function handleRadialAction(s, action) {
     if (target?.kind === 'link') _deps.createLagFromLink(s, target.id);
     return;
   }
-  // --- Draw submenu (from primary W) ---
-  if (action === 'draw-pen') {
+  // --- Pen-mode ring (right-click on background while drawing) ---
+  if (action === 'pen-pen') {
     closeRadialMenu(s);
     _deps.setDrawTool(s, 'pen');
     return;
   }
-  if (action === 'draw-wipe') {
+  if (action === 'pen-wipe') {
     closeRadialMenu(s);
     _deps.setDrawTool(s, 'wipe');
     return;
   }
-  if (action === 'draw-erase') {
+  if (action === 'pen-erase') {
     closeRadialMenu(s);
     _deps.setDrawTool(s, 'eraser');
     return;
   }
-  if (action === 'draw-toggle') {
+  if (action === 'pen-undo') {
     closeRadialMenu(s);
-    _deps.toggleDrawingsVisible(s);
+    _deps.undoDrawing(s);
     return;
   }
-  if (action === 'back-draw') {
-    s.radial?.el.removeAttribute('data-fresh');
-    swapRadialContent(s, renderRadialDraw(), 'draw');
+  if (action === 'pen-exit') {
+    closeRadialMenu(s);
+    _deps.clearDrawTool(s);
     return;
   }
 }
@@ -524,10 +535,6 @@ function showRadialStackZonesSubmenu(s) {
   swapRadialContent(s, renderRadialStackZones(s), 'st-zones');
 }
 
-function showRadialDrawSubmenu(s) {
-  if (!s.radial) return;
-  swapRadialContent(s, renderRadialDraw(), 'draw');
-}
 
 function swapRadialContent(s, html, level) {
   if (!s.radial) return;
@@ -718,14 +725,18 @@ function renderRadialElement() {
     </svg>`;
 }
 
-function renderRadialDraw() {
-  // Draw-tools submenu — 4 cardinals, centre walks back to primary.
+function renderRadialPen() {
+  // Pen-mode ring — 4 draw-tool cardinals + a centre tile that exits draw
+  // mode (returns to mouse). Different from the primary ring's CANCEL: this
+  // dismisses the menu AND clears s.drawTool so the cursor is interactive
+  // again. The radial dispatcher invokes the action by the cancel-style
+  // tile's data-radial-action="pen-exit".
   const cx = RADIAL_OUTER_R;
   const cy = RADIAL_OUTER_R;
   const size = RADIAL_OUTER_R * 2;
-  const half = (360 / RADIAL_DRAW.length) / 2;
+  const half = (360 / RADIAL_PEN.length) / 2;
   let segs = '';
-  RADIAL_DRAW.forEach((seg) => {
+  RADIAL_PEN.forEach((seg) => {
     const start = seg.center - half + RADIAL_GAP_DEG / 2;
     const end   = seg.center + half - RADIAL_GAP_DEG / 2;
     const path  = donutArcPath(cx, cy, RADIAL_INNER_R, RADIAL_OUTER_R, start, end);
@@ -740,9 +751,9 @@ function renderRadialDraw() {
   return `
     <svg class="m002-rad-svg" viewBox="0 0 ${size} ${size}" width="${size}" height="${size}">
       <circle class="m002-rad-bg" cx="${cx}" cy="${cy}" r="${RADIAL_OUTER_R - 1}"/>
-      <g class="m002-rad-seg m002-rad-seg-back" data-radial-action="back">
+      <g class="m002-rad-seg m002-rad-seg-cancel" data-radial-action="pen-exit">
         <circle class="m002-rad-core" cx="${cx}" cy="${cy}" r="${RADIAL_INNER_R - 4}"/>
-        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">←</text>
+        <text class="m002-rad-core-label" x="${cx}" y="${cy + 4}" text-anchor="middle">MOUSE</text>
       </g>
       ${segs}
     </svg>`;

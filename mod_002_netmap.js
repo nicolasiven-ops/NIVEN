@@ -55,6 +55,7 @@ import {
 import {
   configureRadial,
   openRadialMenu,
+  openRadialPenMenu,
   openRadialElementMenu,
   openRadialStackMenu,
   openRadialLinkMenu,
@@ -1499,7 +1500,7 @@ async function mount(stage, ctx) {
       cloneStack, splitStack, moveStackToZone,
       deleteStack: deleteStackWithMembers,
       createLagFromLink,
-      setDrawTool, toggleDrawingsVisible,
+      setDrawTool, clearDrawTool, undoDrawing,
     });
   } catch (e) {
     console.warn('[m002] dep wiring failed', e);
@@ -1693,8 +1694,7 @@ function createState(stage, ctx) {
     drawTool: null,          // null | 'pen'|'line'|'arrow'|'rect'|'ellipse'|'text'|'eraser'
     drawColor: '#ff003c',
     drawWidth: 3,
-    // Drawings start hidden — sketch surface is opt-in via radial DRAW → TOGGLE.
-    drawingsHidden: true,
+    drawingsHidden: false,
     drawToolbarCollapsed: false,
     drawingActive: null,     // in-progress shape during a pointer drag
     drawUndoStack: [],       // separate undo stack for drawings (last 40 strokes)
@@ -3133,12 +3133,12 @@ function bindBoard(s) {
     const linkEl = e.target.closest('[data-link-id]');
     const onBg = e.target === svg || e.target.classList.contains('m002-grid-bg') || e.target.classList.contains('m002-grid-bg2');
 
-    // Right-click routes to a target-specific radial. Devices get the full
-    // 4-action ring; stacks get clone / split / delete / move; links get a
-    // single DELETE slot. Background falls through to the primary ring.
-    // Click priority matches the dom-walk order: device first (member
-    // click inside an expanded stack should go to the device), then stack,
-    // then link, then background.
+    // Right-click routes to a target-specific radial. While a draw tool is
+    // active, the pen-mode ring takes over the background gesture (target
+    // rings still fire on devices/stacks/links — those need to stay
+    // reachable for editing). Click priority otherwise matches dom-walk
+    // order: device first (member click inside an expanded stack should go
+    // to the device), then stack, then link, then background.
     if (e.button === 2) {
       if (devEl) {
         openRadialElementMenu(s, e.clientX, e.clientY, { kind: 'device', id: devEl.dataset.deviceId });
@@ -3152,6 +3152,11 @@ function bindBoard(s) {
       }
       if (linkEl) {
         openRadialLinkMenu(s, e.clientX, e.clientY, { kind: 'link', id: linkEl.dataset.linkId });
+        e.preventDefault();
+        return;
+      }
+      if (s.drawTool) {
+        openRadialPenMenu(s, e.clientX, e.clientY);
         e.preventDefault();
         return;
       }
@@ -12451,13 +12456,17 @@ function setDrawTool(s, tool) {
   // open text-input prompt — avoids ghost geometry sticking around.
   cancelDrawingActive(s);
   closeDrawTextInput(s);
-  // Activating any draw tool while the board is hidden would have the user
-  // sketching into the void. Auto-unhide so they see what they're doing.
-  // TOGGLE remains the explicit hide gesture once they're done.
-  if (s.drawTool && s.drawingsHidden) {
-    s.drawingsHidden = false;
-    schedSave(s);
-  }
+  refreshDrawToolbar(s);
+  applyDrawHostState(s);
+}
+
+// Force-exit draw mode — used by the pen-radial centre tile so the user can
+// always get back to the mouse cursor regardless of which tool is active.
+function clearDrawTool(s) {
+  if (!s.drawTool) return;
+  s.drawTool = null;
+  cancelDrawingActive(s);
+  closeDrawTextInput(s);
   refreshDrawToolbar(s);
   applyDrawHostState(s);
 }
